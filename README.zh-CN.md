@@ -41,7 +41,7 @@ agent 会同时在十几棵 worktree 里写代码。Retrace 把所有项目、wo
 
 macOS 13 及以上，使用本机的 `git`。Windows 以后补。
 
-正式发布之前请从源码构建（见下方）：`pnpm tauri build` 产出 `Retrace.app` 和 `.dmg`。
+在 [Releases](../../releases) 下载 Apple 芯片或 Intel 的 `.dmg`，或从源码构建（见下方）：`pnpm tauri build` 产出 `Retrace.app` 和 `.dmg`。签名和公证之前，第一次打开时 macOS 会要求确认（右键 App → 打开）。
 
 ## 快捷键
 
@@ -98,7 +98,14 @@ src/components/layout/   可拖动停靠的平铺布局（模型在 src/lib/layo
 src/lib/commands.ts      菜单栏、快捷键和按钮共用的命令；menu.ts 是 macOS 菜单栏
 src/lib/i18n.ts          界面语言：代码里写英文原文，中文在 src/locales/zh.ts
 src/components/ui/       jim-uiux 组件（从 registry 安装）
-docs/specs/              方案与决策记录
 ```
+
+### 发布
+
+推一个 `v0.4.0` 这样的 tag，Release 工作流会构建两种架构并挂到一个草稿 release 上。要签名和公证，在仓库 secrets 里加 `APPLE_CERTIFICATE`（base64 的 Developer ID Application 证书）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`（App 专用密码）和 `APPLE_TEAM_ID`。
+
+## 许可证
+
+[MIT](LICENSE)。欢迎贡献，见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 基于 [Tauri](https://tauri.app)、React、[@pierre/diffs](https://www.npmjs.com/package/@pierre/diffs)、[react-markdown](https://github.com/remarkjs/react-markdown)；界面遵循 [jim-uiux](https://design.linjiejim.com)。

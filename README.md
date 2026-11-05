@@ -41,7 +41,7 @@ There are exactly two writes:
 
 Retrace runs on macOS 13 or later and uses the `git` on your machine. Windows support is planned.
 
-Until releases are published, build it from source (below): `pnpm tauri build` produces `Retrace.app` and a `.dmg`.
+Download the `.dmg` for Apple silicon or Intel from [Releases](../../releases), or build it from source (below): `pnpm tauri build` produces `Retrace.app` and a `.dmg`. Until releases are signed and notarised, macOS asks you to confirm the first launch (right-click the app → Open).
 
 ## Keyboard
 
@@ -99,7 +99,14 @@ src/components/layout/   the dockable tiled layout (model in src/lib/layout.ts)
 src/lib/commands.ts      commands shared by the menu bar, shortcuts and buttons; menu.ts builds the menu bar
 src/lib/i18n.ts          UI language: English source strings, Chinese in src/locales/zh.ts
 src/components/ui/       jim-uiux components, installed from its registry
-docs/specs/              design notes and decisions (in Chinese)
 ```
+
+### Releasing
+
+Push a tag such as `v0.4.0`: the Release workflow builds both architectures and attaches them to a draft release. To sign and notarise, add the repository secrets `APPLE_CERTIFICATE` (a base64 Developer ID Application certificate), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and `APPLE_TEAM_ID`.
+
+## License
+
+[MIT](LICENSE). Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Built with [Tauri](https://tauri.app), React, [@pierre/diffs](https://www.npmjs.com/package/@pierre/diffs) and [react-markdown](https://github.com/remarkjs/react-markdown). The interface follows [jim-uiux](https://design.linjiejim.com).

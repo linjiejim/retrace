@@ -25,3 +25,7 @@ dist-ssr
 
 # local tooling
 .claude/
+
+# design notes and the early prototype stay local
+docs/specs/
+docs/prototype/
