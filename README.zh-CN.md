@@ -7,7 +7,7 @@ agent 会同时在十几棵 worktree 里写代码。Retrace 把所有项目、wo
 [English](README.md)
 
 <p align="center">
-  <img src="docs/assets/screens/zh/main.webp" alt="Retrace：左边是项目和改动，右上是集成分支固定在最左列的提交图，下面是提交说明、PR 链接和并排 diff" width="900" />
+  <img src="site/screens/zh/main.webp" alt="Retrace：左边是项目和改动，右上是集成分支固定在最左列的提交图，下面是提交说明、PR 链接和并排 diff" width="900" />
 </p>
 
 ## 特点
@@ -23,9 +23,9 @@ agent 会同时在十几棵 worktree 里写代码。Retrace 把所有项目、wo
 
 | | |
 | --- | --- |
-| <img src="docs/assets/screens/zh/worktrees.webp" alt="进行中的 worktree 收在一个下拉里，带未提交文件数和领先 / 落后" /> | <img src="docs/assets/screens/zh/files.webp" alt="文件视图，仓库的 README 渲染出来，图片也在" /> |
+| <img src="site/screens/zh/worktrees.webp" alt="进行中的 worktree 收在一个下拉里，带未提交文件数和领先 / 落后" /> | <img src="site/screens/zh/files.webp" alt="文件视图，仓库的 README 渲染出来，图片也在" /> |
 | 进行中的 worktree 收在一个下拉里 | 任一版本的文件，Markdown 渲染 |
-| <img src="docs/assets/screens/zh/images.webp" alt="连续阅读一个替换了截图的提交，图片显示改前改后" /> | <img src="docs/assets/screens/zh/settings.webp" alt="设置：外观、布局、仓库、打开方式分组" /> |
+| <img src="site/screens/zh/images.webp" alt="连续阅读一个替换了截图的提交，图片显示改前改后" /> | <img src="site/screens/zh/settings.webp" alt="设置：外观、布局、仓库、打开方式分组" /> |
 | 图片改动，改前改后 | 设置 |
 
 ## 只读约定

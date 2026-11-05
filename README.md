@@ -7,7 +7,7 @@ Agents now write code in a dozen worktrees at once. Retrace puts every project, 
 [中文说明](README.zh-CN.md)
 
 <p align="center">
-  <img src="docs/assets/screens/en/main.webp" alt="Retrace: projects and changes on the left, the commit graph with the integration branch pinned left, and a commit's message, PR link and side-by-side diff" width="900" />
+  <img src="site/screens/en/main.webp" alt="Retrace: projects and changes on the left, the commit graph with the integration branch pinned left, and a commit's message, PR link and side-by-side diff" width="900" />
 </p>
 
 ## Features
@@ -23,9 +23,9 @@ Agents now write code in a dozen worktrees at once. Retrace puts every project, 
 
 | | |
 | --- | --- |
-| <img src="docs/assets/screens/en/worktrees.webp" alt="Active worktrees folded into one menu with their uncommitted files and ahead / behind counts" /> | <img src="docs/assets/screens/en/files.webp" alt="The files view with the repository's README rendered, images included" /> |
+| <img src="site/screens/en/worktrees.webp" alt="Active worktrees folded into one menu with their uncommitted files and ahead / behind counts" /> | <img src="site/screens/en/files.webp" alt="The files view with the repository's README rendered, images included" /> |
 | Worktrees in progress, folded into one menu | Any version's files, Markdown rendered |
-| <img src="docs/assets/screens/en/images.webp" alt="Continuous reading of a commit that replaced screenshots, with images before and after" /> | <img src="docs/assets/screens/en/main-dark.webp" alt="The same commit in the dark theme" /> |
+| <img src="site/screens/en/images.webp" alt="Continuous reading of a commit that replaced screenshots, with images before and after" /> | <img src="site/screens/en/main-dark.webp" alt="The same commit in the dark theme" /> |
 | Changed images, before and after | Dark theme |
 
 ## Read-only by design

@@ -21,7 +21,15 @@ jobs:
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Retrace $TAG" --notes "Retrace $TAG"
-          echo "id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -1)" >> "$GITHUB_OUTPUT"
+          # A new draft can take a moment to show up; never hand the builds an empty id
+          # (tauri-action would build and silently upload nothing).
+          for attempt in 1 2 3 4 5 6; do
+            id=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId 2>/dev/null || true)
+            [ -n "$id" ] && break
+            sleep 5
+          done
+          test -n "$id"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
 
   build:
     needs: draft
