@@ -1,0 +1,308 @@
+/*
+ * jim-uiux theme — the one place values live.
+ *
+ * Layers: values (:root / .dark) → semantic names (shadcn-compatible, plus a
+ * few extensions) → Tailwind utilities via @theme inline → components.
+ * Components and pages use the utilities only; no hex, rgb() or palette
+ * classes anywhere else (see guards/design-tokens.test.ts).
+ *
+ * Knobs a project may turn (everything else is locked):
+ *   --primary / --primary-foreground   one accent, default black
+ *   data-radius="sharp|round"          radius scale, default 8px
+ *   data-density="compact"             control and row heights
+ *   --font-sans / --font-display       typefaces
+ *   presets/*.css                      a full neutral tint + accent swap
+ *
+ * Import after tailwindcss:  @import "tailwindcss"; @import "./jim-theme.css";
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------- values: light ---------- */
+:root {
+  color-scheme: light;
+
+  /* surfaces */
+  --background: #ffffff;
+  --sunken: #f7f7f7; /* sidebar, table header, code */
+  --muted: #f0f0f0; /* segmented track, skeleton, tag */
+  --card: var(--background);
+  --popover: #ffffff;
+  --inverse: #1f1f1f; /* toast */
+  --scrim: rgb(0 0 0 / 0.32);
+
+  /* interaction fills, alpha so they work on any surface */
+  --accent: rgb(0 0 0 / 0.045); /* hover (shadcn meaning of "accent") */
+  --pressed: rgb(0 0 0 / 0.08);
+  --selected: color-mix(in oklab, var(--primary) 8%, var(--background));
+
+  /* text */
+  --foreground: #1a1a1a;
+  --muted-foreground: #5c5c5c; /* secondary text */
+  --faint-foreground: #6b6b6b; /* meta, placeholder; still ≥4.5:1 */
+  --inverse-foreground: #f5f5f5;
+
+  /* lines */
+  --border: #e8e8e8; /* hairlines, cards, dividers */
+  --input: #d4d4d4; /* input and control edges */
+
+  /* the one accent */
+  --primary: #1a1a1a;
+  --primary-foreground: #ffffff;
+  --primary-hover: color-mix(in oklab, var(--primary) 86%, var(--background));
+  --secondary: var(--muted);
+  --secondary-foreground: var(--foreground);
+  --ring: var(--primary);
+
+  /* status: fg colour for text/icons, subtle for fills */
+  --destructive: #cf222e;
+  --success: #1a7f37;
+  --warning: #8a5c00;
+  --info: #0969da;
+  --destructive-subtle: color-mix(in oklab, var(--destructive) 9%, var(--background));
+  --success-subtle: color-mix(in oklab, var(--success) 9%, var(--background));
+  --warning-subtle: color-mix(in oklab, var(--warning) 11%, var(--background));
+  --info-subtle: color-mix(in oklab, var(--info) 9%, var(--background));
+
+  /* elevation: flat by default, shadows only for floating layers */
+  --shadow-popover: 0 0 0 1px rgb(0 0 0 / 0.06), 0 2px 4px rgb(0 0 0 / 0.04), 0 8px 24px rgb(0 0 0 / 0.08);
+  --shadow-overlay: 0 0 0 1px rgb(0 0 0 / 0.06), 0 8px 16px rgb(0 0 0 / 0.06), 0 24px 48px rgb(0 0 0 / 0.14);
+
+  /* radius: one knob, a fixed ratio scale */
+  --radius: 8px;
+
+  /* sizes (pointer: fine). Touch overrides below. */
+  --control-sm: 28px;
+  --control-md: 32px;
+  --control-lg: 40px;
+  --row-h: 44px;
+  --row-head-h: 36px;
+  --nav-item-h: 30px;
+  --icon-stroke: 1.75;
+
+  /* motion */
+  --motion: 1; /* 0 under prefers-reduced-motion: transforms off, fades kept */
+  --duration-fast: 120ms; /* hover, press */
+  --duration-base: 200ms; /* popover, dialog, toast */
+  --duration-slow: 240ms; /* drawer, sheet */
+  --duration-exit: 160ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* ---------- values: dark ---------- */
+.dark {
+  color-scheme: dark;
+
+  --background: #191919;
+  --sunken: #202020;
+  --muted: #2a2a2a;
+  --popover: #252525;
+  --inverse: #ececec;
+  --scrim: rgb(0 0 0 / 0.6);
+
+  --accent: rgb(255 255 255 / 0.055);
+  --pressed: rgb(255 255 255 / 0.1);
+  --selected: color-mix(in oklab, var(--primary) 12%, var(--background));
+
+  --foreground: #ececec;
+  --muted-foreground: #a6a6a6;
+  --faint-foreground: #8f8f8f;
+  --inverse-foreground: #191919;
+
+  --border: #2e2e2e;
+  --input: #3d3d3d;
+
+  --primary: #ececec;
+  --primary-foreground: #191919;
+
+  --destructive: #ff6b61;
+  --success: #4cc26b;
+  --warning: #e0a83a;
+  --info: #5aa2ff;
+  --destructive-subtle: color-mix(in oklab, var(--destructive) 14%, var(--background));
+  --success-subtle: color-mix(in oklab, var(--success) 14%, var(--background));
+  --warning-subtle: color-mix(in oklab, var(--warning) 14%, var(--background));
+  --info-subtle: color-mix(in oklab, var(--info) 14%, var(--background));
+
+  /* dark: elevation reads from surface lightness + a 1px light ring */
+  --shadow-popover: 0 0 0 1px rgb(255 255 255 / 0.08), 0 8px 24px rgb(0 0 0 / 0.4);
+  --shadow-overlay: 0 0 0 1px rgb(255 255 255 / 0.08), 0 24px 48px rgb(0 0 0 / 0.55);
+}
+
+/* ---------- knobs ---------- */
+[data-radius="sharp"] { --radius: 4px; }
+[data-radius="round"] { --radius: 12px; }
+
+[data-density="compact"] {
+  --control-sm: 24px;
+  --control-md: 28px;
+  --control-lg: 36px;
+  --row-h: 36px;
+  --row-head-h: 32px;
+  --nav-item-h: 28px;
+}
+
+/* touch: every control reaches 44px, whatever the density */
+@media (pointer: coarse) {
+  :root, [data-density] {
+    --control-sm: 36px;
+    --control-md: 44px;
+    --control-lg: 48px;
+    --row-h: 48px;
+    --nav-item-h: 40px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --motion: 0; }
+}
+
+/* ---------- Tailwind mapping ---------- */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-sunken: var(--sunken);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-faint-foreground: var(--faint-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--foreground);
+  --color-inverse: var(--inverse);
+  --color-inverse-foreground: var(--inverse-foreground);
+  --color-scrim: var(--scrim);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--foreground);
+  --color-pressed: var(--pressed);
+  --color-selected: var(--selected);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-subtle: var(--destructive-subtle);
+  --color-success: var(--success);
+  --color-success-subtle: var(--success-subtle);
+  --color-warning: var(--warning);
+  --color-warning-subtle: var(--warning-subtle);
+  --color-info: var(--info);
+  --color-info-subtle: var(--info-subtle);
+
+  --radius-xs: calc(var(--radius) * 0.5); /* checkbox, tag */
+  --radius-sm: calc(var(--radius) * 0.75); /* badge, menu item */
+  --radius-md: var(--radius); /* button, input */
+  --radius-lg: calc(var(--radius) * 1.5); /* card, popover, toast */
+  --radius-xl: calc(var(--radius) * 2); /* dialog */
+  --radius-2xl: calc(var(--radius) * 3); /* bottom sheet */
+
+  --shadow-popover: var(--shadow-popover);
+  --shadow-overlay: var(--shadow-overlay);
+
+  --font-sans: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-display: var(--font-sans);
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* type: semantic sizes only; CJK line-height ≥ 1.4 */
+  --text-caption: 12px;
+  --text-caption--line-height: 18px;
+  --text-small: 13px;
+  --text-small--line-height: 20px;
+  --text-body: 14px;
+  --text-body--line-height: 22px;
+  --text-reading: 16px;
+  --text-reading--line-height: 26px;
+  --text-heading: 16px;
+  --text-heading--line-height: 24px;
+  --text-title: 18px;
+  --text-title--line-height: 26px;
+  --text-title-lg: 22px;
+  --text-title-lg--line-height: 32px;
+  --text-display: 28px;
+  --text-display--line-height: 40px;
+  --text-hero: 40px;
+  --text-hero--line-height: 52px;
+
+  --ease-out: var(--ease-out);
+  --ease-in: var(--ease-in);
+  --ease-drawer: var(--ease-drawer);
+
+  --animate-fade-in: jim-fade-in var(--duration-base) var(--ease-out);
+  --animate-fade-out: jim-fade-out var(--duration-exit) var(--ease-in);
+  --animate-pop-in: jim-pop-in var(--duration-base) var(--ease-out);
+  --animate-pop-out: jim-pop-out var(--duration-exit) var(--ease-in);
+  --animate-drop-in: jim-drop-in var(--duration-fast) var(--ease-out);
+  --animate-drop-out: jim-fade-out var(--duration-fast) var(--ease-in);
+  --animate-slide-in-right: jim-slide-in-right var(--duration-slow) var(--ease-drawer);
+  --animate-slide-out-right: jim-slide-out-right var(--duration-exit) var(--ease-in);
+  --animate-slide-in-left: jim-slide-in-left var(--duration-slow) var(--ease-drawer);
+  --animate-slide-in-up: jim-slide-in-up var(--duration-slow) var(--ease-drawer);
+  --animate-slide-out-down: jim-slide-out-down var(--duration-exit) var(--ease-in);
+}
+
+/* Spatial keyframes scale with --motion; under reduced motion they become fades. */
+@keyframes jim-fade-in { from { opacity: 0; } }
+@keyframes jim-fade-out { to { opacity: 0; } }
+@keyframes jim-pop-in { from { opacity: 0; transform: scale(calc(1 - 0.03 * var(--motion))); } }
+@keyframes jim-pop-out { to { opacity: 0; transform: scale(calc(1 - 0.03 * var(--motion))); } }
+@keyframes jim-drop-in { from { opacity: 0; transform: translateY(calc(-4px * var(--motion))); } }
+@keyframes jim-slide-in-right {
+  from { opacity: calc(1 - var(--motion)); transform: translateX(calc(100% * var(--motion))); }
+}
+@keyframes jim-slide-out-right {
+  to { opacity: calc(1 - var(--motion)); transform: translateX(calc(100% * var(--motion))); }
+}
+@keyframes jim-slide-in-up {
+  from { opacity: calc(1 - var(--motion)); transform: translateY(calc(100% * var(--motion))); }
+}
+@keyframes jim-slide-out-down {
+  to { opacity: calc(1 - var(--motion)); transform: translateY(calc(100% * var(--motion))); }
+}
+
+/* ---------- base ---------- */
+@layer base {
+  *, ::before, ::after { border-color: var(--border); }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+  }
+
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+  ::selection { background: color-mix(in oklab, var(--primary) 18%, transparent); }
+
+  /* stacked overlays (drawer → dialog → confirm): only the bottom one dims */
+  body > :has([data-slot="scrim"][data-state="open"]) ~ * [data-slot="scrim"] { background: transparent; }
+
+  /* lucide icons: one stroke everywhere */
+  .lucide { stroke-width: var(--icon-stroke); flex-shrink: 0; }
+
+  /* numbers in tables, stats, timers */
+  .tabular { font-variant-numeric: tabular-nums; }
+
+  /* iOS zooms into inputs under 16px. !important so it beats text-* utilities. */
+  @media (pointer: coarse) {
+    input, textarea, select { font-size: 16px !important; }
+  }
+}
+
+@keyframes jim-slide-in-left {
+  from { opacity: calc(1 - var(--motion)); transform: translateX(calc(-100% * var(--motion))); }
+}

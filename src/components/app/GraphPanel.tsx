@@ -1,0 +1,668 @@
+import { memo, useEffect, useMemo, useRef, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
+import { useVirtualizer } from "@tanstack/react-virtual"
+import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, FolderGit2, GitBranch, GitCompareArrows, House, PanelLeftOpen, Pin, RefreshCw, Search, SlidersHorizontal, Tag, X } from "lucide-react"
+import { api } from "@/lib/api"
+import { pickRow, run } from "@/lib/commands"
+import { absoluteTime, relativeTime, shortHash, tildify } from "@/lib/format"
+import { keyNav } from "@/lib/keys"
+import { prefs, selectionKey, ui, useStore, type Selection } from "@/lib/store"
+import { WORKTREE_ROW, type HistoryRow, type Overview, type RefLabel, type Trunk } from "@/lib/types"
+import { cn } from "@/lib/utils"
+import { branchKey, invalidateProject, isArchived, useHistory, type Tab } from "@/hooks/queries"
+import { useProjectView } from "@/hooks/use-project-view"
+import { useDelayedFlag } from "@/hooks/use-delayed-flag"
+import { IconButton } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Skeleton } from "@/components/ui/skeleton"
+import { StateView } from "@/components/ui/state"
+import { Switch } from "@/components/ui/switch"
+import { Tooltip } from "@/components/ui/tooltip"
+import { PanelHeader } from "@/components/layout/LayoutView"
+import { ArchiveMenu } from "./ArchiveMenu"
+import { Lanes, lanesWidth, ROW_H } from "./Lanes"
+
+type View = ReturnType<typeof useProjectView>
+
+export function GraphPanel() {
+  const view = useProjectView()
+  const collapsed = useStore(prefs, (s) => s.projectsCollapsed)
+  const { projectId, overview, tab, trunk } = view
+
+  return (
+    <section className="flex h-full min-w-0 flex-col">
+      <PanelHeader className="gap-0.5">
+        {collapsed && (
+          <IconButton label="显示项目栏  ⌘\" size="icon-sm" onClick={() => run("toggleProjects")}>
+            <PanelLeftOpen />
+          </IconButton>
+        )}
+        {overview.data ? <TabsBar view={view} /> : <span data-tauri-drag-region className="h-full flex-1" />}
+        {overview.data && <GraphTools view={view} />}
+      </PanelHeader>
+      {!projectId ? (
+        <StateView kind="empty" title="选择一个项目" description="在项目栏里选一个项目，或者先添加一个。" />
+      ) : overview.isError ? (
+        <StateView kind="error" description={String(overview.error?.message ?? "")} onRetry={() => overview.refetch()} />
+      ) : !overview.data ? (
+        <GraphSkeleton />
+      ) : tab ? (
+        <Graph key={`${projectId}:${tab.key}`} view={view} tab={tab} trunk={trunk} overview={overview.data} />
+      ) : null}
+    </section>
+  )
+}
+
+// ---------- tabs ----------
+
+/**
+ * One row: the main tree, then three folded groups — worktrees in progress, worktrees already in the
+ * trunk, and branches without a worktree. The group holding the shown tab displays its name.
+ */
+function TabsBar({ view }: { view: View }) {
+  const { projectId, tabs, tab, trunk, overview } = view
+  const open = (key: string) => ui.set((s) => ({ tabs: { ...s.tabs, [projectId!]: key }, selection: null, file: null, focusMode: false }))
+  const archived = tabs.filter((t) => isArchived(t, trunk))
+  const main = tabs.filter((t) => t.tree?.isMain || t.pinned)
+  const active = tabs.filter((t) => t.kind === "tree" && !main.includes(t) && !archived.includes(t))
+  const current = (group: Tab[]) => (tab && group.includes(tab) ? tab : null)
+  const branchTab = tab?.kind === "branch" && !tab.pinned ? tab : null
+
+  const ov = overview.data!
+  const checkedOut = new Set(ov.trees.map((t) => t.branch).filter(Boolean))
+  // `origin/x` is redundant when `x` exists locally, is checked out, or is the trunk.
+  const localNames = new Set(ov.branches.filter((b) => !b.remote).map((b) => b.name))
+  const bare = (b: { name: string; remote: boolean }) => (b.remote ? b.name.slice(b.name.indexOf("/") + 1) : b.name)
+  const others = ov.branches.filter((b) => {
+    const n = bare(b)
+    if (checkedOut.has(n) || n === trunk?.name || n === "HEAD") return false
+    return !(b.remote && localNames.has(n))
+  })
+
+  return (
+    <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
+      {main.map((t) => (
+        <MainTab key={t.key} tab={t} trunk={trunk} selected={t.key === tab?.key} onOpen={() => open(t.key)} />
+      ))}
+      {active.length > 0 && <TreeMenu tabs={active} current={current(active)} trunk={trunk} onOpen={(t) => open(t.key)} />}
+      {archived.length > 0 && (
+        <ArchiveMenu view={view} archived={archived} onOpen={(t) => open(t.key)}>
+          <GroupTrigger icon={<Archive />} label="已合并" count={archived.length} current={current(archived)} trunk={trunk} />
+        </ArchiveMenu>
+      )}
+      {(others.length > 0 || branchTab) && (
+        <BranchPicker
+          title="没有 worktree 的分支"
+          branches={others.map((b) => ({ name: b.name, remote: b.remote }))}
+          current={branchTab?.label}
+          onPick={(name) =>
+            ui.set((s) => ({
+              branchTabs: { ...s.branchTabs, [projectId!]: [name] },
+              tabs: { ...s.tabs, [projectId!]: branchKey(name) },
+              selection: null,
+              file: null,
+            }))
+          }
+        >
+          <GroupTrigger icon={<GitBranch />} label="分支" count={others.length} current={branchTab} trunk={trunk} />
+        </BranchPicker>
+      )}
+      <span data-tauri-drag-region className="h-full min-w-2 flex-1" />
+    </div>
+  )
+}
+
+function MainTab({ tab, trunk, selected, onOpen }: { tab: Tab; trunk: Trunk | null; selected: boolean; onOpen: () => void }) {
+  const tip = tab.tree ? `主 worktree\n${tildify(tab.tree.path)}` : `分支 ${tab.label}（没有 worktree）`
+  return (
+    <Tooltip content={<span className="whitespace-pre-line">{tip}</span>} side="bottom" delayDuration={700}>
+      <button
+        onClick={onOpen}
+        className={cn(
+          "inline-flex h-[26px] min-w-0 shrink-0 items-center gap-1.5 rounded-sm px-2 text-small text-muted-foreground hover:bg-accent",
+          selected && "bg-pressed font-medium text-foreground hover:bg-pressed",
+        )}
+      >
+        <House className="size-3.5 shrink-0" />
+        <span className="@max-[420px]/header:hidden">主树</span>
+        {tab.label !== trunk?.name && <span className="max-w-[140px] truncate font-normal text-faint-foreground @max-[560px]/header:hidden">{tab.label}</span>}
+        <TabBadges tab={tab} trunk={trunk} />
+      </button>
+    </Tooltip>
+  )
+}
+
+/** Trigger of a folded group: its name and size, or the name of the tab it holds when that tab is shown. */
+function GroupTrigger({
+  icon,
+  label,
+  count,
+  current,
+  trunk,
+  className,
+  ...rest
+}: React.ComponentProps<"button"> & { icon: React.ReactNode; label: string; count: number; current: Tab | null; trunk: Trunk | null }) {
+  return (
+    <button
+      {...rest}
+      className={cn(
+        "inline-flex h-[26px] min-w-0 shrink items-center gap-1.5 rounded-sm pl-2 pr-1.5 text-small text-muted-foreground hover:bg-accent data-[state=open]:bg-pressed [&>svg]:size-3.5 [&>svg]:shrink-0",
+        current && "bg-pressed font-medium text-foreground",
+        className,
+      )}
+    >
+      {icon}
+      {current ? (
+        <>
+          <span className="min-w-0 max-w-[180px] truncate">{current.label}</span>
+          <TabBadges tab={current} trunk={trunk} />
+        </>
+      ) : (
+        <>
+          <span className="@max-[520px]/header:hidden">{label}</span>
+          <span className="tabular text-faint-foreground">{count}</span>
+        </>
+      )}
+      <ChevronDown />
+    </button>
+  )
+}
+
+/** Linked worktrees still being worked on: uncommitted files, or commits not yet in the trunk. */
+function TreeMenu({ tabs, current, trunk, onOpen }: { tabs: Tab[]; current: Tab | null; trunk: Trunk | null; onOpen: (t: Tab) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <GroupTrigger icon={<FolderGit2 />} label="进行中" count={tabs.length} current={current} trunk={trunk} />
+      </PopoverTrigger>
+      <PopoverContent className="w-[400px] p-0" align="start">
+        <div className="px-3 pb-1 pt-2.5 text-caption text-faint-foreground">有未提交改动，或还没并入 {trunk?.name ?? "主干"} 的 worktree</div>
+        <ul className="max-h-[50vh] overflow-y-auto px-1 pb-1">
+          {tabs.map((t) => (
+            <li key={t.key}>
+              <button
+                onClick={() => {
+                  onOpen(t)
+                  setOpen(false)
+                }}
+                className={cn("flex w-full items-start gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent", t.key === current?.key && "bg-selected hover:bg-selected")}
+              >
+                <GitBranch className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2">
+                    <span className="min-w-0 truncate text-body font-medium">{t.label}</span>
+                    <TabBadges tab={t} trunk={trunk} />
+                  </span>
+                  <span className="block truncate text-caption text-faint-foreground">{t.tree ? tildify(t.tree.path) : ""}</span>
+                </span>
+                {t.key === current?.key && <Check className="mt-0.5 size-4 shrink-0" />}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+const OPERATION: Record<string, string> = { merge: "合并中", rebase: "变基中", "cherry-pick": "拣选中", revert: "回滚中", bisect: "二分中" }
+
+function TabBadges({ tab, trunk }: { tab: Tab; trunk: Trunk | null }) {
+  const s = tab.status
+  const cmp = tab.kind === "tree" ? s?.trunk : null
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 text-caption font-normal">
+      {s?.operation && <span className="text-warning">{OPERATION[s.operation]}</span>}
+      {!!s?.files && (
+        <span className="tabular text-warning" aria-label={`${s.files} 个文件未提交`}>
+          ●{s.files}
+        </span>
+      )}
+      {cmp && cmp.integration !== "none" && !s?.files ? (
+        <CircleCheck className="size-3.5 text-success" aria-label={`已并入 ${trunk?.name ?? "主干"}`} />
+      ) : cmp && (cmp.ahead || cmp.behind) ? (
+        <span className="tabular text-faint-foreground">
+          {cmp.ahead ? `↑${cmp.ahead}` : ""}
+          {cmp.ahead && cmp.behind ? " " : ""}
+          {cmp.behind ? `↓${cmp.behind}` : ""}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
+type BranchItem = { name: string; remote: boolean }
+
+/** Filterable branch list; used for opening a branch and for picking the integration branch. */
+function BranchList({
+  title,
+  branches,
+  current,
+  auto,
+  onPick,
+  onBack,
+}: {
+  title: string
+  branches: BranchItem[]
+  current?: string
+  auto?: { label: string; on: boolean; onPick: () => void }
+  onPick: (name: string) => void
+  onBack?: () => void
+}) {
+  const [q, setQ] = useState("")
+  const list = branches.filter((b) => !q || b.name.toLowerCase().includes(q.toLowerCase()))
+  return (
+    <>
+      <div className="flex items-center gap-1 px-2 pb-1 pt-1.5 text-caption text-faint-foreground">
+        {onBack && (
+          <button aria-label="返回" onClick={onBack} className="-ml-1 inline-flex size-5 items-center justify-center rounded-xs hover:bg-accent hover:text-foreground">
+            <ChevronLeft className="size-3.5" />
+          </button>
+        )}
+        {title}
+      </div>
+      {branches.length > 8 && (
+        <label className="mx-1 mb-1 flex h-7 items-center gap-1.5 rounded-sm px-2 text-faint-foreground ring-1 ring-border focus-within:ring-ring">
+          <Search className="size-3.5" />
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="筛选分支" className="w-full bg-transparent text-small text-foreground outline-none" />
+        </label>
+      )}
+      <div className="max-h-80 overflow-y-auto">
+        {auto && (
+          <button onClick={auto.onPick} className="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-body hover:bg-accent">
+            <Pin className="size-4 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate">{auto.label}</span>
+            {auto.on && <Check className="size-4" />}
+          </button>
+        )}
+        {list.slice(0, 300).map((b) => (
+          <button key={b.name} onClick={() => onPick(b.name)} className="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-body hover:bg-accent">
+            <GitBranch className={cn("size-4", b.remote ? "text-faint-foreground" : "text-muted-foreground")} />
+            <span className={cn("min-w-0 flex-1 truncate", b.remote && "text-muted-foreground")}>{b.name}</span>
+            {current === b.name && <Check className="size-4" />}
+          </button>
+        ))}
+        {list.length > 300 && <div className="px-2 py-2 text-caption text-faint-foreground">还有 {list.length - 300} 个，输入名字筛选</div>}
+        {list.length === 0 && <div className="px-2 py-3 text-small text-faint-foreground">没有匹配的分支</div>}
+      </div>
+    </>
+  )
+}
+
+function BranchPicker({ children, onPick, ...props }: Omit<React.ComponentProps<typeof BranchList>, "onBack"> & { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>{children}</PopoverTrigger>
+      <PopoverContent className="w-80 p-1" align="start">
+        <BranchList
+          {...props}
+          onPick={(name) => {
+            onPick(name)
+            setOpen(false)
+          }}
+        />
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ---------- tools: search, options, refresh ----------
+
+function GraphTools({ view }: { view: View }) {
+  const query = useStore(ui, (s) => s.query)
+  const fetching = useStore(ui, (s) => s.fetching)
+  const [searching, setSearching] = useState(false)
+  const input = useRef<HTMLInputElement>(null)
+  keyNav.focusSearch = () => {
+    setSearching(true)
+    requestAnimationFrame(() => input.current?.focus())
+  }
+  return (
+    <>
+      {searching || query ? (
+        <label className="flex h-6 w-[200px] min-w-[96px] shrink items-center gap-1.5 rounded-sm bg-background px-2 text-faint-foreground ring-1 ring-border focus-within:ring-ring">
+          <Search className="size-3.5 shrink-0" />
+          <input
+            ref={input}
+            autoFocus
+            value={query}
+            onChange={(e) => ui.set({ query: e.target.value })}
+            onBlur={() => setSearching(false)}
+            placeholder="筛选提交、作者、hash"
+            className="w-full min-w-0 bg-transparent text-caption text-foreground outline-none placeholder:text-faint-foreground"
+          />
+          {query && (
+            <button aria-label="清除筛选" onMouseDown={(e) => e.preventDefault()} onClick={() => ui.set({ query: "" })} className="hover:text-foreground">
+              <X className="size-3.5" />
+            </button>
+          )}
+        </label>
+      ) : (
+        <IconButton label="筛选提交  ⌘F" size="icon-sm" onClick={() => keyNav.focusSearch?.()}>
+          <Search />
+        </IconButton>
+      )}
+      <GraphOptions view={view} />
+      <IconButton label={fetching ? "正在从远程获取" : "刷新并从远程获取  ⌘R"} size="icon-sm" onClick={() => run("refresh")}>
+        <RefreshCw className={cn(fetching && "animate-spin")} />
+      </IconButton>
+    </>
+  )
+}
+
+/** The integration branch and which branches the graph draws. */
+function GraphOptions({ view }: { view: View }) {
+  const qc = useQueryClient()
+  const { projectId, overview, trunk } = view
+  const others = useStore(prefs, (s) => s.otherBranches)
+  const remotes = useStore(prefs, (s) => s.remoteBranches)
+  const [open, setOpen] = useState(false)
+  const [picking, setPicking] = useState(false)
+  const ov = overview.data!
+  const setTrunk = async (branch: string | null) => {
+    setPicking(false)
+    await api.setTrunk(projectId!, branch)
+    qc.invalidateQueries({ queryKey: ["projects"] })
+    invalidateProject(qc, projectId!, { git: true, trees: [] })
+  }
+  const branches = [...ov.branches.filter((b) => !b.remote), ...ov.branches.filter((b) => b.remote)].map((b) => ({ name: b.name, remote: b.remote }))
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o)
+        if (!o) setPicking(false)
+      }}
+    >
+      <PopoverTrigger asChild>
+        <span className="inline-flex">
+          <IconButton label="提交图选项" size="icon-sm" className={cn(others && "text-primary")}>
+            <SlidersHorizontal />
+          </IconButton>
+        </span>
+      </PopoverTrigger>
+      <PopoverContent className={cn(picking ? "w-80 p-1" : "w-72")} align="end">
+        {picking ? (
+          <BranchList
+            title="集成分支固定在最左列"
+            branches={branches}
+            current={ov.project.trunkOverride ?? undefined}
+            auto={{ label: "自动识别（origin/HEAD → main / master）", on: !ov.project.trunkOverride, onPick: () => setTrunk(null) }}
+            onPick={(name) => setTrunk(name)}
+            onBack={() => setPicking(false)}
+          />
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 text-body">
+              <span className="flex-1">
+                集成分支
+                <span className="block text-caption text-faint-foreground">固定在提交图最左列</span>
+              </span>
+              <button onClick={() => setPicking(true)} className="inline-flex h-7 max-w-[150px] items-center gap-1 rounded-sm px-2 text-small ring-1 ring-border hover:bg-accent">
+                <span className="truncate font-medium text-primary">{trunk?.name ?? "未找到"}</span>
+                <ChevronRight className="size-3.5 shrink-0 text-faint-foreground" />
+              </button>
+            </div>
+            <div className="border-t" />
+            <label className="flex items-center gap-3 text-body">
+              <span className="flex-1">
+                显示其他分支
+                <span className="block text-caption text-faint-foreground">默认只画集成分支和当前标签的分支</span>
+              </span>
+              <Switch checked={others} onCheckedChange={(v) => prefs.set({ otherBranches: v })} />
+            </label>
+            <label className={cn("flex items-center gap-2 text-body", !others && "text-faint-foreground")}>
+              <Checkbox disabled={!others} checked={remotes} onCheckedChange={(v) => prefs.set({ remoteBranches: v === true })} />
+              也包括远程分支
+            </label>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ---------- graph ----------
+
+function GraphSkeleton() {
+  const shown = useDelayedFlag(true)
+  if (!shown) return null
+  return (
+    <div className="pt-8">
+      {Array.from({ length: 12 }, (_, i) => (
+        <div key={i} className="flex h-[26px] items-center gap-3 px-3">
+          <Skeleton className="size-2.5 rounded-full" />
+          <div style={{ width: `${40 + ((i * 37) % 45)}%` }}>
+            <Skeleton className="h-3" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+type Item = { kind: "compare" } | { kind: "row"; row: HistoryRow }
+const keyOf = (it: Item) => (it.kind === "compare" ? "compare" : it.row.id === WORKTREE_ROW ? "worktree" : it.row.id)
+const selectionOf = (it: Item): Selection =>
+  it.kind === "compare" ? { kind: "compare" } : it.row.id === WORKTREE_ROW ? { kind: "worktree" } : { kind: "commit", hash: it.row.id }
+/** Keyboard: move the selection, leave the diff as it is. */
+const selectItem = (it: Item) => ui.set({ selection: selectionOf(it), focusArea: "graph" })
+/** Click (module-level so memoised rows get a stable callback): the selected row toggles the diff. */
+const clickItem = (it: Item) => pickRow(selectionOf(it))
+
+function Graph({ view, tab, trunk, overview }: { view: View; tab: Tab; trunk: Trunk | null; overview: Overview }) {
+  const { projectId, dirtyFiles, showCompare, compare } = view
+  const others = useStore(prefs, (s) => s.otherBranches)
+  const remotes = useStore(prefs, (s) => s.remoteBranches)
+  const history = useHistory({
+    id: projectId,
+    trunkTip: trunk?.tip ?? null,
+    tip: tab.head,
+    worktreeHead: dirtyFiles > 0 ? tab.head : null,
+    allBranches: others,
+    remotes: others && remotes,
+  })
+  const selection = useStore(ui, (s) => s.selection)
+  const query = useStore(ui, (s) => s.query).trim().toLowerCase()
+  const scroller = useRef<HTMLDivElement>(null)
+  const rows = useMemo(() => history.data?.pages.flatMap((p) => p.rows), [history.data])
+  const capped = history.data?.pages.at(-1)?.capped ?? false
+  const items: Item[] = useMemo(
+    () => [...(showCompare ? [{ kind: "compare" } as Item] : []), ...(rows ?? []).map((row): Item => ({ kind: "row", row }))],
+    [rows, showCompare],
+  )
+  const width = useMemo(() => {
+    let max = 0
+    for (const r of rows ?? []) {
+      if (r.col > max) max = r.col
+      for (const s of r.segs) max = Math.max(max, s[1], s[2])
+    }
+    return lanesWidth(max)
+  }, [rows])
+  const matches = useMemo(() => {
+    if (!query || !rows) return null
+    return new Set(rows.filter((r) => r.id !== WORKTREE_ROW && (r.subject.toLowerCase().includes(query) || r.author.toLowerCase().includes(query) || r.id.startsWith(query))).map((r) => r.id))
+  }, [rows, query])
+
+  const v = useVirtualizer({ count: items.length, getScrollElement: () => scroller.current, estimateSize: () => ROW_H, overscan: 20 })
+  const virtualItems = v.getVirtualItems()
+  const last = virtualItems[virtualItems.length - 1]?.index ?? 0
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = history
+  useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage && last > items.length - 60) fetchNextPage()
+  }, [last, items.length, hasNextPage, isFetchingNextPage, fetchNextPage])
+
+  // A branch far behind the trunk has its HEAD below the first page: keep loading until it shows up.
+  const headLoaded = !tab.head || !!rows?.some((r) => r.id === tab.head)
+  useEffect(() => {
+    if (rows && !headLoaded && hasNextPage && !isFetchingNextPage) fetchNextPage()
+  }, [rows, headLoaded, hasNextPage, isFetchingNextPage, fetchNextPage])
+
+  const selKey = selectionKey(selection)
+
+  // On opening a tab, bring the selected row (its HEAD or uncommitted work) into view once.
+  const revealed = useRef(false)
+  useEffect(() => {
+    if (revealed.current || !rows || !selKey) return
+    const i = items.findIndex((it) => keyOf(it) === selKey)
+    if (i < 0) return
+    revealed.current = true
+    if (i > 8) v.scrollToIndex(i, { align: "center" })
+  }, [rows, selKey]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  keyNav.graph = (dir) => {
+    const i = items.findIndex((it) => keyOf(it) === selKey)
+    const next = items[Math.max(0, Math.min(items.length - 1, i + dir))]
+    if (!next) return
+    selectItem(next)
+    v.scrollToIndex(items.indexOf(next), { align: "auto" })
+  }
+
+  if (!trunk?.tip && !tab.head) return <StateView kind="empty" title="还没有提交" description={dirtyFiles ? "改动里是还没提交的文件。" : undefined} />
+  if (history.isError) return <StateView kind="error" description={history.error.message} onRetry={() => history.refetch()} />
+  if (!rows) return <GraphSkeleton />
+  if (items.length === 0) return <StateView kind="empty" title="还没有提交" />
+
+  return (
+    <div ref={scroller} tabIndex={-1} onMouseDown={() => ui.set({ focusArea: "graph" })} className="@container relative min-h-0 flex-1 overflow-y-auto outline-none">
+      <div className="relative" style={{ height: v.getTotalSize() + 28 }}>
+        {virtualItems.map((vi) => {
+          const it = items[vi.index]
+          const key = keyOf(it)
+          return (
+            <GraphRow
+              key={key}
+              item={it}
+              top={vi.start}
+              width={width}
+              selected={key === selKey}
+              dim={!!matches && it.kind === "row" && it.row.id !== WORKTREE_ROW && !matches.has(it.row.id)}
+              query={query}
+              labels={it.kind === "row" ? overview.refs[it.row.id] : undefined}
+              trunk={trunk}
+              isHead={it.kind === "row" && it.row.id === tab.head && dirtyFiles === 0}
+              compareAhead={compare?.ahead ?? 0}
+              dirtyFiles={dirtyFiles}
+              treePath={tab.tree?.path}
+              onSelect={clickItem}
+            />
+          )
+        })}
+        <div className="absolute inset-x-0 px-3 text-caption text-faint-foreground" style={{ top: v.getTotalSize() + 6 }}>
+          {hasNextPage ? "正在加载更早的提交…" : capped ? `只显示最近 ${rows.length} 个提交` : `共 ${rows.filter((r) => r.id !== WORKTREE_ROW).length} 个提交`}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** One graph row; memoised so moving the selection repaints two rows, not the whole window. */
+const GraphRow = memo(function GraphRow(p: {
+  item: Item
+  top: number
+  width: number
+  selected: boolean
+  dim: boolean
+  query: string
+  labels: RefLabel[] | undefined
+  trunk: Trunk | null
+  isHead: boolean
+  compareAhead: number
+  dirtyFiles: number
+  treePath: string | undefined
+  onSelect: (it: Item) => void
+}) {
+  const style = { transform: `translateY(${p.top}px)` }
+  const base = "absolute inset-x-0 top-0 flex h-[26px] items-center gap-2 whitespace-nowrap pr-3 text-small"
+  const tone = p.selected ? "bg-selected" : "hover:bg-accent"
+  if (p.item.kind === "compare") {
+    return (
+      <div style={style} className={cn(base, tone)} onClick={() => p.onSelect(p.item)}>
+        <span className="flex shrink-0 justify-start pl-[5px] text-primary" style={{ width: p.width }}>
+          <GitCompareArrows className="size-4" />
+        </span>
+        <span className="min-w-0 flex-1 truncate font-medium">相对 {p.trunk?.name} 的全部改动</span>
+        <span className="shrink-0 text-caption tabular text-faint-foreground">{p.compareAhead} 个提交</span>
+      </div>
+    )
+  }
+  const r = p.item.row
+  if (r.id === WORKTREE_ROW) {
+    return (
+      <div style={style} className={cn(base, tone)} onClick={() => p.onSelect(p.item)}>
+        <Lanes row={r} width={p.width} isHead={false} isWorktree />
+        <span className="min-w-0 flex-1 truncate font-medium text-warning">未提交的改动 · {p.dirtyFiles} 个文件</span>
+        <span className="shrink-0 truncate text-caption text-faint-foreground">{p.treePath ? tildify(p.treePath) : ""}</span>
+      </div>
+    )
+  }
+  return (
+    <div style={style} className={cn(base, tone, p.dim && "opacity-35")} onClick={() => p.onSelect(p.item)}>
+      <Lanes row={r} width={p.width} isHead={p.isHead} isWorktree={false} />
+      <RefPills labels={p.labels ?? []} trunk={p.trunk} />
+      <span className={cn("min-w-0 flex-1 truncate", r.parents.length > 1 && "text-muted-foreground")}>
+        <Highlight text={r.subject} query={p.query} />
+      </span>
+      <span className="shrink-0 font-mono text-caption text-faint-foreground @max-[470px]:hidden">{shortHash(r.id)}</span>
+      <span className="w-[64px] shrink-0 truncate text-caption text-faint-foreground @max-[560px]:hidden">{r.author}</span>
+      <span className="w-[52px] shrink-0 text-right text-caption tabular text-faint-foreground" title={absoluteTime(r.time)}>
+        {relativeTime(r.time)}
+      </span>
+    </div>
+  )
+})
+
+function Highlight({ text, query }: { text: string; query: string }) {
+  if (!query) return <>{text}</>
+  const i = text.toLowerCase().indexOf(query)
+  if (i < 0) return <>{text}</>
+  return (
+    <>
+      {text.slice(0, i)}
+      <mark className="rounded-xs bg-warning-subtle text-foreground">{text.slice(i, i + query.length)}</mark>
+      {text.slice(i + query.length)}
+    </>
+  )
+}
+
+/** Local and remote branches on the same commit merge into one pill: `main · origin`. */
+export function RefPills({ labels, trunk, max = 3 }: { labels: RefLabel[]; trunk: Trunk | null; max?: number }) {
+  if (!labels.length) return null
+  const branches = labels.filter((l) => l.kind === "branch")
+  const remotes = labels.filter((l) => l.kind === "remote")
+  const tags = labels.filter((l) => l.kind === "tag")
+  const pills: { name: string; remote?: string; kind: RefLabel["kind"] }[] = []
+  const used = new Set<string>()
+  for (const b of branches) {
+    const twins = remotes.filter((r) => r.name.endsWith(`/${b.name}`))
+    twins.forEach((t) => used.add(t.name))
+    pills.push({ name: b.name, remote: twins.map((t) => t.name.split("/")[0]).join(", ") || undefined, kind: "branch" })
+  }
+  remotes.filter((r) => !used.has(r.name)).forEach((r) => pills.push({ name: r.name, kind: "remote" }))
+  tags.forEach((t) => pills.push({ name: t.name, kind: "tag" }))
+  const shown = pills.slice(0, max)
+  return (
+    <span className="flex max-w-[45%] shrink-0 items-center gap-1 overflow-hidden">
+      {shown.map((p) => (
+        <span
+          key={p.kind + p.name}
+          className={cn(
+            "inline-flex h-[18px] max-w-[200px] items-center gap-1 truncate rounded-xs px-1.5 text-caption font-medium",
+            p.kind === "tag" ? "text-muted-foreground ring-1 ring-border ring-inset" : "bg-muted text-foreground",
+            p.kind === "remote" && "font-normal text-muted-foreground",
+            trunk && p.kind === "branch" && p.name === trunk.name && "bg-primary-subtle text-primary",
+          )}
+        >
+          {p.kind === "tag" && <Tag className="size-3 shrink-0" />}
+          <span className="truncate">{p.name}</span>
+          {p.remote && <span className="font-normal opacity-75">· {p.remote}</span>}
+        </span>
+      ))}
+      {pills.length > max && <span className="text-caption text-faint-foreground">+{pills.length - max}</span>}
+    </span>
+  )
+}

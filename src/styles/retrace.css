@@ -1,0 +1,97 @@
+/*
+ * Retrace knobs and project tokens on top of jim-theme.css (see docs/DESIGN.md).
+ * Values live here and in jim-theme.css only.
+ */
+
+:root {
+  /* knob: one accent, indigo */
+  --primary: #4b57d6;
+  --primary-foreground: #ffffff;
+  --primary-subtle: color-mix(in oklab, var(--primary) 11%, var(--background));
+
+  /* commit graph lanes: 0 is the integration branch */
+  --lane-0: var(--primary);
+  --lane-1: #0e8a8c;
+  --lane-2: #b7770a;
+  --lane-3: #c43c7a;
+  --lane-4: #4a8a1f;
+  --lane-5: #8a4fd8;
+  --lane-6: #66707a;
+
+  /* diff surfaces, handed to @pierre/diffs */
+  --diff-addition: color-mix(in oklab, var(--success) 9%, var(--background));
+  --diff-addition-strong: color-mix(in oklab, var(--success) 22%, var(--background));
+  --diff-deletion: color-mix(in oklab, var(--destructive) 8%, var(--background));
+  --diff-deletion-strong: color-mix(in oklab, var(--destructive) 20%, var(--background));
+  --diff-separator: color-mix(in oklab, var(--primary) 5%, var(--sunken));
+}
+
+.dark {
+  --primary: #8f98ff;
+  --primary-foreground: #191919;
+  --primary-subtle: color-mix(in oklab, var(--primary) 16%, var(--background));
+
+  --lane-1: #3cc4c4;
+  --lane-2: #e3a33b;
+  --lane-3: #f07aa8;
+  --lane-4: #86c45a;
+  --lane-5: #b48cff;
+  --lane-6: #9aa4ae;
+
+  --diff-addition: color-mix(in oklab, var(--success) 12%, var(--background));
+  --diff-addition-strong: color-mix(in oklab, var(--success) 30%, var(--background));
+  --diff-deletion: color-mix(in oklab, var(--destructive) 11%, var(--background));
+  --diff-deletion-strong: color-mix(in oklab, var(--destructive) 28%, var(--background));
+}
+
+@theme inline {
+  --color-primary-subtle: var(--primary-subtle);
+}
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body { overflow: hidden; user-select: none; cursor: default; }
+  /* Selectable text: commit messages, hashes, diffs. */
+  .selectable { user-select: text; cursor: text; }
+  .no-scrollbar { scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .fade-right { mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); }
+}
+
+@layer components {
+  /* Behind transparent images in previews. */
+  .bg-checker {
+    background: repeating-conic-gradient(var(--muted) 0 25%, var(--background) 0 50%) 0 0 / 16px 16px;
+  }
+
+  /* Rendered Markdown in the file preview: the app's type scale, GitHub-like structure. */
+  .markdown { font-size: var(--text-body); line-height: 1.7; color: var(--foreground); overflow-wrap: anywhere; }
+  .markdown > :first-child { margin-top: 0; }
+  .markdown :where(h1, h2, h3, h4, h5, h6) { margin: 1.6em 0 0.6em; font-weight: 600; line-height: 1.3; }
+  .markdown h1 { font-size: 1.75em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+  .markdown h2 { font-size: 1.4em; padding-bottom: 0.25em; border-bottom: 1px solid var(--border); }
+  .markdown h3 { font-size: 1.2em; }
+  .markdown h4 { font-size: 1em; }
+  .markdown :where(h5, h6) { font-size: 0.9em; color: var(--muted-foreground); }
+  .markdown :where(p, ul, ol, blockquote, pre, table) { margin: 0 0 1em; }
+  .markdown :where(ul, ol) { padding-left: 1.6em; }
+  .markdown ul { list-style: disc; }
+  .markdown ol { list-style: decimal; }
+  .markdown li + li { margin-top: 0.2em; }
+  .markdown li > :where(ul, ol) { margin: 0.2em 0 0; }
+  .markdown li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.4em; }
+  .markdown input[type="checkbox"] { margin-right: 0.4em; vertical-align: -1px; }
+  .markdown a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+  .markdown strong { font-weight: 600; }
+  .markdown hr { margin: 1.6em 0; border: 0; border-top: 1px solid var(--border); }
+  .markdown blockquote { padding: 0 1em; color: var(--muted-foreground); border-left: 3px solid var(--border); }
+  .markdown :where(code, pre) { font-family: var(--font-mono); font-size: 0.86em; }
+  .markdown :not(pre) > code { padding: 0.15em 0.35em; border-radius: var(--radius-xs); background: var(--muted); }
+  .markdown pre { padding: 12px 14px; overflow-x: auto; border-radius: var(--radius-sm); background: var(--sunken); line-height: 1.55; }
+  .markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+  /* Cells keep words whole (the table scrolls instead of squeezing a column to one character). */
+  .markdown :where(th, td) { padding: 6px 12px; border: 1px solid var(--border); overflow-wrap: normal; }
+  .markdown th { font-weight: 600; background: var(--sunken); }
+  .markdown img { display: inline-block; max-width: 100%; }
+  .markdown .md-missing-image { display: inline-block; padding: 0 0.4em; border-radius: var(--radius-xs); font-size: var(--text-caption); color: var(--faint-foreground); background: var(--muted); }
+}

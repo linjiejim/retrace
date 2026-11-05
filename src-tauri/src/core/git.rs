@@ -1,0 +1,223 @@
+//! Runs the system `git`. Every call is read-only friendly: optional locks are
+//! off (agents may be committing in the same tree), prompts are off, and the
+//! output is plain and unquoted.
+
+use anyhow::{bail, Context, Result};
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+static GIT: OnceLock<PathBuf> = OnceLock::new();
+
+/// Apps started from Finder get a minimal PATH, so look in the usual places first.
+pub fn binary() -> &'static Path {
+    GIT.get_or_init(|| {
+        for candidate in ["/opt/homebrew/bin/git", "/usr/local/bin/git", "/usr/bin/git"] {
+            if Path::new(candidate).exists() {
+                return PathBuf::from(candidate);
+            }
+        }
+        PathBuf::from("git")
+    })
+}
+
+fn command(dir: &Path, args: &[&str]) -> Command {
+    let mut c = Command::new(binary());
+    c.args(["-c", "color.ui=false", "-c", "core.quotepath=false", "-c", "log.showSignature=false"])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_PAGER", "cat")
+        .env("LC_ALL", "C")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .stdin(Stdio::null());
+    c
+}
+
+fn launch(dir: &Path, args: &[&str]) -> Result<Output> {
+    command(dir, args)
+        .output()
+        .with_context(|| format!("无法运行 git（{}）", binary().display()))
+}
+
+fn failure(args: &[&str], out: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let reason = stderr.trim().lines().last().unwrap_or("").trim_start_matches("fatal: ");
+    format!("git {} 失败：{}", args.first().copied().unwrap_or(""), reason)
+}
+
+/// Stdout of a successful call; a non-zero exit becomes an error with git's own message.
+pub fn run(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let out = launch(dir, args)?;
+    if !out.status.success() {
+        bail!(failure(args, &out));
+    }
+    Ok(out.stdout)
+}
+
+pub fn text(dir: &Path, args: &[&str]) -> Result<String> {
+    Ok(String::from_utf8_lossy(&run(dir, args)?).into_owned())
+}
+
+/// For commands whose exit code is an answer (`merge-base --is-ancestor`, `merge-tree`).
+pub fn code(dir: &Path, args: &[&str]) -> Result<(i32, Vec<u8>)> {
+    let out = launch(dir, args)?;
+    Ok((out.status.code().unwrap_or(-1), out.stdout))
+}
+
+/// At most this many `git status`-class scans run at once across the whole app: with many
+/// projects and worktrees they are the expensive part and would otherwise all start together.
+const HEAVY_SLOTS: usize = 4;
+static HEAVY: (std::sync::Mutex<usize>, std::sync::Condvar) = (std::sync::Mutex::new(0), std::sync::Condvar::new());
+
+struct HeavySlot;
+impl HeavySlot {
+    fn take() -> Self {
+        let (lock, cv) = &HEAVY;
+        let mut busy = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while *busy >= HEAVY_SLOTS {
+            busy = cv.wait(busy).unwrap_or_else(|e| e.into_inner());
+        }
+        *busy += 1;
+        HeavySlot
+    }
+}
+impl Drop for HeavySlot {
+    fn drop(&mut self) {
+        let (lock, cv) = &HEAVY;
+        let mut busy = lock.lock().unwrap_or_else(|e| e.into_inner());
+        *busy -= 1;
+        cv.notify_one();
+    }
+}
+
+/// `run` for working-tree scans (`status`), queued behind `HEAVY_SLOTS`.
+pub fn run_heavy(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let _slot = HeavySlot::take();
+    run(dir, args)
+}
+
+/// Like `code`, with extra environment variables (e.g. a scratch object directory).
+pub fn code_with_env(dir: &Path, args: &[&str], env: &[(&str, &std::ffi::OsStr)]) -> Result<(i32, Vec<u8>)> {
+    let mut c = command(dir, args);
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    let out = c.output().with_context(|| format!("无法运行 git（{}）", binary().display()))?;
+    Ok((out.status.code().unwrap_or(-1), out.stdout))
+}
+
+/// A temporary directory removed on drop.
+pub struct ScratchDir(PathBuf);
+
+impl ScratchDir {
+    pub fn new(tag: &str) -> Option<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("retrace-{tag}-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok()?;
+        Some(Self(dir))
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Stdout up to `max` bytes; past that the process is stopped and `true` says the output was cut.
+pub fn run_limited(dir: &Path, args: &[&str], max: usize) -> Result<(Vec<u8>, bool)> {
+    let mut child = command(dir, args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("无法运行 git（{}）", binary().display()))?;
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    // Drain stderr on its own thread: a process that fills the stderr pipe would otherwise block
+    // while we wait on stdout. Keep only the tail for the error message.
+    let mut stderr_pipe = child.stderr.take().expect("piped stderr");
+    let stderr_reader = std::thread::spawn(move || {
+        let mut tail: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = stderr_pipe.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            tail.extend_from_slice(&buf[..n]);
+            if tail.len() > 16 * 1024 {
+                tail.drain(..tail.len() - 16 * 1024);
+            }
+        }
+        String::from_utf8_lossy(&tail).into_owned()
+    });
+    let mut out = Vec::new();
+    let mut buf = [0u8; 64 * 1024];
+    let mut cut = false;
+    loop {
+        let n = stdout.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&buf[..n]);
+        if out.len() > max {
+            cut = true;
+            let _ = child.kill();
+            break;
+        }
+    }
+    let status = child.wait()?;
+    let stderr = stderr_reader.join().unwrap_or_default();
+    if !cut && !status.success() {
+        let reason = stderr.trim().lines().last().unwrap_or("").trim_start_matches("fatal: ").to_string();
+        bail!("git {} 失败：{}", args.first().copied().unwrap_or(""), reason);
+    }
+    Ok((out, cut))
+}
+
+/// Long-running network calls (fetch) get a hard timeout so a stuck remote can't pile up processes.
+pub fn run_with_timeout(dir: &Path, args: &[&str], timeout: Duration) -> Result<()> {
+    let mut child = command(dir, args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("无法运行 git（{}）", binary().display()))?;
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            if status.success() {
+                return Ok(());
+            }
+            let mut stderr = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                let _ = pipe.read_to_string(&mut stderr);
+            }
+            let reason = stderr.trim().lines().last().unwrap_or("").trim_start_matches("fatal: ").to_string();
+            bail!("git {} 失败：{}", args.first().copied().unwrap_or(""), reason);
+        }
+        if started.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("git {} 超时（{} 秒）", args.first().copied().unwrap_or(""), timeout.as_secs());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Splits NUL-terminated output into tokens, dropping the trailing empty one.
+pub fn nul_tokens(bytes: &[u8]) -> Vec<String> {
+    let mut parts: Vec<String> = bytes.split(|b| *b == 0).map(|s| String::from_utf8_lossy(s).into_owned()).collect();
+    if parts.last().is_some_and(|s| s.is_empty()) {
+        parts.pop();
+    }
+    parts
+}
