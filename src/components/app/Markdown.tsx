@@ -1,12 +1,10 @@
 // Loaded lazily: the Markdown parser only comes in when a Markdown file is previewed.
 import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { api } from "@/lib/api"
-import { openPreview } from "@/lib/commands"
+import { openLink, openPreview } from "@/lib/commands"
 import { resolvePath } from "@/lib/filetype"
 import type { Target } from "@/lib/types"
 import { useFileContent } from "@/hooks/queries"
-import { notify } from "@/components/ui/toast"
 
 const EXTERNAL = /^(https?:|mailto:)/i
 /** `//host/path` is a web link too (protocol-relative). */
@@ -22,7 +20,7 @@ export default function Markdown({ text, path, projectId, target }: { text: stri
           e.preventDefault()
           if (!href) return
           // Web links go to the browser; links into the repository open here.
-          if (EXTERNAL.test(web(href))) return void api.openUrl(web(href)).catch((err) => notify.error(err instanceof Error ? err.message : String(err)))
+          if (EXTERNAL.test(web(href))) return openLink(web(href))
           const to = resolvePath(path, href)
           if (to) openPreview(to)
         }}

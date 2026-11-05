@@ -173,7 +173,8 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let refs = repo::refs(&dir)?;
             let trunk = repo::resolve_trunk(&dir, entry.trunk.as_deref(), &refs, &trees);
             let has_remote = !git::text(&dir, &["remote"]).unwrap_or_default().trim().is_empty();
-            json!(Overview { project: project_of(&entry), trunk, trees, branches: repo::branches(&refs), refs: repo::ref_labels(&refs), has_remote })
+            let web_url = if has_remote { repo::web_url(&dir, trunk.as_ref()) } else { None };
+            json!(Overview { project: project_of(&entry), trunk, trees, branches: repo::branches(&refs), refs: repo::ref_labels(&refs), has_remote, web_url })
         }
         "treeStatuses" => {
             let Id { id } = args(a)?;
@@ -327,7 +328,8 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 url: String,
             }
             let A { url } = args(a)?;
-            open_url(&url)?;
+            let browser = state.config.read().map_err(|_| anyhow!("配置不可用"))?.prefs.browser.clone();
+            open_url(&url, &browser)?;
             Value::Null
         }
         "reorderProjects" => {
@@ -437,13 +439,21 @@ pub fn link_allowed(url: &str) -> bool {
     ["https://", "http://", "mailto:"].iter().any(|s| lower.starts_with(s)) && !url.chars().any(char::is_control)
 }
 
-fn open_url(url: &str) -> Result<()> {
+/// In `browser` (an application name for `open -a`), or the system default when it's empty.
+fn open_url(url: &str, browser: &str) -> Result<()> {
     if !link_allowed(url) {
         bail!("只能打开网页链接");
     }
-    let out = std::process::Command::new("/usr/bin/open").arg(url.trim()).output().context("无法调用 open")?;
+    let mut cmd = std::process::Command::new("/usr/bin/open");
+    if !browser.is_empty() && !url.trim().to_ascii_lowercase().starts_with("mailto:") {
+        cmd.args(["-a", browser]);
+    }
+    let out = cmd.arg(url.trim()).output().context("无法调用 open")?;
     if !out.status.success() {
-        bail!("打不开这个链接");
+        if browser.is_empty() {
+            bail!("打不开这个链接");
+        }
+        bail!("打不开：找不到「{browser}」，可以在设置里换一个浏览器");
     }
     Ok(())
 }

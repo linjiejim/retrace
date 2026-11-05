@@ -33,6 +33,11 @@ export function openPreview(path: string) {
   ui.set({ preview: path, focusArea: "changes", diffOpen: true })
 }
 
+/** A web link, in the browser chosen in settings (the system default unless set). */
+export function openLink(url: string) {
+  api.openUrl(url).catch((e) => notify.error(message(e)))
+}
+
 export function closeDiff() {
   ui.set({ diffOpen: false, focusMode: false })
 }

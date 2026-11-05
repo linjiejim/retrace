@@ -109,10 +109,30 @@ export function ImageStrip({ projectId, target, images }: { projectId: string; t
             <span className="min-w-0 truncate">{c.path}</span>
           </div>
           <div className="h-[240px]">
-            <ImageCompare projectId={projectId} target={target} change={c} />
+            <WhenVisible>
+              <ImageCompare projectId={projectId} target={target} change={c} />
+            </WhenVisible>
           </div>
         </section>
       ))}
+    </div>
+  )
+}
+
+/** Mounts its children once they come near the scroll viewport, so a commit with hundreds of images reads only those in view. */
+function WhenVisible({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [seen, setSeen] = useState(false)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || seen) return
+    const io = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && setSeen(true), { rootMargin: "600px 0px" })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [seen])
+  return (
+    <div ref={ref} className="h-full">
+      {seen && children}
     </div>
   )
 }

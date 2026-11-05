@@ -39,7 +39,45 @@ fn command(dir: &Path, args: &[&str]) -> Command {
     c
 }
 
+/// A counting gate: at most `max` holders at once; the rest wait their turn.
+struct Gate {
+    max: usize,
+    busy: std::sync::Mutex<usize>,
+    cv: std::sync::Condvar,
+}
+
+impl Gate {
+    const fn new(max: usize) -> Self {
+        Self { max, busy: std::sync::Mutex::new(0), cv: std::sync::Condvar::new() }
+    }
+
+    fn enter(&'static self) -> Pass {
+        let mut busy = self.busy.lock().unwrap_or_else(|e| e.into_inner());
+        while *busy >= self.max {
+            busy = self.cv.wait(busy).unwrap_or_else(|e| e.into_inner());
+        }
+        *busy += 1;
+        Pass(self)
+    }
+}
+
+struct Pass(&'static Gate);
+
+impl Drop for Pass {
+    fn drop(&mut self) {
+        let mut busy = self.0.busy.lock().unwrap_or_else(|e| e.into_inner());
+        *busy -= 1;
+        self.0.cv.notify_one();
+    }
+}
+
+/// Every git child process goes through here. A burst of requests (a commit with hundreds of
+/// images read at once) would otherwise start hundreds of processes and run the app out of file
+/// descriptors (a Finder-launched app gets 256), failing reads at random.
+static PROCESSES: Gate = Gate::new(16);
+
 fn launch(dir: &Path, args: &[&str]) -> Result<Output> {
+    let _pass = PROCESSES.enter();
     command(dir, args)
         .output()
         .with_context(|| format!("无法运行 git（{}）", binary().display()))
@@ -72,38 +110,18 @@ pub fn code(dir: &Path, args: &[&str]) -> Result<(i32, Vec<u8>)> {
 
 /// At most this many `git status`-class scans run at once across the whole app: with many
 /// projects and worktrees they are the expensive part and would otherwise all start together.
-const HEAVY_SLOTS: usize = 4;
-static HEAVY: (std::sync::Mutex<usize>, std::sync::Condvar) = (std::sync::Mutex::new(0), std::sync::Condvar::new());
-
-struct HeavySlot;
-impl HeavySlot {
-    fn take() -> Self {
-        let (lock, cv) = &HEAVY;
-        let mut busy = lock.lock().unwrap_or_else(|e| e.into_inner());
-        while *busy >= HEAVY_SLOTS {
-            busy = cv.wait(busy).unwrap_or_else(|e| e.into_inner());
-        }
-        *busy += 1;
-        HeavySlot
-    }
-}
-impl Drop for HeavySlot {
-    fn drop(&mut self) {
-        let (lock, cv) = &HEAVY;
-        let mut busy = lock.lock().unwrap_or_else(|e| e.into_inner());
-        *busy -= 1;
-        cv.notify_one();
-    }
-}
+static HEAVY: Gate = Gate::new(4);
 
 /// `run` for working-tree scans (`status`), queued behind `HEAVY_SLOTS`.
 pub fn run_heavy(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let _slot = HeavySlot::take();
+    // Always heavy first, then a process slot (in `run`): one order, so no deadlock.
+    let _slot = HEAVY.enter();
     run(dir, args)
 }
 
 /// Like `code`, with extra environment variables (e.g. a scratch object directory).
 pub fn code_with_env(dir: &Path, args: &[&str], env: &[(&str, &std::ffi::OsStr)]) -> Result<(i32, Vec<u8>)> {
+    let _pass = PROCESSES.enter();
     let mut c = command(dir, args);
     for (k, v) in env {
         c.env(k, v);
@@ -137,6 +155,7 @@ impl Drop for ScratchDir {
 
 /// Stdout up to `max` bytes; past that the process is stopped and `true` says the output was cut.
 pub fn run_limited(dir: &Path, args: &[&str], max: usize) -> Result<(Vec<u8>, bool)> {
+    let _pass = PROCESSES.enter();
     let mut child = command(dir, args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -186,6 +205,7 @@ pub fn run_limited(dir: &Path, args: &[&str], max: usize) -> Result<(Vec<u8>, bo
 
 /// Long-running network calls (fetch) get a hard timeout so a stuck remote can't pile up processes.
 pub fn run_with_timeout(dir: &Path, args: &[&str], timeout: Duration) -> Result<()> {
+    let _pass = PROCESSES.enter();
     let mut child = command(dir, args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -220,4 +240,30 @@ pub fn nul_tokens(bytes: &[u8]) -> Vec<String> {
         parts.pop();
     }
     parts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Gate;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn gate_never_lets_more_than_max_through() {
+        static GATE: Gate = Gate::new(3);
+        static INSIDE: AtomicUsize = AtomicUsize::new(0);
+        static PEAK: AtomicUsize = AtomicUsize::new(0);
+        let threads: Vec<_> = (0..24)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    let _pass = GATE.enter();
+                    let now = INSIDE.fetch_add(1, Ordering::SeqCst) + 1;
+                    PEAK.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    INSIDE.fetch_sub(1, Ordering::SeqCst);
+                })
+            })
+            .collect();
+        threads.into_iter().for_each(|t| t.join().unwrap());
+        assert_eq!(PEAK.load(Ordering::SeqCst), 3);
+    }
 }

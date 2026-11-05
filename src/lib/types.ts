@@ -63,6 +63,8 @@ export interface Overview {
   branches: BranchRef[]
   refs: Record<string, RefLabel[]>
   hasRemote: boolean
+  /** The repository on GitHub, for pull request links. */
+  webUrl: string | null
 }
 
 export type Integration = "none" | "ancestor" | "squash"
@@ -175,6 +177,8 @@ export interface Prefs {
   editor: string
   terminal: string
   fetchMinutes: number
+  /** Empty: the system's default browser. */
+  browser: string
 }
 
 export interface RepoChanged {

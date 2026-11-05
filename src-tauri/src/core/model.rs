@@ -89,6 +89,8 @@ pub struct Overview {
     pub branches: Vec<BranchRef>,
     pub refs: HashMap<String, Vec<RefLabel>>,
     pub has_remote: bool,
+    /// The repository on GitHub (`https://github.com/owner/repo`), for pull request links.
+    pub web_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]

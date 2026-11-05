@@ -1,7 +1,8 @@
-import { lazy, Suspense, useEffect, useState } from "react"
-import { ChevronDown, ChevronUp, Columns2, Copy, FileText, Files, GitCompareArrows, Maximize2, Minimize2, Rows2, WrapText, X } from "lucide-react"
+import { lazy, Suspense } from "react"
+import { ChevronDown, ChevronRight, ChevronUp, Columns2, Copy, FileText, Files, GitCompareArrows, GitPullRequest, Maximize2, Minimize2, Rows2, WrapText, X } from "lucide-react"
 import { copyText } from "@/lib/api"
-import { closeDiff, openFile } from "@/lib/commands"
+import { closeDiff, openFile, openLink } from "@/lib/commands"
+import { prNumber, prUrl } from "@/lib/github"
 import { isImage, isMarkdown, isSvg } from "@/lib/filetype"
 import { absoluteTime, shortHash } from "@/lib/format"
 import { keyNav } from "@/lib/keys"
@@ -240,10 +241,10 @@ function PreviewArea({ projectId, target, changes, info }: { projectId: string |
 function CommitInfo({ projectId, hash, trunk }: { projectId: string; hash: string; trunk: Trunk | null }) {
   const commit = useCommit(projectId, hash)
   const overview = useOverview(projectId)
-  const [expanded, setExpanded] = useState(false)
-  useEffect(() => setExpanded(false), [hash])
+  const showBody = useStore(prefs, (s) => s.commitBody)
   const c = commit.data
-  const long = !!c && (c.body.split("\n").length > 3 || c.body.length > 240)
+  const pr = c ? prNumber(c.subject) : null
+  const webUrl = overview.data?.webUrl
 
   return (
     <div className="selectable max-h-[40%] shrink-0 overflow-y-auto border-b px-3 py-2">
@@ -256,7 +257,29 @@ function CommitInfo({ projectId, hash, trunk }: { projectId: string; hash: strin
         </div>
       ) : (
         <>
-          <h2 className="text-body font-semibold [overflow-wrap:anywhere]">{c.subject}</h2>
+          <div className="flex items-start gap-1">
+            {c.body && (
+              <Tooltip content={showBody ? "收起说明" : "展开说明"}>
+                <button
+                  aria-label={showBody ? "收起说明" : "展开说明"}
+                  aria-expanded={showBody}
+                  onClick={() => prefs.set({ commitBody: !showBody })}
+                  className="-ml-1 mt-px inline-flex size-5 shrink-0 items-center justify-center rounded-xs text-faint-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <ChevronRight className={cn("size-3.5 transition-transform duration-(--duration-fast)", showBody && "rotate-90")} />
+                </button>
+              </Tooltip>
+            )}
+            <h2 className="min-w-0 flex-1 text-body font-semibold [overflow-wrap:anywhere]">{c.subject}</h2>
+            {pr && webUrl && (
+              <Tooltip content={`在浏览器打开 PR #${pr}`}>
+                <Button size="sm" variant="ghost" className="-my-1 -mr-1.5 shrink-0" onClick={() => openLink(prUrl(webUrl, pr))}>
+                  <GitPullRequest />
+                  PR #{pr}
+                </Button>
+              </Tooltip>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-x-1.5 text-caption text-faint-foreground">
             <Tooltip content="复制完整 hash">
               <button
@@ -289,16 +312,7 @@ function CommitInfo({ projectId, hash, trunk }: { projectId: string; hash: strin
             </span>
             <RefPills labels={overview.data?.refs[c.hash] ?? []} trunk={trunk} max={6} />
           </div>
-          {c.body && (
-            <>
-              <p className={cn("mt-1 whitespace-pre-wrap text-small text-muted-foreground [overflow-wrap:anywhere]", !expanded && "line-clamp-3")}>{c.body}</p>
-              {long && (
-                <button onClick={() => setExpanded((x) => !x)} className="mt-0.5 text-caption text-primary hover:underline">
-                  {expanded ? "收起说明" : "展开说明"}
-                </button>
-              )}
-            </>
-          )}
+          {c.body && showBody && <p className="mt-1.5 whitespace-pre-wrap text-small text-muted-foreground [overflow-wrap:anywhere]">{c.body}</p>}
         </>
       )}
     </div>

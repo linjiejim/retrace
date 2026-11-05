@@ -27,7 +27,10 @@ export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in
 async function call<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
   if (inTauri) {
     const { invoke } = await import("@tauri-apps/api/core")
-    return invoke<T>("api", { cmd, args })
+    // The command rejects with the message string; make it an Error so views can show it.
+    return invoke<T>("api", { cmd, args }).catch((e: unknown) => {
+      throw e instanceof Error ? e : new Error(String(e))
+    })
   }
   const res = await fetch(`/api/${cmd}`, {
     method: "POST",

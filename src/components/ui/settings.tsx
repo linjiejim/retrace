@@ -12,8 +12,36 @@ import { Button } from "@/components/ui/button"
  *     isn't visible); text fields collect into a SaveBar
  *   - destructive settings live in a last "危险操作" section, each behind a
  *     ConfirmDialog
+ * Settings in a dialog (a desktop app's preferences): `variant="grouped"`. Each
+ * section is a card under a small label (with an optional icon); in a compact
+ * dialog a bare heading is barely larger than the row names and the groups run
+ * together.
  */
-export function SettingsSection({ title, children, className }: { title: React.ReactNode; children: React.ReactNode; className?: string }) {
+export function SettingsSection({
+  title,
+  icon,
+  variant = "page",
+  children,
+  className,
+}: {
+  title: React.ReactNode
+  /** Grouped only: a lucide icon before the label. */
+  icon?: React.ReactNode
+  variant?: "page" | "grouped"
+  children: React.ReactNode
+  className?: string
+}) {
+  if (variant === "grouped") {
+    return (
+      <section className={cn("mt-5 first:mt-0", className)}>
+        <h3 className="mb-1.5 flex items-center gap-1.5 px-1 text-small font-semibold text-muted-foreground [&>svg]:size-3.5 [&>svg]:shrink-0">
+          {icon}
+          {title}
+        </h3>
+        <div className="divide-y rounded-lg bg-sunken px-4 ring-1 ring-border">{children}</div>
+      </section>
+    )
+  }
   return (
     <section className={cn("mt-10 first:mt-0", className)}>
       <h2 className="mb-1 text-heading font-semibold">{title}</h2>

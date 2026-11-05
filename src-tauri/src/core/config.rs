@@ -26,11 +26,13 @@ pub struct Prefs {
     pub terminal: String,
     /// 0 turns automatic fetch off.
     pub fetch_minutes: u32,
+    /// For web links (pull requests, links in Markdown); empty = the system's default browser.
+    pub browser: String,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Self { editor: "Visual Studio Code".into(), terminal: "Terminal".into(), fetch_minutes: 10 }
+        Self { editor: "Visual Studio Code".into(), terminal: "Terminal".into(), fetch_minutes: 10, browser: String::new() }
     }
 }
 

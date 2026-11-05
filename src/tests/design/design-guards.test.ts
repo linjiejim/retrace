@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest"
 import path from "node:path"
-import { loadConfig, report, scan, sourceFiles } from "./guard-lib"
+import { isCommentLine, loadConfig, report, scan, sourceFiles } from "./guard-lib"
 
 const cfg = loadConfig()
 const files = sourceFiles(cfg)
@@ -19,7 +19,8 @@ describe("design guards", () => {
   })
 
   it("uses no raw colours outside the theme", () => {
-    const hex = scan(files, /(^|[\s"'`(:,=[])#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?![\w-])/)
+    // Comments are skipped: "(#123)" there is an issue or PR number, not a colour.
+    const hex = scan(files, /(^|[\s"'`(:,=[])#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?![\w-])/, (_, line) => !isCommentLine(line))
     const fn = scan(files, /\b(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb)\(\s*[\d.]/)
     const named = scan(files, new RegExp(`(?<![\\w-])(?:${utilities})-(?:white|black|(?:${palette})-\\d{2,3})(?![\\w-])`))
     const arbitrary = scan(files, new RegExp(`(?<![\\w-])(?:${utilities})-\\[(?:#|rgb|hsl|oklch)`))

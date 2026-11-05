@@ -65,6 +65,8 @@ export interface Prefs {
   changesMode: "changes" | "files"
   /** Markdown and SVG previews: rendered, or their source. */
   rendered: boolean
+  /** The selected commit's message body above the diff (folded away when false). */
+  commitBody: boolean
   wrap: boolean
   layout: Node
   projectsCollapsed: boolean
@@ -83,6 +85,7 @@ const defaults: Prefs = {
   listMode: "tree",
   changesMode: "changes",
   rendered: true,
+  commitBody: true,
   wrap: false,
   layout: DEFAULT_LAYOUT,
   projectsCollapsed: false,

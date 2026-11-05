@@ -461,6 +461,40 @@ pub fn last_commit_time(dir: &Path) -> Option<i64> {
     out.trim().parse().ok()
 }
 
+/// The repository's page on GitHub (or a GitHub Enterprise host), from the remote the trunk
+/// tracks (else `origin`, else the first remote). Credentials in the URL never make it out.
+pub fn web_url(dir: &Path, trunk: Option<&Trunk>) -> Option<String> {
+    let remotes = git::text(dir, &["remote"]).ok()?;
+    let names: Vec<&str> = remotes.lines().map(str::trim).filter(|n| !n.is_empty()).collect();
+    let tracked = trunk.and_then(|t| t.tip_ref.split_once('/')).map(|(remote, _)| remote).filter(|r| names.contains(r));
+    let name = tracked.or_else(|| names.iter().copied().find(|n| *n == "origin")).or_else(|| names.first().copied())?;
+    github_web_url(&git::text(dir, &["remote", "get-url", name]).ok()?)
+}
+
+/// `git@github.com:o/r.git`, `ssh://git@github.com:22/o/r`, `https://token@github.com/o/r.git` → `https://github.com/o/r`.
+pub fn github_web_url(remote: &str) -> Option<String> {
+    let url = remote.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    let (host, path) = if let Some(rest) = url.strip_prefix("ssh://").or_else(|| url.strip_prefix("https://")).or_else(|| url.strip_prefix("http://")) {
+        let rest = rest.rsplit_once('@').map_or(rest, |(_, r)| r);
+        let (host, path) = rest.split_once('/')?;
+        (host.split(':').next()?, path)
+    } else {
+        // scp-like: [user@]host:owner/repo
+        let rest = url.split_once('@').map_or(url, |(_, r)| r);
+        rest.split_once(':')?
+    };
+    if !host.to_ascii_lowercase().contains("github") {
+        return None;
+    }
+    let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    let ok = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+    if parts.len() != 2 || !parts.iter().all(|p| ok(p)) {
+        return None;
+    }
+    Some(format!("https://{host}/{}/{}", parts[0], parts[1]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,5 +515,21 @@ mod tests {
         let raw = b"1 M. N... 100644 100644 100644 a b src/a.rs\x001 .M N... 100644 100644 100644 a b src/b.rs\x002 R. N... 100644 100644 100644 a b R100 new.rs\x00old.rs\x00u UU N... 1 1 1 1 a b c conflict.rs\x00? notes.md\x00";
         let c = parse_status(raw);
         assert_eq!(c, Counts { files: 5, staged: 2, unstaged: 1, untracked: 1, conflicted: 1 });
+    }
+
+    #[test]
+    fn github_web_url_from_remote_urls() {
+        for url in [
+            "git@github.com:jimlin/retrace.git",
+            "https://github.com/jimlin/retrace",
+            "https://x-access-token:secret@github.com/jimlin/retrace.git/",
+            "ssh://git@github.com:22/jimlin/retrace.git",
+        ] {
+            assert_eq!(github_web_url(url).as_deref(), Some("https://github.com/jimlin/retrace"), "{url}");
+        }
+        assert_eq!(github_web_url("git@github.example.com:team/app.git").as_deref(), Some("https://github.example.com/team/app"));
+        assert_eq!(github_web_url("https://gitlab.com/jimlin/retrace.git"), None);
+        assert_eq!(github_web_url("/home/me/repos/retrace.git"), None);
+        assert_eq!(github_web_url("https://github.com/jimlin"), None);
     }
 }

@@ -84,6 +84,11 @@ export function scan(files: string[], re: RegExp, keep: (m: RegExpMatchArray, li
   return hits
 }
 
+/** A line that is only a comment (`//`, `/*`, ` * `, `<!--`): it can't style anything. */
+export function isCommentLine(line: string) {
+  return /^\s*(?:\/\/|\/\*|\*|<!--)/.test(line)
+}
+
 export function report(hits: Hit[]) {
   return hits.map((h) => `  ${h.file}:${h.line}  ${h.text}`).join("\n")
 }
