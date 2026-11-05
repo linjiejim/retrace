@@ -3,6 +3,7 @@ import { AppWindow, FolderGit2, LayoutPanelLeft, Palette } from "lucide-react"
 import { api } from "@/lib/api"
 import { useAppearance, type Appearance } from "@/lib/appearance"
 import { run } from "@/lib/commands"
+import { t, type LangPref } from "@/lib/i18n"
 import { prefs as uiPrefs, useStore } from "@/lib/store"
 import type { Prefs } from "@/lib/types"
 import { usePrefs } from "@/hooks/queries"
@@ -19,11 +20,11 @@ const TERMINALS = ["Terminal", "iTerm", "Ghostty", "Warp", "WezTerm", "kitty"]
 /** "" in the config; Select items can't carry an empty value. */
 const SYSTEM_BROWSER = "system"
 const BROWSERS = ["Safari", "Google Chrome", "Arc", "Firefox", "Microsoft Edge", "Brave Browser", "Orion"]
-const FETCH = [
-  { value: "0", label: "关闭" },
-  { value: "5", label: "每 5 分钟" },
-  { value: "10", label: "每 10 分钟" },
-  { value: "30", label: "每 30 分钟" },
+const fetchOptions = () => [
+  { value: "0", label: t("Off") },
+  { value: "5", label: t("Every {n} minutes", { n: 5 }) },
+  { value: "10", label: t("Every {n} minutes", { n: 10 }) },
+  { value: "30", label: t("Every {n} minutes", { n: 30 }) },
 ]
 
 const withCurrent = (list: string[], current: string | undefined) =>
@@ -35,6 +36,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const server = usePrefs()
   const diffStyle = useStore(uiPrefs, (s) => s.diffStyle)
   const wrap = useStore(uiPrefs, (s) => s.wrap)
+  const language = useStore(uiPrefs, (s) => s.language)
 
   const save = async (patch: Partial<Prefs>) => {
     if (!server.data) return
@@ -44,72 +46,87 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
       await api.setPrefs(next)
     } catch (e) {
       qc.setQueryData(["prefs"], server.data)
-      notify.error(`没能保存设置：${e instanceof Error ? e.message : String(e)}`)
+      notify.error(t("Couldn't save the settings: {reason}", { reason: e instanceof Error ? e.message : String(e) }))
     }
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent size="lg">
-        <DialogHeader title="设置" />
+        <DialogHeader title={t("Settings")} />
         <DialogBody className="pb-5">
-          <SettingsSection variant="grouped" icon={<Palette />} title="外观">
+          <SettingsSection variant="grouped" icon={<Palette />} title={t("Appearance")}>
             <SettingRow
-              label="主题"
+              label={t("Language")}
+              control={
+                <Segmented<LangPref>
+                  size="sm"
+                  value={language}
+                  onValueChange={(v) => uiPrefs.set({ language: v })}
+                  options={[
+                    { value: "system", label: t("System") },
+                    { value: "zh", label: "中文" }, // i18n-allow: each language is named in itself
+                    { value: "en", label: "English" },
+                  ]}
+                />
+              }
+            />
+            <SettingRow
+              label={t("Theme")}
               control={
                 <Segmented<Appearance>
                   size="sm"
                   value={preference}
                   onValueChange={setAppearance}
                   options={[
-                    { value: "system", label: "跟随系统" },
-                    { value: "light", label: "浅色" },
-                    { value: "dark", label: "深色" },
+                    { value: "system", label: t("System") },
+                    { value: "light", label: t("Light") },
+                    { value: "dark", label: t("Dark") },
                   ]}
                 />
               }
             />
             <SettingRow
-              label="diff 布局"
+              label={t("Diff layout")}
               control={
                 <Segmented
                   size="sm"
                   value={diffStyle}
                   onValueChange={(v) => uiPrefs.set({ diffStyle: v })}
                   options={[
-                    { value: "split", label: "并排" },
-                    { value: "unified", label: "合并" },
+                    { value: "split", label: t("Side by side") },
+                    { value: "unified", label: t("Unified") },
                   ]}
                 />
               }
             />
-            <SettingRow label="diff 自动换行" control={<Switch checked={wrap} onCheckedChange={(v) => uiPrefs.set({ wrap: v })} />} />
+            <SettingRow label={t("Wrap diff lines")} control={<Switch checked={wrap} onCheckedChange={(v) => uiPrefs.set({ wrap: v })} />} />
           </SettingsSection>
-          <SettingsSection variant="grouped" icon={<LayoutPanelLeft />} title="布局">
+          <SettingsSection variant="grouped" icon={<LayoutPanelLeft />} title={t("Layout")}>
             <SettingRow
-              label="恢复默认布局"
-              description="左列项目和改动，右列提交图和 diff；diff 先关着，点提交再打开。"
+              label={t("Restore default layout")}
+              description={t("Projects and changes on the left, the graph and diff on the right; the diff stays closed until you click a commit.")}
               control={
                 <Button
                   size="sm"
                   onClick={() => {
                     run("resetLayout")
-                    notify.success("已恢复默认布局")
+                    notify.success(t("Default layout restored"))
                   }}
                 >
-                  恢复默认
+                  {t("Restore")}
                 </Button>
               }
             />
           </SettingsSection>
-          <SettingsSection variant="grouped" icon={<FolderGit2 />} title="仓库">
+          <SettingsSection variant="grouped" icon={<FolderGit2 />} title={t("Repositories")}>
             <SettingRow
-              label="自动获取远程更新"
-              description="只下载，不合并，让领先 / 落后和「已合并」保持准确。"
+              label={t("Fetch from remotes automatically")}
+              description={t("Download only, never merge: keeps ahead / behind and “Merged” accurate.")}
               control={
                 <Select
                   className="w-36"
-                  options={FETCH}
+                  options={fetchOptions()}
                   value={String(server.data?.fetchMinutes ?? 10)}
                   onValueChange={(v) => save({ fetchMinutes: Number(v) })}
                   disabled={!server.data}
@@ -117,22 +134,22 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               }
             />
           </SettingsSection>
-          <SettingsSection variant="grouped" icon={<AppWindow />} title="打开方式">
+          <SettingsSection variant="grouped" icon={<AppWindow />} title={t("Open with")}>
             <SettingRow
-              label="编辑器"
+              label={t("Editor")}
               control={<Select className="w-48" options={withCurrent(EDITORS, server.data?.editor)} value={server.data?.editor} onValueChange={(v) => save({ editor: v })} disabled={!server.data} />}
             />
             <SettingRow
-              label="终端"
+              label={t("Terminal")}
               control={<Select className="w-48" options={withCurrent(TERMINALS, server.data?.terminal)} value={server.data?.terminal} onValueChange={(v) => save({ terminal: v })} disabled={!server.data} />}
             />
             <SettingRow
-              label="浏览器"
-              description="打开 GitHub 上的 PR 和文档里的网页链接。"
+              label={t("Browser")}
+              description={t("For pull requests on GitHub and web links in documents.")}
               control={
                 <Select
                   className="w-48"
-                  options={[{ value: SYSTEM_BROWSER, label: "系统默认浏览器" }, ...withCurrent(BROWSERS, server.data?.browser || undefined)]}
+                  options={[{ value: SYSTEM_BROWSER, label: t("System default browser") }, ...withCurrent(BROWSERS, server.data?.browser || undefined)]}
                   value={server.data ? server.data.browser || SYSTEM_BROWSER : undefined}
                   onValueChange={(v) => save({ browser: v === SYSTEM_BROWSER ? "" : v })}
                   disabled={!server.data}

@@ -102,12 +102,12 @@ export const STATUS_LETTER: Record<FileChange["status"], string> = {
 }
 
 export const STATUS_LABEL: Record<FileChange["status"], string> = {
-  added: "新增",
-  modified: "修改",
-  deleted: "删除",
-  renamed: "重命名",
-  copied: "复制",
-  typechange: "类型变化",
-  untracked: "未跟踪",
-  conflicted: "冲突",
+  added: "Added",
+  modified: "Modified",
+  deleted: "Deleted",
+  renamed: "Renamed",
+  copied: "Copied",
+  typechange: "Type changed",
+  untracked: "Untracked",
+  conflicted: "Conflicted",
 }

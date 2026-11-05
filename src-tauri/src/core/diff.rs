@@ -1,5 +1,6 @@
 //! Changed files for a target (commit, uncommitted, compare) and both sides of one file.
 
+use crate::tr;
 use super::git;
 use super::model::*;
 use anyhow::{bail, Result};
@@ -316,7 +317,7 @@ fn blob_on_disk(tree: &Path, path: &str) -> Result<Option<Blob>> {
 /// Paths come from the frontend: relative, no `..`.
 pub(super) fn check_path(path: &str) -> Result<()> {
     if path.is_empty() || path.starts_with('/') || path.split('/').any(|p| p == "..") {
-        bail!("文件路径无效");
+        bail!(tr!("文件路径无效", "Invalid file path"));
     }
     Ok(())
 }

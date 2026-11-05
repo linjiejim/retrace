@@ -2,6 +2,7 @@
 //! branch, and per-worktree status. Status logic follows the foldgit fork
 //! (docs/specs/20261101-worktree-status-and-cleanup.md there).
 
+use crate::tr;
 use super::git;
 use super::model::*;
 use anyhow::{bail, Result};
@@ -13,7 +14,7 @@ use std::path::{Path, PathBuf};
 /// The project root for any path inside a repository: the main worktree, or the bare repository.
 pub fn project_root(path: &Path) -> Result<PathBuf> {
     if !path.is_dir() {
-        bail!("{} 不是文件夹", path.display());
+        bail!(tr!("{} 不是文件夹", "{} is not a folder", path.display()));
     }
     let out = git::text(path, &["rev-parse", "--path-format=absolute", "--git-common-dir", "--is-bare-repository"])?;
     let mut lines = out.lines();
@@ -433,7 +434,7 @@ pub fn tree_status(dir: &Path, tree: &Worktree, trunk: Option<&Trunk>, cache: &I
         return status;
     }
     if tree.prunable || !path.is_dir() {
-        status.error = Some("这棵 worktree 的目录已经不存在".into());
+        status.error = Some(tr!("这棵 worktree 的目录已经不存在", "This worktree's folder no longer exists"));
         return status;
     }
     match worktree_counts(path) {

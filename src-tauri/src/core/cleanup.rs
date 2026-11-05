@@ -5,6 +5,7 @@
 //! it is removed; ignored files that can't be regenerated (`.env`…) and recent activity are reported
 //! so the UI leaves those unticked; branches are deleted only with `git branch -d`.
 
+use crate::tr;
 use super::model::*;
 use super::repo::{self, IntegrationCache};
 use super::git;
@@ -74,32 +75,32 @@ struct Verdict {
 fn eligible(dir: &Path, tree: &Worktree, trunk: &Trunk, cache: &IntegrationCache, strict: bool) -> Result<Verdict> {
     let path = Path::new(&tree.path);
     if tree.is_main || tree.bare {
-        bail!("主 worktree 不能删除");
+        bail!(tr!("主 worktree 不能删除", "The main worktree can't be removed"));
     }
     if tree.locked {
-        bail!("worktree 已锁定");
+        bail!(tr!("worktree 已锁定", "The worktree is locked"));
     }
     if tree.prunable || !path.is_dir() {
-        bail!("worktree 目录已经不存在");
+        bail!(tr!("worktree 目录已经不存在", "The worktree folder no longer exists"));
     }
     if tree.branch.as_deref() == Some(trunk.name.as_str()) {
-        bail!("检出的是集成分支");
+        bail!(tr!("检出的是集成分支", "It has the integration branch checked out"));
     }
-    let head = tree.head.as_deref().ok_or_else(|| anyhow::anyhow!("还没有提交"))?;
+    let head = tree.head.as_deref().ok_or_else(|| anyhow::anyhow!(tr!("还没有提交", "No commits yet")))?;
     let counts = if strict {
         repo::parse_status(&git::run_heavy(path, &["status", "--porcelain=v2", "-z", "--untracked-files=all"])?)
     } else {
         repo::worktree_counts(path)?
     };
     if counts.files > 0 {
-        bail!("有 {} 个文件未提交", counts.files);
+        bail!(tr!("有 {} 个文件未提交", "{} files are uncommitted", counts.files));
     }
     if let Some(op) = repo::operation(path) {
-        bail!("有进行中的 {op}");
+        bail!(tr!("有进行中的 {op}", "A {op} is in progress"));
     }
     let cmp = repo::compare_with_trunk(dir, trunk, head, cache)?;
     if cmp.integration == Integration::None {
-        bail!("还没有合并到 {}", trunk.name);
+        bail!(tr!("还没有合并到 {}", "Not merged into {} yet", trunk.name));
     }
     Ok(Verdict { integration: cmp.integration })
 }
@@ -143,27 +144,27 @@ pub fn remove(
     cache: &IntegrationCache,
 ) -> Result<RemoveOutcome> {
     let trees = repo::worktrees(dir)?;
-    let tree = trees.iter().find(|t| t.path == tree_path).ok_or_else(|| anyhow::anyhow!("不是这个项目的 worktree"))?;
+    let tree = trees.iter().find(|t| t.path == tree_path).ok_or_else(|| anyhow::anyhow!(tr!("不是这个项目的 worktree", "Not a worktree of this project")))?;
     if tree.head.as_deref() != Some(expect_head) {
-        bail!("HEAD 在确认之后变了，已跳过");
+        bail!(tr!("HEAD 在确认之后变了，已跳过", "HEAD moved after you confirmed; skipped"));
     }
     let path = Path::new(tree_path);
     let verdict = eligible(dir, tree, trunk, cache, true)?;
     let unseen: Vec<String> = notable_ignored(path).into_iter().filter(|n| !acknowledged_ignored.contains(n)).collect();
     if !unseen.is_empty() {
-        bail!("确认之后出现了被忽略的 {}，已跳过；重新打开列表确认后再删", unseen.join("、"));
+        bail!(tr!("确认之后出现了被忽略的 {}，已跳过；重新打开列表确认后再删", "Ignored {} appeared after you confirmed; skipped. Reopen the list and confirm again", unseen.join(", ")));
     }
     // The scans above can take a while: a commit made meanwhile was never checked against the trunk.
     let live = git::text(path, &["rev-parse", "HEAD"])?;
     if live.trim() != expect_head {
-        bail!("HEAD 在检查期间变了，已跳过");
+        bail!(tr!("HEAD 在检查期间变了，已跳过", "HEAD moved during the check; skipped"));
     }
     git::run(dir, &["worktree", "remove", tree_path])?;
 
     let mut outcome = RemoveOutcome { branch_deleted: false, branch_kept_reason: None };
     if let (true, Some(branch)) = (delete_branch, tree.branch.as_deref()) {
         if verdict.integration == Integration::Squash {
-            outcome.branch_kept_reason = Some("squash 合并的分支 git branch -d 删不掉，已保留".into());
+            outcome.branch_kept_reason = Some(tr!("squash 合并的分支 git branch -d 删不掉，已保留", "Kept: git branch -d can't delete a squash-merged branch"));
         } else {
             // `branch -d` judges "merged" against the current branch: run it where the trunk is checked out.
             let at = trees

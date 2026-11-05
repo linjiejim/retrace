@@ -4,6 +4,7 @@ import { isMarkdown, isSvg } from "@/lib/filetype"
 import { prefs, ui, useStore } from "@/lib/store"
 import type { FileChange, FileContent, Target } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { t } from "@/lib/i18n"
 import { useFileContent } from "@/hooks/queries"
 import { useDelayedFlag } from "@/hooks/use-delayed-flag"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -33,10 +34,10 @@ export function FilePreview({ projectId, target, path }: { projectId: string; ta
   if (content.isError) return <StateView size="sm" kind="error" description={content.error.message} onRetry={() => content.refetch()} />
   if (content.data === undefined) return <Loading />
   const c = content.data
-  if (!c) return <StateView size="sm" kind="empty" title="这个版本里没有这个文件" description="换一个提交，或在左边选别的文件。" />
-  if (c.tooLarge) return <StateView size="sm" kind="empty" title="文件太大" description={`${formatBytes(c.size)}，超过预览上限。`} />
+  if (!c) return <StateView size="sm" kind="empty" title={t("Not in this version")} description={t("Pick another commit, or another file on the left.")} />
+  if (c.tooLarge) return <StateView size="sm" kind="empty" title={t("File too large")} description={t("{size}, over the preview limit.", { size: formatBytes(c.size) })} />
   if (c.data && c.mime && (!isSvg(path) || rendered || c.text == null)) return <ImageView src={dataUrl(c)} size={c.size} />
-  if (c.text == null) return <StateView size="sm" kind="empty" title="二进制文件" description={`${formatBytes(c.size)}，不能预览。`} />
+  if (c.text == null) return <StateView size="sm" kind="empty" title={t("Binary file")} description={t("{size}, can't be previewed.", { size: formatBytes(c.size) })} />
   return (
     <Suspense fallback={<Loading />}>
       {isMarkdown(path) && rendered ? <Markdown text={c.text} path={path} projectId={projectId} target={target} /> : <TextPreview name={path} text={c.text} />}
@@ -77,15 +78,15 @@ export function ImageCompare({ projectId, target, change }: { projectId: string;
   if (failed) return <StateView size="sm" kind="error" description={failed.message} onRetry={() => (old.refetch(), neu.refetch())} />
   if (old.data === undefined || neu.data === undefined) return <Loading />
   const sides = [
-    { label: "改前", c: old.data },
-    { label: "改后", c: neu.data },
+    { label: "before", c: old.data },
+    { label: "after", c: neu.data },
   ].filter((s): s is { label: string; c: FileContent } => !!s.c)
-  if (sides.some((s) => s.c.tooLarge)) return <StateView size="sm" kind="empty" title="图片太大" description="超过 8 MB 的图片不预览。" />
-  if (sides.length === 0 || sides.some((s) => !s.c.data)) return <StateView size="sm" kind="empty" title="二进制文件" description="这个文件不能预览。" />
+  if (sides.some((s) => s.c.tooLarge)) return <StateView size="sm" kind="empty" title={t("Image too large")} description={t("Images over 8 MB aren't previewed.")} />
+  if (sides.length === 0 || sides.some((s) => !s.c.data)) return <StateView size="sm" kind="empty" title={t("Binary file")} description={t("This file can't be previewed.")} />
   return (
     <div className={cn("grid h-full min-h-0", sides.length === 2 && (diffStyle === "split" ? "grid-cols-2 divide-x" : "grid-rows-2 divide-y"))}>
       {sides.map((s) => (
-        <ImageView key={s.label} src={dataUrl(s.c)} size={s.c.size} label={sides.length === 2 ? s.label : s.label === "改前" ? "已删除" : "新增"} className="min-h-0" />
+        <ImageView key={s.label} src={dataUrl(s.c)} size={s.c.size} label={sides.length === 2 ? (s.label === "before" ? t("Before") : t("After")) : s.label === "before" ? t("Deleted") : t("Added")} className="min-h-0" />
       ))}
     </div>
   )

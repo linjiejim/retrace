@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react"
 import { DEFAULT_LAYOUT, isValid, type Node } from "./layout"
 import type { Candidate } from "./types"
+import type { LangPref } from "./i18n"
 
 /** A tiny observable store. Selectors must return primitives or stable references. */
 export function createStore<T extends object>(initial: T) {
@@ -67,6 +68,8 @@ export interface Prefs {
   rendered: boolean
   /** The selected commit's message body above the diff (folded away when false). */
   commitBody: boolean
+  /** UI language; "system" follows the macOS language. */
+  language: LangPref
   wrap: boolean
   layout: Node
   projectsCollapsed: boolean
@@ -86,6 +89,7 @@ const defaults: Prefs = {
   changesMode: "changes",
   rendered: true,
   commitBody: true,
+  language: "system",
   wrap: false,
   layout: DEFAULT_LAYOUT,
   projectsCollapsed: false,

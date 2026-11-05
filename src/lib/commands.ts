@@ -3,6 +3,7 @@
 
 import { api, pickFolders } from "./api"
 import { keyNav } from "./keys"
+import { t } from "./i18n"
 import { DEFAULT_LAYOUT } from "./layout"
 import { queryClient } from "./query"
 import { prefs, selectionKey, ui, type Selection } from "./store"
@@ -55,7 +56,7 @@ function currentTreePath(): string | null {
 function openCurrent(how: "finder" | "terminal" | "editor") {
   const { projectId } = ui.get()
   const path = currentTreePath()
-  if (!projectId || !path) return notify.info("先选一个项目")
+  if (!projectId || !path) return notify.info(t("Pick a project first"))
   api.open(projectId, path, how).catch((e) => notify.error(message(e)))
 }
 
@@ -93,7 +94,7 @@ async function refresh() {
     await api.fetch(id)
     invalidateProject(queryClient, id, { git: true, trees: [] })
   } catch (e) {
-    notify.error(`没能从远程获取更新：${message(e)}`)
+    notify.error(t("Couldn't fetch from the remote: {reason}", { reason: message(e) }))
   } finally {
     ui.set({ fetching: false })
   }

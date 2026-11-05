@@ -3,6 +3,7 @@ import { GripVertical } from "lucide-react"
 import { edgesOf, minSize, movePanel, PANEL_TITLE, removePanel, resize, type Edges, type Node, type PanelId, type Side } from "@/lib/layout"
 import { createStore, prefs, useStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
+import { t } from "@/lib/i18n"
 import { Tooltip } from "@/components/ui/tooltip"
 
 interface PanelInfo extends Edges {
@@ -72,9 +73,9 @@ export function PanelHeader({ children, className }: { children?: ReactNode; cla
         className,
       )}
     >
-      {editable && <Tooltip content={`拖动「${PANEL_TITLE[id]}」调整布局`} delayDuration={600}>
+      {editable && <Tooltip content={t("Drag “{name}” to rearrange", { name: t(PANEL_TITLE[id]) })} delayDuration={600}>
         <button
-          aria-label={`移动「${PANEL_TITLE[id]}」`}
+          aria-label={t("Move “{name}”", { name: t(PANEL_TITLE[id]) })}
           onPointerDown={(e) => startDrag(id, e)}
           className="inline-flex h-6 w-4 shrink-0 cursor-grab items-center justify-center rounded-xs text-faint-foreground opacity-0 hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
         >
@@ -93,7 +94,7 @@ const OVERLAY: Record<Side, string> = {
   bottom: "inset-x-0 bottom-0 h-1/2",
   center: "inset-[12%]",
 }
-const SIDE_LABEL: Record<Side, string> = { left: "放在左边", right: "放在右边", top: "放在上面", bottom: "放在下面", center: "交换位置" }
+const SIDE_LABEL: Record<Side, string> = { left: "Dock left", right: "Dock right", top: "Dock above", bottom: "Dock below", center: "Swap places" }
 
 /** Only this subscribes to the drag store, so dragging repaints overlays, not the views. */
 function DropOverlay({ id }: { id: PanelId }) {
@@ -105,7 +106,7 @@ function DropOverlay({ id }: { id: PanelId }) {
     <div className="pointer-events-none absolute inset-0 z-30">
       {target === id && side && (
         <div className={cn("absolute flex items-center justify-center rounded-md bg-primary-subtle/90 ring-2 ring-primary transition-all duration-(--duration-fast)", OVERLAY[side])}>
-          <span className="rounded-sm bg-popover px-2 py-1 text-small font-medium shadow-popover">{SIDE_LABEL[side]}</span>
+          <span className="rounded-sm bg-popover px-2 py-1 text-small font-medium shadow-popover">{t(SIDE_LABEL[side])}</span>
         </div>
       )}
     </div>
@@ -132,7 +133,7 @@ function DragLabel() {
   if (!dragging) return null
   return (
     <div className="pointer-events-none fixed z-50 rounded-sm bg-inverse px-2 py-1 text-caption text-inverse-foreground" style={{ left: x + 12, top: y + 12 }}>
-      移动「{PANEL_TITLE[dragging]}」· Esc 取消
+      {t("Move “{name}”", { name: t(PANEL_TITLE[dragging]) })} · {t("Esc to cancel")}
     </div>
   )
 }

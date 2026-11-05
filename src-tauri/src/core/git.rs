@@ -2,6 +2,7 @@
 //! off (agents may be committing in the same tree), prompts are off, and the
 //! output is plain and unquoted.
 
+use crate::tr;
 use anyhow::{bail, Context, Result};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -80,13 +81,13 @@ fn launch(dir: &Path, args: &[&str]) -> Result<Output> {
     let _pass = PROCESSES.enter();
     command(dir, args)
         .output()
-        .with_context(|| format!("无法运行 git（{}）", binary().display()))
+        .with_context(|| tr!("无法运行 git（{}）", "Can't run git ({})", binary().display()))
 }
 
 fn failure(args: &[&str], out: &Output) -> String {
     let stderr = String::from_utf8_lossy(&out.stderr);
     let reason = stderr.trim().lines().last().unwrap_or("").trim_start_matches("fatal: ");
-    format!("git {} 失败：{}", args.first().copied().unwrap_or(""), reason)
+    tr!("git {} 失败：{}", "git {} failed: {}", args.first().copied().unwrap_or(""), reason)
 }
 
 /// Stdout of a successful call; a non-zero exit becomes an error with git's own message.
@@ -126,7 +127,7 @@ pub fn code_with_env(dir: &Path, args: &[&str], env: &[(&str, &std::ffi::OsStr)]
     for (k, v) in env {
         c.env(k, v);
     }
-    let out = c.output().with_context(|| format!("无法运行 git（{}）", binary().display()))?;
+    let out = c.output().with_context(|| tr!("无法运行 git（{}）", "Can't run git ({})", binary().display()))?;
     Ok((out.status.code().unwrap_or(-1), out.stdout))
 }
 
@@ -160,7 +161,7 @@ pub fn run_limited(dir: &Path, args: &[&str], max: usize) -> Result<(Vec<u8>, bo
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("无法运行 git（{}）", binary().display()))?;
+        .with_context(|| tr!("无法运行 git（{}）", "Can't run git ({})", binary().display()))?;
     let mut stdout = child.stdout.take().expect("piped stdout");
     // Drain stderr on its own thread: a process that fills the stderr pipe would otherwise block
     // while we wait on stdout. Keep only the tail for the error message.
@@ -198,7 +199,7 @@ pub fn run_limited(dir: &Path, args: &[&str], max: usize) -> Result<(Vec<u8>, bo
     let stderr = stderr_reader.join().unwrap_or_default();
     if !cut && !status.success() {
         let reason = stderr.trim().lines().last().unwrap_or("").trim_start_matches("fatal: ").to_string();
-        bail!("git {} 失败：{}", args.first().copied().unwrap_or(""), reason);
+        bail!(tr!("git {} 失败：{}", "git {} failed: {}", args.first().copied().unwrap_or(""), reason));
     }
     Ok((out, cut))
 }
@@ -210,7 +211,7 @@ pub fn run_with_timeout(dir: &Path, args: &[&str], timeout: Duration) -> Result<
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("无法运行 git（{}）", binary().display()))?;
+        .with_context(|| tr!("无法运行 git（{}）", "Can't run git ({})", binary().display()))?;
     let started = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
@@ -222,12 +223,12 @@ pub fn run_with_timeout(dir: &Path, args: &[&str], timeout: Duration) -> Result<
                 let _ = pipe.read_to_string(&mut stderr);
             }
             let reason = stderr.trim().lines().last().unwrap_or("").trim_start_matches("fatal: ").to_string();
-            bail!("git {} 失败：{}", args.first().copied().unwrap_or(""), reason);
+            bail!(tr!("git {} 失败：{}", "git {} failed: {}", args.first().copied().unwrap_or(""), reason));
         }
         if started.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
-            bail!("git {} 超时（{} 秒）", args.first().copied().unwrap_or(""), timeout.as_secs());
+            bail!(tr!("git {} 超时（{} 秒）", "git {} timed out ({} s)", args.first().copied().unwrap_or(""), timeout.as_secs()));
         }
         std::thread::sleep(Duration::from_millis(100));
     }

@@ -10,6 +10,7 @@ import { prefs, ui, useStore } from "@/lib/store"
 import { STATUS_LETTER } from "@/lib/tree"
 import type { FileChange, Target, Trunk } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { t, tp } from "@/lib/i18n"
 import { useChanges, useCommit, useOverview } from "@/hooks/queries"
 import { targetOf, useProjectView } from "@/hooks/use-project-view"
 import { Button, IconButton } from "@/components/ui/button"
@@ -76,10 +77,10 @@ function StepButtons() {
   const index = current ? order.indexOf(current) : -1
   return (
     <>
-      <IconButton label="上一个文件  ↑" size="icon-sm" disabled={index <= 0} onClick={() => keyNav.changes?.(-1)}>
+      <IconButton label={`${t("Previous file")}  ↑`} size="icon-sm" disabled={index <= 0} onClick={() => keyNav.changes?.(-1)}>
         <ChevronUp />
       </IconButton>
-      <IconButton label="下一个文件  ↓" size="icon-sm" disabled={order.length === 0 || index >= order.length - 1} onClick={() => keyNav.changes?.(1)}>
+      <IconButton label={`${t("Next file")}  ↓`} size="icon-sm" disabled={order.length === 0 || index >= order.length - 1} onClick={() => keyNav.changes?.(1)}>
         <ChevronDown />
       </IconButton>
     </>
@@ -91,14 +92,14 @@ function CloseButton() {
   return (
     <>
       <IconButton
-        label={focusMode ? "退出专注  F" : "专注：只看改动和 diff  F"}
+        label={`${focusMode ? t("Leave focus") : t("Focus: only changes and the diff")}  F`}
         size="icon-sm"
         className={cn("@max-[400px]/header:hidden", focusMode && "bg-pressed")}
         onClick={() => ui.set({ focusMode: !focusMode, diffOpen: true })}
       >
         {focusMode ? <Minimize2 /> : <Maximize2 />}
       </IconButton>
-      <IconButton label="关闭  Esc" size="icon-sm" onClick={closeDiff}>
+      <IconButton label={`${t("Close")}  Esc`} size="icon-sm" onClick={closeDiff}>
         <X />
       </IconButton>
     </>
@@ -120,33 +121,33 @@ function DiffArea({ projectId, target, files: loaded, info }: { projectId: strin
     <>
       <PanelHeader className="gap-1">
         {change && <span className={cn("w-3.5 shrink-0 text-center font-mono text-caption font-semibold", STATUS_TONE[change.status])}>{STATUS_LETTER[change.status]}</span>}
-        {file ? <PathLabel path={file.path} from={change?.oldPath} /> : <span className="min-w-0 flex-1 truncate text-caption text-faint-foreground">{diffView === "all" && files.length ? `全部 ${files.length} 个文件` : "diff"}</span>}
+        {file ? <PathLabel path={file.path} from={change?.oldPath} /> : <span className="min-w-0 flex-1 truncate text-caption text-faint-foreground">{diffView === "all" && files.length ? tp("All {n} file", "All {n} files", files.length) : t("Diff")}</span>}
         <StepButtons />
         <span className="@max-[560px]/header:hidden">
           <Segmented
             size="sm"
-            aria-label="阅读方式"
+            aria-label={t("Reading mode")}
             value={diffView}
             onValueChange={(v) => prefs.set({ diffView: v })}
             options={[
-              { value: "file", label: <span className="sr-only">单个文件</span>, icon: <FileText /> },
-              { value: "all", label: <span className="sr-only">连续阅读全部文件</span>, icon: <Files /> },
+              { value: "file", label: <span className="sr-only">{t("One file")}</span>, icon: <FileText /> },
+              { value: "all", label: <span className="sr-only">{t("All files, continuously")}</span>, icon: <Files /> },
             ]}
           />
         </span>
         <span className="@max-[460px]/header:hidden">
           <Segmented
             size="sm"
-            aria-label="diff 布局"
+            aria-label={t("Diff layout")}
             value={diffStyle}
             onValueChange={(v) => prefs.set({ diffStyle: v })}
             options={[
-              { value: "split", label: <span className="sr-only">并排</span>, icon: <Columns2 /> },
-              { value: "unified", label: <span className="sr-only">合并</span>, icon: <Rows2 /> },
+              { value: "split", label: <span className="sr-only">{t("Side by side")}</span>, icon: <Columns2 /> },
+              { value: "unified", label: <span className="sr-only">{t("Unified")}</span>, icon: <Rows2 /> },
             ]}
           />
         </span>
-        <IconButton label={wrap ? "不换行" : "自动换行"} size="icon-sm" className={cn("@max-[520px]/header:hidden", wrap && "bg-pressed")} onClick={() => prefs.set({ wrap: !wrap })}>
+        <IconButton label={wrap ? t("Don't wrap lines") : t("Wrap lines")} size="icon-sm" className={cn("@max-[520px]/header:hidden", wrap && "bg-pressed")} onClick={() => prefs.set({ wrap: !wrap })}>
           <WrapText />
         </IconButton>
         <CloseButton />
@@ -154,14 +155,14 @@ function DiffArea({ projectId, target, files: loaded, info }: { projectId: strin
       {info}
       <div className="selectable relative min-h-0 flex-1 overflow-hidden">
         {!projectId || !target ? (
-          <Hint>选一个提交或未提交的改动</Hint>
+          <Hint>{t("Pick a commit or the uncommitted changes")}</Hint>
         ) : (
           <Suspense fallback={null}>
             <Pool>
               {diffView === "all" ? (
                 <ContinuousDiff projectId={projectId} target={target} files={files} />
               ) : !change ? (
-                loaded && <Hint>{files.length ? "在改动里选一个文件" : "没有文件改动"}</Hint>
+                loaded && <Hint>{files.length ? t("Pick a file in Changes") : t("No file changes")}</Hint>
               ) : isImage(change.path) && !isSvg(change.path) ? (
                 <ImageCompare projectId={projectId} target={target} change={change} />
               ) : (
@@ -186,9 +187,9 @@ function PreviewArea({ projectId, target, changes, info }: { projectId: string |
   return (
     <>
       <PanelHeader className="gap-1">
-        {path ? <PathLabel path={path} /> : <span className="min-w-0 flex-1 truncate text-caption text-faint-foreground">预览</span>}
+        {path ? <PathLabel path={path} /> : <span className="min-w-0 flex-1 truncate text-caption text-faint-foreground">{t("Preview")}</span>}
         {change && (
-          <Tooltip content="这个文件在选中的版本里有改动：切回改动，看它的 diff">
+          <Tooltip content={t("This file changed in the selected version: switch to Changes and see its diff")}>
             <Button
               size="sm"
               variant="ghost"
@@ -199,19 +200,19 @@ function PreviewArea({ projectId, target, changes, info }: { projectId: string |
               }}
             >
               <GitCompareArrows />
-              看改动
+              {t("See changes")}
             </Button>
           </Tooltip>
         )}
         {renderable && (
           <Segmented
             size="sm"
-            aria-label="预览方式"
+            aria-label={t("Preview mode")}
             value={rendered ? "rendered" : "source"}
             onValueChange={(v) => prefs.set({ rendered: v === "rendered" })}
             options={[
-              { value: "rendered", label: "渲染" },
-              { value: "source", label: "源码" },
+              { value: "rendered", label: t("Rendered") },
+              { value: "source", label: t("Source") },
             ]}
           />
         )}
@@ -221,9 +222,9 @@ function PreviewArea({ projectId, target, changes, info }: { projectId: string |
       {info}
       <div className="selectable relative min-h-0 flex-1 overflow-hidden">
         {!projectId || !target ? (
-          <Hint>选一个提交或未提交的改动</Hint>
+          <Hint>{t("Pick a commit or the uncommitted changes")}</Hint>
         ) : !path ? (
-          <Hint>在左边的文件里选一个预览</Hint>
+          <Hint>{t("Pick a file on the left to preview it")}</Hint>
         ) : (
           <Suspense fallback={null}>
             <Pool>
@@ -259,9 +260,9 @@ function CommitInfo({ projectId, hash, trunk }: { projectId: string; hash: strin
         <>
           <div className="flex items-start gap-1">
             {c.body && (
-              <Tooltip content={showBody ? "收起说明" : "展开说明"}>
+              <Tooltip content={showBody ? t("Hide the message") : t("Show the message")}>
                 <button
-                  aria-label={showBody ? "收起说明" : "展开说明"}
+                  aria-label={showBody ? t("Hide the message") : t("Show the message")}
                   aria-expanded={showBody}
                   onClick={() => prefs.set({ commitBody: !showBody })}
                   className="-ml-1 mt-px inline-flex size-5 shrink-0 items-center justify-center rounded-xs text-faint-foreground hover:bg-accent hover:text-foreground"
@@ -272,7 +273,7 @@ function CommitInfo({ projectId, hash, trunk }: { projectId: string; hash: strin
             )}
             <h2 className="min-w-0 flex-1 text-body font-semibold [overflow-wrap:anywhere]">{c.subject}</h2>
             {pr && webUrl && (
-              <Tooltip content={`在浏览器打开 PR #${pr}`}>
+              <Tooltip content={t("Open PR #{n} in the browser", { n: pr })}>
                 <Button size="sm" variant="ghost" className="-my-1 -mr-1.5 shrink-0" onClick={() => openLink(prUrl(webUrl, pr))}>
                   <GitPullRequest />
                   PR #{pr}
@@ -281,9 +282,9 @@ function CommitInfo({ projectId, hash, trunk }: { projectId: string; hash: strin
             )}
           </div>
           <div className="flex flex-wrap items-center gap-x-1.5 text-caption text-faint-foreground">
-            <Tooltip content="复制完整 hash">
+            <Tooltip content={t("Copy the full hash")}>
               <button
-                onClick={() => copyText(c.hash).then(() => notify.success(`已复制 ${shortHash(c.hash)}`))}
+                onClick={() => copyText(c.hash).then(() => notify.success(t("Copied {hash}", { hash: shortHash(c.hash) })))}
                 className="inline-flex items-center gap-1 rounded-xs px-0.5 font-mono text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 {shortHash(c.hash)}
@@ -296,10 +297,10 @@ function CommitInfo({ projectId, hash, trunk }: { projectId: string; hash: strin
             </Tooltip>
             <span>·</span>
             <span>{absoluteTime(c.authorTime)}</span>
-            {c.committer !== c.author && <span>· 由 {c.committer} 提交</span>}
+            {c.committer !== c.author && <span>· {t("committed by {name}", { name: c.committer })}</span>}
             <span>·</span>
             <span>
-              {c.parents.length > 1 ? "合并提交，对比第一个父提交 " : c.parents.length ? "父提交 " : "根提交"}
+              {c.parents.length > 1 ? `${t("Merge commit, compared with its first parent")} ` : c.parents.length ? `${t("Parent")} ` : t("Root commit")}
               {c.parents.map((p, i) => (
                 <button
                   key={p}

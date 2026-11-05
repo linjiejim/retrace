@@ -1,6 +1,7 @@
 //! The one entry point the frontend calls: `dispatch(cmd, args)`. The Tauri command and the
 //! dev bridge both forward here, so the command table exists once.
 
+use crate::tr;
 use super::config::{self, Prefs, ProjectEntry};
 use super::model::*;
 use super::{cleanup, diff, files, git, history, repo, State};
@@ -12,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 fn args<T: DeserializeOwned>(v: Value) -> Result<T> {
-    serde_json::from_value(v).context("参数格式不对")
+    serde_json::from_value(v).with_context(|| tr!("参数格式不对", "Malformed arguments"))
 }
 
 #[derive(Deserialize)]
@@ -21,13 +22,13 @@ struct Id {
 }
 
 fn project_dir(state: &State, id: &str) -> Result<PathBuf> {
-    let known = state.config.read().map_err(|_| anyhow!("配置不可用"))?.projects.iter().any(|p| p.path == id);
+    let known = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.projects.iter().any(|p| p.path == id);
     if !known {
-        bail!("没有这个项目：{id}");
+        bail!(tr!("没有这个项目：{id}", "No such project: {id}"));
     }
     let dir = PathBuf::from(id);
     if !dir.is_dir() {
-        bail!("项目目录不存在：{id}");
+        bail!(tr!("项目目录不存在：{id}", "Project folder not found: {id}"));
     }
     Ok(dir)
 }
@@ -38,7 +39,7 @@ fn checked_tree(dir: &Path, tree: &str) -> Result<()> {
     if trees.iter().any(|t| t.path == tree) {
         Ok(())
     } else {
-        bail!("不是这个项目的 worktree：{tree}")
+        bail!(tr!("不是这个项目的 worktree：{tree}", "Not a worktree of this project: {tree}"))
     }
 }
 
@@ -52,13 +53,13 @@ fn check_target(dir: &Path, target: &Target) -> Result<()> {
         Target::Worktree { .. } => vec![],
     };
     if revs.iter().any(|r| r.starts_with('-')) {
-        bail!("提交标识无效");
+        bail!(tr!("提交标识无效", "Invalid commit id"));
     }
     Ok(())
 }
 
 fn save(state: &State) -> Result<()> {
-    let cfg = state.config.read().map_err(|_| anyhow!("配置不可用"))?.clone();
+    let cfg = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.clone();
     config::save(&state.config_path, &cfg)
 }
 
@@ -69,7 +70,7 @@ fn project_of(entry: &ProjectEntry) -> Project {
 fn add_roots(state: &State, roots: Vec<PathBuf>) -> Result<Vec<Project>> {
     let mut added = Vec::new();
     {
-        let mut cfg = state.config.write().map_err(|_| anyhow!("配置不可用"))?;
+        let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
         for root in roots {
             let path = root.to_string_lossy().into_owned();
             if !cfg.projects.iter().any(|p| p.path == path) {
@@ -86,14 +87,14 @@ fn add_roots(state: &State, roots: Vec<PathBuf>) -> Result<Vec<Project>> {
 pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
     Ok(match cmd {
         "listProjects" => {
-            let cfg = state.config.read().map_err(|_| anyhow!("配置不可用"))?;
+            let cfg = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
             json!(cfg.projects.iter().map(project_of).collect::<Vec<_>>())
         }
         "projectSummary" => {
             let Id { id } = args(a)?;
             let dir = PathBuf::from(&id);
-            if !state.config.read().map_err(|_| anyhow!("配置不可用"))?.projects.iter().any(|p| p.path == id) {
-                bail!("没有这个项目：{id}");
+            if !state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.projects.iter().any(|p| p.path == id) {
+                bail!(tr!("没有这个项目：{id}", "No such project: {id}"));
             }
             if !dir.is_dir() {
                 return Ok(json!(ProjectSummary { id, missing: true, last_commit_at: None, linked_trees: 0, dirty_trees: 0 }));
@@ -126,10 +127,10 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             match repo::project_root(&path) {
                 Ok(root) => json!(AddResult { added: add_roots(state, vec![root])?, candidates: vec![] }),
                 Err(_) => {
-                    let known: Vec<String> = state.config.read().map_err(|_| anyhow!("配置不可用"))?.projects.iter().map(|p| p.path.clone()).collect();
+                    let known: Vec<String> = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.projects.iter().map(|p| p.path.clone()).collect();
                     let candidates = repo::scan_children(&path, &known);
                     if candidates.is_empty() {
-                        bail!("这个文件夹不是 git 仓库，里面也没有仓库");
+                        bail!(tr!("这个文件夹不是 git 仓库，里面也没有仓库", "This folder isn't a git repository and holds none"));
                     }
                     json!(AddResult { added: vec![], candidates })
                 }
@@ -146,7 +147,7 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
         }
         "removeProject" => {
             let Id { id } = args(a)?;
-            state.config.write().map_err(|_| anyhow!("配置不可用"))?.projects.retain(|p| p.path != id);
+            state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.projects.retain(|p| p.path != id);
             save(state)?;
             Value::Null
         }
@@ -158,8 +159,8 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             }
             let A { id, branch } = args(a)?;
             {
-                let mut cfg = state.config.write().map_err(|_| anyhow!("配置不可用"))?;
-                let entry = cfg.projects.iter_mut().find(|p| p.path == id).ok_or_else(|| anyhow!("没有这个项目"))?;
+                let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+                let entry = cfg.projects.iter_mut().find(|p| p.path == id).ok_or_else(|| anyhow!(tr!("没有这个项目", "No such project")))?;
                 entry.trunk = branch.filter(|b| !b.trim().is_empty());
             }
             save(state)?;
@@ -168,7 +169,7 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
         "overview" => {
             let Id { id } = args(a)?;
             let dir = project_dir(state, &id)?;
-            let entry = state.config.read().map_err(|_| anyhow!("配置不可用"))?.projects.iter().find(|p| p.path == id).cloned().unwrap_or_default();
+            let entry = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.projects.iter().find(|p| p.path == id).cloned().unwrap_or_default();
             let trees = repo::worktrees(&dir)?;
             let refs = repo::refs(&dir)?;
             let trunk = repo::resolve_trunk(&dir, entry.trunk.as_deref(), &refs, &trees);
@@ -179,7 +180,7 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
         "treeStatuses" => {
             let Id { id } = args(a)?;
             let dir = project_dir(state, &id)?;
-            let entry = state.config.read().map_err(|_| anyhow!("配置不可用"))?.projects.iter().find(|p| p.path == id).cloned().unwrap_or_default();
+            let entry = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.projects.iter().find(|p| p.path == id).cloned().unwrap_or_default();
             let trees = repo::worktrees(&dir)?;
             let refs = repo::refs(&dir)?;
             let trunk = repo::resolve_trunk(&dir, entry.trunk.as_deref(), &refs, &trees);
@@ -205,10 +206,10 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             }
             let A { id, tip } = args(a)?;
             let dir = project_dir(state, &id)?;
-            let entry = state.config.read().map_err(|_| anyhow!("配置不可用"))?.projects.iter().find(|p| p.path == id).cloned().unwrap_or_default();
+            let entry = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.projects.iter().find(|p| p.path == id).cloned().unwrap_or_default();
             let trees = repo::worktrees(&dir)?;
             let refs = repo::refs(&dir)?;
-            let trunk = repo::resolve_trunk(&dir, entry.trunk.as_deref(), &refs, &trees).ok_or_else(|| anyhow!("没有找到集成分支"))?;
+            let trunk = repo::resolve_trunk(&dir, entry.trunk.as_deref(), &refs, &trees).ok_or_else(|| anyhow!(tr!("没有找到集成分支", "No integration branch found")))?;
             json!(repo::compare_with_trunk(&dir, &trunk, &tip, &state.integration)?)
         }
         "history" => {
@@ -233,7 +234,7 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let dir = project_dir(state, &id)?;
             for r in [&trunk_tip, &tip, &worktree_head].into_iter().flatten() {
                 if r.starts_with('-') {
-                    bail!("提交标识无效");
+                    bail!(tr!("提交标识无效", "Invalid commit id"));
                 }
             }
             let tips = match snapshot {
@@ -247,7 +248,7 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 }
             };
             if tips.iter().any(|t| t.starts_with('-')) {
-                bail!("提交标识无效");
+                bail!(tr!("提交标识无效", "Invalid commit id"));
             }
             json!(state.history.page(history::Query {
                 dir: &dir,
@@ -267,7 +268,7 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let A { id, hash } = args(a)?;
             let dir = project_dir(state, &id)?;
             if hash.starts_with('-') {
-                bail!("提交标识无效");
+                bail!(tr!("提交标识无效", "Invalid commit id"));
             }
             json!(history::commit_detail(&dir, &hash)?)
         }
@@ -328,7 +329,7 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 url: String,
             }
             let A { url } = args(a)?;
-            let browser = state.config.read().map_err(|_| anyhow!("配置不可用"))?.prefs.browser.clone();
+            let browser = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.prefs.browser.clone();
             open_url(&url, &browser)?;
             Value::Null
         }
@@ -339,7 +340,7 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             }
             let A { ids } = args(a)?;
             {
-                let mut cfg = state.config.write().map_err(|_| anyhow!("配置不可用"))?;
+                let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
                 let rank = |p: &str| ids.iter().position(|i| i == p).unwrap_or(usize::MAX);
                 cfg.projects.sort_by_key(|p| rank(&p.path));
             }
@@ -380,7 +381,7 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let A { id, path, head, acknowledged_ignored, delete_branch } = args(a)?;
             let dir = project_dir(state, &id)?;
             let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
-            let trunk = trunk.ok_or_else(|| anyhow!("没有找到集成分支"))?;
+            let trunk = trunk.ok_or_else(|| anyhow!(tr!("没有找到集成分支", "No integration branch found")))?;
             json!(cleanup::remove(&dir, &trunk, &path, &head, &acknowledged_ignored, delete_branch, &state.integration)?)
         }
         "fetch" => {
@@ -389,10 +390,19 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             fetch(&dir)?;
             Value::Null
         }
-        "getPrefs" => json!(state.config.read().map_err(|_| anyhow!("配置不可用"))?.prefs),
+        "setLanguage" => {
+            #[derive(Deserialize)]
+            struct A {
+                lang: String,
+            }
+            let A { lang } = args(a)?;
+            super::i18n::set(&lang);
+            Value::Null
+        }
+        "getPrefs" => json!(state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.prefs),
         "setPrefs" => {
             let prefs: Prefs = args(a)?;
-            state.config.write().map_err(|_| anyhow!("配置不可用"))?.prefs = prefs;
+            state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.prefs = prefs;
             save(state)?;
             Value::Null
         }
@@ -406,21 +416,21 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let A { id, path, with } = args(a)?;
             let dir = project_dir(state, &id)?;
             // Only paths inside this project's worktrees, compared after resolving `..` and symlinks.
-            let target = std::fs::canonicalize(&path).map_err(|_| anyhow!("路径不存在：{path}"))?;
+            let target = std::fs::canonicalize(&path).map_err(|_| anyhow!(tr!("路径不存在：{path}", "Path not found: {path}")))?;
             let trees = repo::worktrees(&dir)?;
             let inside = trees.iter().filter_map(|t| std::fs::canonicalize(&t.path).ok()).any(|root| target.starts_with(root));
             if !inside {
-                bail!("只能打开这个项目里的路径");
+                bail!(tr!("只能打开这个项目里的路径", "Only paths inside this project can be opened"));
             }
             open_with(state, &target.to_string_lossy(), &with)?;
             Value::Null
         }
-        _ => bail!("未知命令：{cmd}"),
+        _ => bail!(tr!("未知命令：{cmd}", "Unknown command: {cmd}")),
     })
 }
 
 fn trunk_and_trees(state: &State, id: &str, dir: &Path) -> Result<(Option<Trunk>, Vec<Worktree>)> {
-    let entry = state.config.read().map_err(|_| anyhow!("配置不可用"))?.projects.iter().find(|p| p.path == id).cloned().unwrap_or_default();
+    let entry = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.projects.iter().find(|p| p.path == id).cloned().unwrap_or_default();
     let trees = repo::worktrees(dir)?;
     let refs = repo::refs(dir)?;
     Ok((repo::resolve_trunk(dir, entry.trunk.as_deref(), &refs, &trees), trees))
@@ -442,35 +452,35 @@ pub fn link_allowed(url: &str) -> bool {
 /// In `browser` (an application name for `open -a`), or the system default when it's empty.
 fn open_url(url: &str, browser: &str) -> Result<()> {
     if !link_allowed(url) {
-        bail!("只能打开网页链接");
+        bail!(tr!("只能打开网页链接", "Only web links can be opened"));
     }
     let mut cmd = std::process::Command::new("/usr/bin/open");
     if !browser.is_empty() && !url.trim().to_ascii_lowercase().starts_with("mailto:") {
         cmd.args(["-a", browser]);
     }
-    let out = cmd.arg(url.trim()).output().context("无法调用 open")?;
+    let out = cmd.arg(url.trim()).output().with_context(|| tr!("无法调用 open", "Can't run open"))?;
     if !out.status.success() {
         if browser.is_empty() {
-            bail!("打不开这个链接");
+            bail!(tr!("打不开这个链接", "Couldn't open the link"));
         }
-        bail!("打不开：找不到「{browser}」，可以在设置里换一个浏览器");
+        bail!(tr!("打不开：找不到「{browser}」，可以在设置里换一个浏览器", "Couldn't open it: “{browser}” isn't installed. Pick another browser in Settings"));
     }
     Ok(())
 }
 
 fn open_with(state: &State, path: &str, with: &str) -> Result<()> {
-    let prefs = state.config.read().map_err(|_| anyhow!("配置不可用"))?.prefs.clone();
+    let prefs = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.prefs.clone();
     let mut cmd = std::process::Command::new("/usr/bin/open");
     match with {
         "finder" => cmd.arg(path),
         "terminal" => cmd.args(["-a", &prefs.terminal, path]),
         "editor" => cmd.args(["-a", &prefs.editor, path]),
-        _ => bail!("未知的打开方式"),
+        _ => bail!(tr!("未知的打开方式", "Unknown way to open")),
     };
-    let out = cmd.output().context("无法调用 open")?;
+    let out = cmd.output().with_context(|| tr!("无法调用 open", "Can't run open"))?;
     if !out.status.success() {
         let app = if with == "terminal" { prefs.terminal } else { prefs.editor };
-        bail!("打不开：找不到「{app}」，可以在设置里换一个应用");
+        bail!(tr!("打不开：找不到「{app}」，可以在设置里换一个应用", "Couldn't open it: “{app}” isn't installed. Pick another app in Settings"));
     }
     Ok(())
 }

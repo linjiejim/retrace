@@ -6,6 +6,7 @@ pub mod files;
 pub mod git;
 pub mod graph;
 pub mod history;
+pub mod i18n;
 pub mod model;
 pub mod repo;
 

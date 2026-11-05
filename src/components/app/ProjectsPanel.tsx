@@ -4,9 +4,10 @@ import { Code, Ellipsis, FolderOpen, GitBranch, PanelLeftClose, Plus, Search, Sq
 import { api } from "@/lib/api"
 import { run, selectProject } from "@/lib/commands"
 import { prefs, ui, useStore } from "@/lib/store"
-import { relativeTime, tildify } from "@/lib/format"
+import { ago, tildify } from "@/lib/format"
 import type { Project } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { t, tp } from "@/lib/i18n"
 import { useProjects, useSummary } from "@/hooks/queries"
 import { useDelayedFlag } from "@/hooks/use-delayed-flag"
 import { Button, IconButton } from "@/components/ui/button"
@@ -37,7 +38,7 @@ export function ProjectsPanel() {
     await api.removeProject(p.id)
     await qc.invalidateQueries({ queryKey: ["projects"] })
     if (selected === p.id) ui.set({ projectId: null, selection: null, file: null, preview: null, diffOpen: false })
-    notify.undo(`已从列表移除 ${p.name}`, async () => {
+    notify.undo(t("Removed {name} from the list", { name: p.name }), async () => {
       await api.addProjects([p.id])
       qc.invalidateQueries({ queryKey: ["projects"] })
     })
@@ -72,7 +73,7 @@ export function ProjectsPanel() {
       order.splice(to > index ? to - 1 : to, 0, moved)
       qc.setQueryData(["projects"], order)
       api.reorderProjects(order.map((p) => p.id)).catch((err) => {
-        notify.error(`没能保存顺序：${err instanceof Error ? err.message : String(err)}`)
+        notify.error(t("Couldn't save the order: {reason}", { reason: err instanceof Error ? err.message : String(err) }))
         qc.invalidateQueries({ queryKey: ["projects"] })
       })
     }
@@ -83,11 +84,11 @@ export function ProjectsPanel() {
   return (
     <section className="flex h-full flex-col bg-sunken">
       <PanelHeader>
-        <span className="min-w-0 flex-1 truncate text-caption text-faint-foreground">项目</span>
-        <IconButton label="添加项目或包含项目的文件夹" size="icon-sm" onClick={startAdd}>
+        <span className="min-w-0 flex-1 truncate text-caption text-faint-foreground">{t("Projects")}</span>
+        <IconButton label={t("Add a repository, or a folder of repositories")} size="icon-sm" onClick={startAdd}>
           <Plus />
         </IconButton>
-        <IconButton label="隐藏项目栏  ⌘\" size="icon-sm" onClick={() => prefs.set({ projectsCollapsed: true })}>
+        <IconButton label={`${t("Hide projects")}  ⌘\\`} size="icon-sm" onClick={() => prefs.set({ projectsCollapsed: true })}>
           <PanelLeftClose />
         </IconButton>
       </PanelHeader>
@@ -97,11 +98,11 @@ export function ProjectsPanel() {
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="筛选项目"
+            placeholder={t("Filter projects")}
             className="w-full min-w-0 bg-transparent text-small text-foreground outline-none placeholder:text-faint-foreground"
           />
           {filter && (
-            <button aria-label="清除筛选" onClick={() => setFilter("")} className="text-faint-foreground hover:text-foreground">
+            <button aria-label={t("Clear filter")} onClick={() => setFilter("")} className="text-faint-foreground hover:text-foreground">
               <X className="size-3.5" />
             </button>
           )}
@@ -120,17 +121,17 @@ export function ProjectsPanel() {
           <StateView
             size="sm"
             kind="empty"
-            title="还没有项目"
-            description="添加一个仓库，或一个装着仓库的文件夹。"
+            title={t("No projects yet")}
+            description={t("Add a repository, or a folder that holds repositories.")}
             action={
               <Button size="sm" onClick={startAdd}>
                 <Plus />
-                添加项目
+                {t("Add project")}
               </Button>
             }
           />
         )}
-        {projects.data && projects.data.length > 0 && visible.length === 0 && <li className="px-2 py-3 text-caption text-faint-foreground">没有匹配的项目</li>}
+        {projects.data && projects.data.length > 0 && visible.length === 0 && <li className="px-2 py-3 text-caption text-faint-foreground">{t("No matching projects")}</li>}
         {visible.map((p) => {
           const index = all.indexOf(p)
           return (
@@ -168,10 +169,10 @@ function ProjectRow({
   const s = summary.data
   const tip = [
     tildify(project.id),
-    s?.missing ? "目录不存在" : null,
-    s?.lastCommitAt ? `最近提交 ${relativeTime(s.lastCommitAt)}前` : null,
-    s?.linkedTrees ? `${s.linkedTrees} 棵 worktree` : null,
-    s?.dirtyTrees ? `${s.dirtyTrees} 棵有未提交改动` : null,
+    s?.missing ? t("Folder not found") : null,
+    s?.lastCommitAt ? t("Last commit {when}", { when: ago(s.lastCommitAt) }) : null,
+    s?.linkedTrees ? tp("{n} worktree", "{n} worktrees", s.linkedTrees) : null,
+    s?.dirtyTrees ? tp("{n} with uncommitted changes", "{n} with uncommitted changes", s.dirtyTrees) : null,
   ]
     .filter(Boolean)
     .join("\n")
@@ -197,11 +198,11 @@ function ProjectRow({
           <span className="tabular">{s.linkedTrees}</span>
         </span>
       )}
-      {!!s?.dirtyTrees && <span aria-label="有未提交改动" className="size-1.5 shrink-0 rounded-full bg-warning group-hover:hidden" />}
+      {!!s?.dirtyTrees && <span aria-label={t("Has uncommitted changes")} className="size-1.5 shrink-0 rounded-full bg-warning group-hover:hidden" />}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
-            aria-label={`${project.name} 的更多操作`}
+            aria-label={t("More actions for {name}", { name: project.name })}
             onPointerDown={(e) => e.stopPropagation()}
             className="hidden size-5 shrink-0 items-center justify-center rounded-xs text-faint-foreground hover:bg-pressed hover:text-foreground group-hover:inline-flex data-[state=open]:inline-flex"
           >
@@ -211,18 +212,18 @@ function ProjectRow({
         <DropdownMenuContent align="start">
           <DropdownMenuItem onSelect={() => open("finder")}>
             <FolderOpen />
-            在 Finder 中打开
+            {t("Open in Finder")}
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => open("terminal")}>
             <SquareTerminal />
-            在终端打开
+            {t("Open in Terminal")}
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => open("editor")}>
             <Code />
-            在编辑器打开
+            {t("Open in Editor")}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={onRemove}>从列表移除</DropdownMenuItem>
+          <DropdownMenuItem onSelect={onRemove}>{t("Remove from list")}</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </li>

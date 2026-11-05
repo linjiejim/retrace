@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { CircleAlert, CircleCheck, Clock, LoaderCircle } from "lucide-react"
 import { api } from "@/lib/api"
-import { relativeTime, tildify } from "@/lib/format"
+import { ago, tildify } from "@/lib/format"
 import type { CleanupCandidate } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { t, tp } from "@/lib/i18n"
 import { invalidateProject, useCleanupCandidates, type Tab } from "@/hooks/queries"
 import type { useProjectView } from "@/hooks/use-project-view"
 import { Button } from "@/components/ui/button"
@@ -90,7 +91,7 @@ export function ArchiveMenu({
       setResults((r) => ({ ...r, [c.path]: { state: "running" } }))
       try {
         const out = await api.removeWorktree(projectId!, c.path, c.head, c.notableIgnored, deleteBranch)
-        const note = out.branchDeleted ? `已删除分支 ${c.branch}` : out.branchKeptReason
+        const note = out.branchDeleted ? t("Deleted branch {name}", { name: c.branch ?? "" }) : out.branchKeptReason
         setResults((r) => ({ ...r, [c.path]: { state: "removed", note } }))
         removed++
       } catch (e) {
@@ -102,8 +103,8 @@ export function ArchiveMenu({
     setChecked(new Set())
     invalidateProject(qc, projectId!, { git: true, trees: [] })
     // The menu disappears once nothing is left in it, so say what happened.
-    if (skipped.length) notify.warning(`已删除 ${removed} 棵，跳过 ${skipped.length} 棵（${skipped[0]}）`)
-    else if (removed) notify.success(`已删除 ${removed} 棵 worktree`)
+    if (skipped.length) notify.warning(t("Removed {removed}, skipped {skipped} ({first})", { removed, skipped: skipped.length, first: skipped[0] }))
+    else if (removed) notify.success(tp("Removed {n} worktree", "Removed {n} worktrees", removed))
   }
 
   const done = Object.values(results).filter((r) => r.state === "removed").length
@@ -114,14 +115,14 @@ export function ArchiveMenu({
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>{children}</PopoverTrigger>
         <PopoverContent className="w-[440px] p-0" align="start">
-          <div className="px-3 pb-1 pt-2.5 text-caption text-faint-foreground">干净、已经合并到 {trunk?.name ?? "主干"} 的 worktree，可以安全删除</div>
+          <div className="px-3 pb-1 pt-2.5 text-caption text-faint-foreground">{t("Clean worktrees already in {trunk}: safe to remove", { trunk: trunk?.name ?? t("the trunk") })}</div>
           <ul className="max-h-[50vh] overflow-y-auto px-1 pb-1">
-            {archived.map((t) => {
-              const c = t.tree ? byPath.get(t.tree.path) : undefined
-              const r = t.tree ? results[t.tree.path] : undefined
-              const integration = t.status?.trunk?.integration
+            {archived.map((tab) => {
+              const c = tab.tree ? byPath.get(tab.tree.path) : undefined
+              const r = tab.tree ? results[tab.tree.path] : undefined
+              const integration = tab.status?.trunk?.integration
               return (
-                <li key={t.key} className="flex items-start gap-2 rounded-sm px-2 py-1.5 hover:bg-accent">
+                <li key={tab.key} className="flex items-start gap-2 rounded-sm px-2 py-1.5 hover:bg-accent">
                   <span className="pt-0.5">
                     {r?.state === "running" ? (
                       <Spinner className="size-4" />
@@ -130,7 +131,7 @@ export function ArchiveMenu({
                     ) : r?.state === "skipped" ? (
                       <CircleAlert className="size-4 text-destructive" />
                     ) : (
-                      <Checkbox disabled={!c || running} checked={!!c && checked.has(c.path)} onCheckedChange={() => c && toggle(c)} aria-label={`选择 ${t.label}`} />
+                      <Checkbox disabled={!c || running} checked={!!c && checked.has(c.path)} onCheckedChange={() => c && toggle(c)} aria-label={t("Select {name}", { name: tab.label })} />
                     )}
                   </span>
                   <div className="min-w-0 flex-1">
@@ -138,32 +139,32 @@ export function ArchiveMenu({
                       <button
                         disabled={r?.state === "removed"}
                         onClick={() => {
-                          onOpen(t)
+                          onOpen(tab)
                           setOpen(false)
                         }}
                         className="min-w-0 truncate text-left text-body font-medium hover:underline disabled:text-faint-foreground disabled:no-underline"
                       >
-                        {t.label}
+                        {tab.label}
                       </button>
                       <span className={cn("shrink-0 text-caption", integration === "squash" ? "text-info" : "text-success")}>
-                        {integration === "squash" ? "squash 合并" : "已并入"}
+                        {integration === "squash" ? t("Squash-merged") : t("Merged in")}
                       </span>
-                      {c?.lastCommitAt && <span className="shrink-0 text-caption text-faint-foreground">{relativeTime(c.lastCommitAt)}前</span>}
+                      {c?.lastCommitAt && <span className="shrink-0 text-caption text-faint-foreground">{ago(c.lastCommitAt)}</span>}
                     </div>
-                    <div className="truncate text-caption text-faint-foreground">{t.tree ? tildify(t.tree.path) : ""}</div>
+                    <div className="truncate text-caption text-faint-foreground">{tab.tree ? tildify(tab.tree.path) : ""}</div>
                     {r?.state === "removed" && r.note && <div className="text-caption text-muted-foreground">{r.note}</div>}
-                    {r?.state === "skipped" && <div className="text-caption text-destructive">已跳过：{r.reason}</div>}
+                    {r?.state === "skipped" && <div className="text-caption text-destructive">{t("Skipped: {reason}", { reason: r.reason })}</div>}
                     {!r && c && c.notableIgnored.length > 0 && (
-                      <div className="text-caption text-warning">删除时会一起删掉被忽略的 {c.notableIgnored.slice(0, 4).join("、")}{c.notableIgnored.length > 4 ? " 等" : ""}</div>
+                      <div className="text-caption text-warning">{t("Removing it also deletes ignored {files}", { files: c.notableIgnored.slice(0, 4).join(", ") + (c.notableIgnored.length > 4 ? " …" : "") })}</div>
                     )}
                     {!r && c?.recent && (
                       <div className="inline-flex items-center gap-1 text-caption text-warning">
                         <Clock className="size-3" />
-                        15 分钟内有活动，可能还有 agent 在用
+                        {t("Active in the last 15 minutes; an agent may still be using it")}
                       </div>
                     )}
-                    {!r && !c && candidates.isFetching && <div className="text-caption text-faint-foreground">正在复查…</div>}
-                    {!r && !c && candidates.data && <div className="text-caption text-faint-foreground">复查时不再满足条件，不能删除</div>}
+                    {!r && !c && candidates.isFetching && <div className="text-caption text-faint-foreground">{t("Checking again…")}</div>}
+                    {!r && !c && candidates.data && <div className="text-caption text-faint-foreground">{t("No longer qualifies on a second check; can't remove")}</div>}
                   </div>
                 </li>
               )
@@ -172,28 +173,28 @@ export function ArchiveMenu({
           <div className="flex items-center gap-3 border-t px-3 py-2.5">
             <label className="flex flex-1 items-center gap-2 text-small text-muted-foreground">
               <Switch checked={deleteBranch} onCheckedChange={setDeleteBranch} disabled={running} />
-              <Tooltip content="只用 git branch -d；squash 合并的分支删不掉，会保留">
-                <span>同时删除已并入的本地分支</span>
+              <Tooltip content={t("Uses git branch -d only; squash-merged branches can't be deleted that way and are kept")}>
+                <span>{t("Also delete the merged local branches")}</span>
               </Tooltip>
             </label>
             {candidates.isFetching && !candidates.data ? (
               <LoaderCircle className="size-4 animate-spin text-faint-foreground" />
             ) : (
               <Button size="sm" variant="destructive" disabled={checked.size === 0 || running} onClick={confirm}>
-                {checked.size ? `删除 ${checked.size} 棵 worktree` : "删除 worktree"}
+                {checked.size ? tp("Remove {n} worktree", "Remove {n} worktrees", checked.size) : t("Remove worktrees")}
               </Button>
             )}
           </div>
-          {done > 0 && !running && <div className="border-t px-3 py-2 text-caption text-success">已删除 {done} 棵 worktree</div>}
+          {done > 0 && !running && <div className="border-t px-3 py-2 text-caption text-success">{tp("Removed {n} worktree", "Removed {n} worktrees", done)}</div>}
         </PopoverContent>
       </Popover>
       <ConfirmDialog
         open={confirming}
         onOpenChange={setConfirming}
         tone="danger"
-        title={`删除 ${pending.length} 棵 worktree？`}
-        description={`会删除这些目录（不加 --force，执行前逐棵复查）${deleteBranch ? "，并用 git branch -d 删除已并入的本地分支" : ""}。目录里被忽略的文件也会一起删掉。`}
-        confirmLabel="删除 worktree"
+        title={tp("Remove {n} worktree?", "Remove {n} worktrees?", pending.length)}
+        description={deleteBranch ? t("Deletes these folders (without --force, each checked again first) and their merged local branches with git branch -d. Ignored files in them are deleted too.") : t("Deletes these folders (without --force, each checked again first). Ignored files in them are deleted too.")}
+        confirmLabel={t("Remove worktrees")}
         onConfirm={removeChecked}
       />
     </>

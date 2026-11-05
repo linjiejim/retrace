@@ -2,6 +2,8 @@ import { useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { api } from "@/lib/api"
 import { tildify } from "@/lib/format"
+import { t, tp } from "@/lib/i18n"
+import { s } from "@/lib/strings"
 import type { AddState } from "@/lib/store"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -29,13 +31,13 @@ export function AddProjectsDialog({
     return (
       <Dialog open onOpenChange={(o) => !o && onClose()}>
         <DialogContent size="sm">
-          <DialogHeader title="添加项目" />
+          <DialogHeader title={t("Add project")} />
           <DialogBody>
             <Input autoFocus value={path} onChange={(e) => setPath(e.target.value)} placeholder="/Users/you/Code/repo" />
           </DialogBody>
           <DialogFooter>
             <Button variant="ghost" onClick={onClose}>
-              取消
+              {s().cancel}
             </Button>
             <Button
               variant="primary"
@@ -47,7 +49,7 @@ export function AddProjectsDialog({
                 setBusy(false)
               }}
             >
-              添加项目
+              {t("Add project")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -68,11 +70,11 @@ export function AddProjectsDialog({
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent size="md">
-        <DialogHeader title="选择要添加的仓库" description={`在这个文件夹里找到 ${state.candidates.length} 个仓库。`} />
+        <DialogHeader title={t("Choose repositories to add")} description={tp("Found {n} repository in this folder.", "Found {n} repositories in this folder.", state.candidates.length)} />
         <DialogBody className="max-h-[50vh]">
           <label className="flex h-8 items-center gap-2 border-b text-small text-muted-foreground">
             <Checkbox checked={allOn} onCheckedChange={(v) => setChecked(v ? new Set(fresh.map((c) => c.path)) : new Set())} />
-            全选
+            {t("Select all")}
           </label>
           <ul>
             {state.candidates.map((c) => (
@@ -80,7 +82,7 @@ export function AddProjectsDialog({
                 <label className="flex h-8 items-center gap-2 text-body">
                   <Checkbox disabled={c.added} checked={c.added || checked.has(c.path)} onCheckedChange={() => toggle(c.path)} />
                   <span className="min-w-0 flex-1 truncate">{c.name}</span>
-                  <span className="truncate text-caption text-faint-foreground">{c.added ? "已添加" : tildify(c.path)}</span>
+                  <span className="truncate text-caption text-faint-foreground">{c.added ? t("Already added") : tildify(c.path)}</span>
                 </label>
               </li>
             ))}
@@ -88,7 +90,7 @@ export function AddProjectsDialog({
         </DialogBody>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
-            取消
+            {s().cancel}
           </Button>
           <Button
             variant="primary"
@@ -103,7 +105,7 @@ export function AddProjectsDialog({
               onClose()
             }}
           >
-            {checked.size ? `添加 ${checked.size} 个项目` : "添加项目"}
+            {checked.size ? tp("Add {n} project", "Add {n} projects", checked.size) : t("Add project")}
           </Button>
         </DialogFooter>
       </DialogContent>

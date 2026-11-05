@@ -10,6 +10,7 @@ import type { FileChange, Target } from "@/lib/types"
 import { useFilePair, usePatch } from "@/hooks/queries"
 import { useDelayedFlag } from "@/hooks/use-delayed-flag"
 import { isImage, isSvg } from "@/lib/filetype"
+import { t } from "@/lib/i18n"
 import { ImageStrip } from "./Preview"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StateView } from "@/components/ui/state"
@@ -69,8 +70,8 @@ export function SingleDiff({ projectId, target, change }: { projectId: string; t
   if (pair.isError) return <StateView size="sm" kind="error" description={pair.error.message} onRetry={() => pair.refetch()} />
   if (!pair.data) return <Loading />
   const { old, new: neu } = pair.data
-  if (old?.binary || neu?.binary) return <StateView size="sm" kind="empty" title="二进制文件" description="二进制文件不显示 diff。" />
-  if (old?.tooLarge || neu?.tooLarge) return <StateView size="sm" kind="empty" title="文件太大" description="超过 2 MB 的文件不显示 diff。" />
+  if (old?.binary || neu?.binary) return <StateView size="sm" kind="empty" title={t("Binary file")} description={t("Binary files have no diff.")} />
+  if (old?.tooLarge || neu?.tooLarge) return <StateView size="sm" kind="empty" title={t("File too large")} description={t("Files over 2 MB have no diff.")} />
   return (
     <div className="h-full overflow-auto">
       <MultiFileDiff
@@ -133,7 +134,7 @@ export function ContinuousDiff({ projectId, target, files }: { projectId: string
   if (patch.isError) return <StateView size="sm" kind="error" description={patch.error.message} onRetry={() => patch.refetch()} />
   if (!patch.data) return <Loading />
   const banner = patch.data.truncated && (
-    <div className="border-b bg-warning-subtle px-3 py-1.5 text-caption text-warning">改动太大，只显示了前 8 MB；其余文件请在单文件模式里看。</div>
+    <div className="border-b bg-warning-subtle px-3 py-1.5 text-caption text-warning">{t("The change is too large: only the first 8 MB are shown. See the other files one at a time.")}</div>
   )
   const strip = images.length > 0 && <ImageStrip projectId={projectId} target={target} images={images} />
   if (items.length === 0 && strip)
@@ -145,9 +146,9 @@ export function ContinuousDiff({ projectId, target, files }: { projectId: string
     )
   if (items.length === 0)
     return patch.data.truncated ? (
-      <StateView size="sm" kind="empty" title="改动太大" description="单个文件就超过了 8 MB，无法连续阅读。" />
+      <StateView size="sm" kind="empty" title={t("Change too large")} description={t("A single file is over 8 MB, so it can't be read continuously.")} />
     ) : (
-      <StateView size="sm" kind="empty" title="没有可显示的文本改动" />
+      <StateView size="sm" kind="empty" title={t("No text changes to show")} />
     )
   return (
     <CodeView

@@ -8,6 +8,7 @@ import { prefs, ui, useStore } from "@/lib/store"
 import { buildTree, folderPaths, STATUS_LABEL, STATUS_LETTER, visibleRows, type Pathed, type VisibleRow } from "@/lib/tree"
 import type { FileChange, Target } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { t, tp } from "@/lib/i18n"
 import { targetKey, useChanges, useFiles } from "@/hooks/queries"
 import { targetOf, useProjectView } from "@/hooks/use-project-view"
 import { useDelayedFlag } from "@/hooks/use-delayed-flag"
@@ -52,18 +53,18 @@ export function ChangesPanel() {
       <PanelHeader>
         <Segmented
           size="sm"
-          aria-label="改动或全部文件"
+          aria-label={t("Changes or all files")}
           value={mode}
           onValueChange={(v) => prefs.set({ changesMode: v })}
           options={[
-            { value: "changes", label: "改动" },
-            { value: "files", label: "文件" },
+            { value: "changes", label: t("Changes") },
+            { value: "files", label: t("Files") },
           ]}
         />
         <span data-tauri-drag-region className="h-full flex-1" />
       </PanelHeader>
       {!projectId || !tab || !target ? (
-        <div className="px-3 py-3 text-caption text-faint-foreground">选一个提交，这里显示它改了哪些文件。</div>
+        <div className="px-3 py-3 text-caption text-faint-foreground">{t("Pick a commit to see the files it changed.")}</div>
       ) : mode === "files" ? (
         <FilesView key={projectId} projectId={projectId} target={target} changes={changes.data} headLabel={tab.label} />
       ) : changes.isError ? (
@@ -71,7 +72,7 @@ export function ChangesPanel() {
       ) : !changes.data ? (
         <ListSkeleton />
       ) : changes.data.length === 0 ? (
-        <div className="px-3 py-3 text-caption text-faint-foreground">没有文件改动。</div>
+        <div className="px-3 py-3 text-caption text-faint-foreground">{t("No file changes.")}</div>
       ) : (
         <ChangesList key={`${projectId}:${targetKey(target)}`} files={changes.data} />
       )}
@@ -101,7 +102,7 @@ function Toolbar({ children }: { children: React.ReactNode }) {
 
 function FoldButton({ allClosed, onFold }: { allClosed: boolean; onFold: (open: boolean) => void }) {
   return (
-    <IconButton label={allClosed ? "全部展开" : "全部折叠"} size="icon-sm" onClick={() => onFold(allClosed)}>
+    <IconButton label={allClosed ? t("Expand all") : t("Collapse all")} size="icon-sm" onClick={() => onFold(allClosed)}>
       {allClosed ? <ChevronsUpDown /> : <ChevronsDownUp />}
     </IconButton>
   )
@@ -181,7 +182,7 @@ function ChangesList({ files }: { files: FileChange[] }) {
     <>
       <Toolbar>
         <span className="min-w-0 flex-1 truncate tabular">
-          {files.length} 个文件
+          {tp("{n} file", "{n} files", files.length)}
           {totals && (
             <>
               <span className="ml-2 text-success">+{totals.a}</span>
@@ -192,12 +193,12 @@ function ChangesList({ files }: { files: FileChange[] }) {
         {listMode === "tree" && folders.length > 0 && <FoldButton allClosed={allClosed} onFold={(o) => setCollapsed(o ? new Set() : new Set(folders))} />}
         <Segmented
           size="sm"
-          aria-label="改动的显示方式"
+          aria-label={t("Show changes as")}
           value={listMode}
           onValueChange={(v) => prefs.set({ listMode: v })}
           options={[
-            { value: "tree", label: <span className="sr-only">树形</span>, icon: <ListTree /> },
-            { value: "list", label: <span className="sr-only">列表</span>, icon: <List /> },
+            { value: "tree", label: <span className="sr-only">{t("Tree")}</span>, icon: <ListTree /> },
+            { value: "list", label: <span className="sr-only">{t("List")}</span>, icon: <List /> },
           ]}
         />
       </Toolbar>
@@ -207,7 +208,7 @@ function ChangesList({ files }: { files: FileChange[] }) {
         isOpen={(p) => !collapsed.has(p)}
         onFolder={(p) => setCollapsed((prev) => toggled(prev, p))}
         onFile={(f) => open(f.path)}
-        tip={(f) => `${f.oldPath ? `${f.oldPath} → ` : ""}${f.path} · ${STATUS_LABEL[f.status]}`}
+        tip={(f) => `${f.oldPath ? `${f.oldPath} → ` : ""}${f.path} · ${t(STATUS_LABEL[f.status])}`}
         renderName={(f, name) => {
           const dir = f.path.split("/").slice(0, -1).join("/")
           return (
@@ -221,7 +222,7 @@ function ChangesList({ files }: { files: FileChange[] }) {
           <>
             <span className="flex shrink-0 gap-1.5 text-caption tabular">
               {f.binary ? (
-                <span className="text-faint-foreground">二进制</span>
+                <span className="text-faint-foreground">{t("Binary")}</span>
               ) : (
                 <>
                   {!!f.additions && <span className="text-success">+{f.additions}</span>}
@@ -296,10 +297,10 @@ function FilesView({ projectId, target, changes, headLabel }: { projectId: strin
 
   const version =
     target.kind === "worktree"
-      ? { label: "磁盘", tip: `${tildify(target.tree)} 磁盘上的文件（含未提交的改动）` }
+      ? { label: t("Disk"), tip: t("Files on disk in {path} (with uncommitted changes)", { path: tildify(target.tree) }) }
       : target.kind === "commit"
-        ? { label: shortHash(target.hash), tip: `提交 ${shortHash(target.hash)} 时的文件` }
-        : { label: shortHash(target.tip), tip: `${headLabel} 最新提交 ${shortHash(target.tip)} 的文件` }
+        ? { label: shortHash(target.hash), tip: t("Files as of commit {hash}", { hash: shortHash(target.hash) }) }
+        : { label: shortHash(target.tip), tip: t("Files at {branch}'s latest commit {hash}", { branch: headLabel, hash: shortHash(target.tip) }) }
 
   return (
     <>
@@ -310,11 +311,11 @@ function FilesView({ projectId, target, changes, headLabel }: { projectId: strin
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Escape" && query && (e.stopPropagation(), setQuery(""))}
-            placeholder="筛选文件"
+            placeholder={t("Filter files")}
             className="w-full min-w-0 bg-transparent text-caption text-foreground outline-none placeholder:text-faint-foreground"
           />
           {query ? (
-            <button aria-label="清除筛选" onClick={() => setQuery("")} className="hover:text-foreground">
+            <button aria-label={t("Clear filter")} onClick={() => setQuery("")} className="hover:text-foreground">
               <X className="size-3.5" />
             </button>
           ) : (
@@ -330,7 +331,7 @@ function FilesView({ projectId, target, changes, headLabel }: { projectId: strin
       ) : !files.data ? (
         <ListSkeleton />
       ) : items.length === 0 ? (
-        <div className="px-3 py-3 text-caption text-faint-foreground">{q ? "没有匹配的文件" : "这个版本里没有文件。"}</div>
+        <div className="px-3 py-3 text-caption text-faint-foreground">{q ? t("No matching files") : t("No files in this version.")}</div>
       ) : (
         <TreeRows
           rows={rows}
@@ -338,7 +339,7 @@ function FilesView({ projectId, target, changes, headLabel }: { projectId: strin
           isOpen={isOpen}
           onFolder={(p) => setExpanded((prev) => toggled(prev, p))}
           onFile={(f) => openPreview(f.path)}
-          tip={(f) => (f.change ? `${f.path} · 这一版${STATUS_LABEL[f.change.status]}` : f.path)}
+          tip={(f) => (f.change ? `${f.path} · ${t("{status} in this version", { status: t(STATUS_LABEL[f.change.status]) })}` : f.path)}
           renderName={(f, name) => {
             const dir = f.path.slice(0, -name.length - 1)
             return (
@@ -349,7 +350,7 @@ function FilesView({ projectId, target, changes, headLabel }: { projectId: strin
             )
           }}
           renderEnd={(f) => (f.change ? <StatusLetter status={f.change.status} /> : null)}
-          footer={files.data.truncated ? `只列出了前 ${files.data.paths.length} 个文件` : undefined}
+          footer={files.data.truncated ? t("Only the first {n} files are listed", { n: files.data.paths.length }) : undefined}
         />
       )}
     </>

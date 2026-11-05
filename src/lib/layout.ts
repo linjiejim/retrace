@@ -3,7 +3,8 @@
 
 export type PanelId = "projects" | "changes" | "graph" | "diff"
 export const PANELS: PanelId[] = ["projects", "changes", "graph", "diff"]
-export const PANEL_TITLE: Record<PanelId, string> = { projects: "项目", changes: "改动", graph: "提交图", diff: "diff" }
+/** English names; show them through t(). */
+export const PANEL_TITLE: Record<PanelId, string> = { projects: "Projects", changes: "Changes", graph: "Graph", diff: "Diff" }
 
 export type Dir = "row" | "column"
 /** `fixed`: size is in px; otherwise a flex weight shared with the siblings. */

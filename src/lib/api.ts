@@ -21,6 +21,7 @@ import type {
   TreeStatus,
   TrunkCompare,
 } from "./types"
+import { t } from "./i18n"
 
 export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
@@ -37,7 +38,7 @@ async function call<T>(cmd: string, args: Record<string, unknown> = {}): Promise
     headers: { "Content-Type": "application/json", "X-Retrace": "1" },
     body: JSON.stringify(args),
   })
-  if (!res.ok) throw new Error("开发桥没有响应（cargo run --bin retrace-devbridge）")
+  if (!res.ok) throw new Error(t("The dev bridge isn't responding (cargo run --bin retrace-devbridge)"))
   const body = (await res.json()) as { ok?: T; error?: string }
   if (body.error) throw new Error(body.error)
   return body.ok as T
@@ -79,6 +80,8 @@ export const api = {
   fileContent: (id: string, target: Target, path: string, side: "new" | "old", oldPath?: string | null) =>
     call<FileContent | null>("fileContent", { id, target, path, side, oldPath: oldPath ?? null }),
   openUrl: (url: string) => call<null>("openUrl", { url }),
+  /** Language of error messages from the backend. */
+  setLanguage: (lang: "zh" | "en") => call<null>("setLanguage", { lang }),
   fetch: (id: string) => call<null>("fetch", { id }),
   getPrefs: () => call<Prefs>("getPrefs"),
   setPrefs: (prefs: Prefs) => call<null>("setPrefs", prefs as unknown as Record<string, unknown>),
@@ -111,7 +114,7 @@ export async function onAppFocused(cb: () => void): Promise<() => void> {
 export async function pickFolders(): Promise<string[] | null> {
   if (!inTauri) return null
   const { open } = await import("@tauri-apps/plugin-dialog")
-  const picked = await open({ directory: true, multiple: true, title: "添加项目" })
+  const picked = await open({ directory: true, multiple: true, title: t("Add project") })
   if (!picked) return []
   return Array.isArray(picked) ? picked : [picked]
 }
