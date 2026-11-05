@@ -1,12 +1,30 @@
 name: Release
 
-# Push a tag like v0.4.0 to build the app for Apple silicon and Intel and attach it to a draft release.
+# Push a tag like v0.4.0: one job opens a draft release, then each architecture builds and uploads
+# into it (two builds creating the release at once would race). Publish the draft by hand.
 on:
   push:
     tags: ["v*"]
 
 jobs:
+  draft:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      id: ${{ steps.release.outputs.id }}
+    steps:
+      - id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Retrace $TAG" --notes "Retrace $TAG"
+          echo "id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -1)" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: draft
     strategy:
       fail-fast: false
       matrix:
@@ -29,21 +47,30 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.target }}
       - run: pnpm install --frozen-lockfile
-      - uses: tauri-apps/tauri-action@v0
+      # Signing and notarisation are optional: without these secrets the app is unsigned and macOS
+      # asks to confirm the first launch. Only secrets that are set are passed on, because an empty
+      # APPLE_CERTIFICATE would make the bundler try to import a certificate and fail.
+      - name: Signing secrets, when configured
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signing and notarisation (optional; without them macOS warns that the app is from an
-          # unidentified developer). Add these repository secrets to enable them.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              { echo "$name<<__END__"; echo "$value"; echo "__END__"; } >> "$GITHUB_ENV"
+            fi
+          done
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Retrace ${{ github.ref_name }}
-          releaseDraft: true
+          releaseId: ${{ needs.draft.outputs.id }}
           tauriScript: pnpm tauri
           args: --target ${{ matrix.target }}
