@@ -37,6 +37,10 @@ CI runs the same three on macOS.
 - **UI follows jim-uiux.** Components in `src/components/ui/` come from the [jim-uiux](https://design.linjiejim.com) registry; prefer them and the theme tokens over new styles. The design guards in `pnpm test` reject raw colours and off-scale type.
 - **Tests with the change.** Git behaviour is tested end to end against throwaway repositories in `src-tauri/tests/scenarios.rs`; layout and helpers have unit tests next to them.
 
+## The website
+
+`site/` is the website at retrace.linjiejim.com: plain HTML, CSS and JS, no build step. Preview it with `python3 -m http.server --directory site`; pushing changes under `site/` to `main` deploys it to GitHub Pages. The screenshots in `site/screens/` are shared with the README.
+
 ## Commits
 
 Conventional Commits (`feat(scope): …`, `fix: …`), one concern per commit.

@@ -4,7 +4,7 @@
 
 agent 会同时在十几棵 worktree 里写代码。Retrace 把所有项目、worktree 和分支放在一个窗口里，集成分支固定在提交图最左列；点一个提交就能看它的说明和 diff，也能按任一提交浏览当时的代码。它不提交、不暂存、不合并、不变基。
 
-[English](README.md)
+[官网](https://retrace.linjiejim.com) · [下载](../../releases/latest) · [English](README.md)
 
 <p align="center">
   <img src="site/screens/zh/main.webp" alt="Retrace：左边是项目和改动，右上是集成分支固定在最左列的提交图，下面是提交说明、PR 链接和并排 diff" width="900" />
@@ -41,7 +41,9 @@ agent 会同时在十几棵 worktree 里写代码。Retrace 把所有项目、wo
 
 macOS 13 及以上，使用本机的 `git`。Windows 以后补。
 
-在 [Releases](../../releases) 下载 Apple 芯片或 Intel 的 `.dmg`，或从源码构建（见下方）：`pnpm tauri build` 产出 `Retrace.app` 和 `.dmg`。签名和公证之前，第一次打开时 macOS 会要求确认（右键 App → 打开）。
+在 [Releases](../../releases) 下载 Apple 芯片或 Intel 的 `.dmg`，或从源码构建（见下方）：`pnpm tauri build` 产出 `Retrace.app` 和 `.dmg`。
+
+发布的版本还没有经过 Apple 公证，第一次打开时 macOS 可能提示「已损坏」或「无法验证」。把 Retrace 拖进「应用程序」后，到「系统设置 → 隐私与安全性」点「仍要打开」，或运行 `xattr -dr com.apple.quarantine /Applications/Retrace.app`。
 
 ## 快捷键
 
@@ -98,6 +100,7 @@ src/components/layout/   可拖动停靠的平铺布局（模型在 src/lib/layo
 src/lib/commands.ts      菜单栏、快捷键和按钮共用的命令；menu.ts 是 macOS 菜单栏
 src/lib/i18n.ts          界面语言：代码里写英文原文，中文在 src/locales/zh.ts
 src/components/ui/       jim-uiux 组件（从 registry 安装）
+site/                    官网（retrace.linjiejim.com）：纯 HTML、CSS、JS，Site 工作流部署
 ```
 
 ### 发布

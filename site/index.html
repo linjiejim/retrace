@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Retrace — rewind what your agents wrote</title>
+    <meta name="description" content="A read-only macOS app for reviewing Git history across many repositories and worktrees. Your integration branch stays pinned left; every commit opens its message and diff. Free and open source." />
+    <meta name="theme-color" content="#090a12" />
+    <link rel="icon" href="icon.png" />
+    <link rel="apple-touch-icon" href="icon.png" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://retrace.linjiejim.com/" />
+    <meta property="og:title" content="Retrace — rewind what your agents wrote" />
+    <meta property="og:description" content="Read-only Git review for many repositories and worktrees. A macOS app for the age of coding agents." />
+    <meta property="og:image" content="https://retrace.linjiejim.com/og.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="nav">
+      <a class="brand" href="#top" aria-label="Retrace">
+        <img src="icon.png" alt="" width="28" height="28" />
+        <span>Retrace</span>
+      </a>
+      <nav class="nav-links">
+        <a href="#features" data-i18n="nav.features">Features</a>
+        <a href="#readonly" data-i18n="nav.readonly">Read-only</a>
+        <a href="#keys" data-i18n="nav.keys">Keyboard</a>
+        <a href="https://github.com/linjiejim/retrace">GitHub</a>
+      </nav>
+      <div class="nav-end">
+        <button class="lang" type="button" id="lang" aria-label="Switch language">中文</button>
+        <a class="btn small primary" href="#download" data-i18n="nav.download">Download</a>
+      </div>
+    </header>
+
+    <main id="top">
+      <!-- Hero: a live commit graph. The trunk holds column 0; agent branches sprout and merge back. -->
+      <section class="hero">
+        <div class="graph-wrap" aria-hidden="true">
+          <svg id="graph"></svg>
+        </div>
+        <div class="hero-copy">
+          <p class="eyebrow" data-i18n="hero.eyebrow">For the age of coding agents</p>
+          <h1 data-i18n-html="hero.title">Rewind what your <em>agents</em> wrote.</h1>
+          <p class="lede" data-i18n="hero.lede">
+            Retrace puts every repository, worktree and branch in one window, keeps your integration branch pinned left, and opens any commit's message and diff with a click. It never commits, merges or rewrites a thing.
+          </p>
+          <div class="cta">
+            <a class="btn primary" href="#download">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M5 21h14" /></svg>
+              <span data-i18n="hero.download">Download for macOS</span>
+            </a>
+            <a class="btn ghost" href="https://github.com/linjiejim/retrace">
+              <svg viewBox="0 0 24 24" aria-hidden="true" class="gh"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.56-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z" /></svg>
+              <span data-i18n="hero.github">Star on GitHub</span>
+            </a>
+          </div>
+          <p class="meta"><span data-i18n="hero.meta">macOS 13+ · Apple silicon & Intel · Free and open source (MIT)</span> · <span class="version">v0.4.0</span></p>
+        </div>
+        <a class="scroll-hint" href="#window" aria-label="Scroll"><span></span></a>
+      </section>
+
+      <!-- The app itself, tilting upright as it scrolls in; numbered markers explain the parts. -->
+      <section class="window-section" id="window">
+        <h2 class="section-title" data-i18n-html="window.title">One window. <span>Every worktree.</span></h2>
+        <p class="section-lede" data-i18n="window.lede">Twelve worktrees, four agents, one review. Projects and changes on the left, the commit graph on top, the commit you picked underneath.</p>
+        <div class="stage">
+          <figure class="mac" id="mac">
+            <img class="shot" data-src-en="screens/en/main-dark.webp" data-src-zh="screens/zh/main-dark.webp" src="screens/en/main-dark.webp" alt="Retrace showing a commit's message, PR link and side-by-side diff under the commit graph" width="1920" height="1200" />
+            <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
+            <button class="pin" style="left: 22.6%; top: 14%" data-pin="1" type="button"><b>1</b></button>
+            <button class="pin" style="left: 37%; top: 2.2%" data-pin="2" type="button"><b>2</b></button>
+            <button class="pin" style="left: 90.6%; top: 43.8%" data-pin="3" type="button"><b>3</b></button>
+            <button class="pin" style="left: 70%; top: 76%" data-pin="4" type="button"><b>4</b></button>
+          </figure>
+        </div>
+        <ol class="legend">
+          <li data-pin="1"><b>1</b><span data-i18n-html="pin.1"><strong>The trunk holds column 0.</strong> Agent branches join from the right, so main is always one straight line.</span></li>
+          <li data-pin="2"><b>2</b><span data-i18n-html="pin.2"><strong>Worktrees, folded.</strong> Active, merged and branch-only trees each live in one menu.</span></li>
+          <li data-pin="3"><b>3</b><span data-i18n-html="pin.3"><strong>PR in one click.</strong> Squash and merge commits link straight to the pull request.</span></li>
+          <li data-pin="4"><b>4</b><span data-i18n-html="pin.4"><strong>Diffs that read well.</strong> Side by side, highlighted off the main thread.</span></li>
+        </ol>
+      </section>
+
+      <section class="numbers" aria-label="At a glance">
+        <div><b data-count="12">0</b><span data-i18n="num.trees">worktrees in one view</span></div>
+        <div><b data-count="4">0</b><span data-i18n="num.agents">agents, no tab juggling</span></div>
+        <div><b data-count="1">0</b><span data-i18n="num.click">click to the diff</span></div>
+        <div><b data-count="0">0</b><span data-i18n="num.writes">accidental commits</span></div>
+      </section>
+
+      <section class="features" id="features">
+        <h2 class="section-title" data-i18n-html="features.title">Review like a <span>reviewer</span>, not a git client.</h2>
+        <div class="grid">
+          <article class="card" style="--c: var(--lane-0)">
+            <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M12 6v36" class="s0" /><path d="M12 30c0-6 8-6 8-12V10" class="s1" /><path d="M12 22c0-5 12-5 12-11V8" class="s2" /><circle cx="12" cy="14" r="3" /><circle cx="12" cy="38" r="3" /></svg>
+            <h3 data-i18n="f1.t">The integration branch stays left</h3>
+            <p data-i18n="f1.d">main owns column 0 of a compact, one-line graph. Other branches join only when you ask for them.</p>
+          </article>
+          <article class="card" style="--c: var(--lane-1)">
+            <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="7" y="9" width="34" height="8" rx="3" /><rect x="7" y="21" width="34" height="8" rx="3" class="dim" /><rect x="7" y="33" width="34" height="8" rx="3" class="dim" /></svg>
+            <h3 data-i18n="f2.t">Worktrees, folded</h3>
+            <p data-i18n="f2.d">Active, merged and branch-only trees sit in three menus. Remove merged ones safely: no --force, checked again first.</p>
+          </article>
+          <article class="card" style="--c: var(--lane-2)">
+            <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="6" y="8" width="16" height="32" rx="3" /><rect x="26" y="8" width="16" height="32" rx="3" /><path d="M10 16h8M10 22h6M30 16h8M30 22h5M30 28h8" class="ln" /></svg>
+            <h3 data-i18n="f3.t">Diffs that read well</h3>
+            <p data-i18n="f3.d">Side by side, no wrapping, highlighted off the main thread. One file at a time, or the whole commit in a row.</p>
+          </article>
+          <article class="card" style="--c: var(--lane-3)">
+            <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M8 12h12l4 4h16v22H8z" /><path d="M14 26h20M14 32h14" class="ln" /></svg>
+            <h3 data-i18n="f4.t">Browse any version</h3>
+            <p data-i18n="f4.d">See the whole tree as it was at any commit. Code, images, and Markdown rendered like GitHub.</p>
+          </article>
+          <article class="card" style="--c: var(--lane-4)">
+            <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="6" y="8" width="14" height="32" rx="3" /><rect x="24" y="8" width="18" height="14" rx="3" /><rect x="24" y="26" width="18" height="14" rx="3" class="dim" /></svg>
+            <h3 data-i18n="f5.t">Your layout</h3>
+            <p data-i18n="f5.d">Drag any view to dock it beside another or swap them. Close the diff and the graph takes the space.</p>
+          </article>
+          <article class="card" style="--c: var(--lane-5)">
+            <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="5" y="12" width="38" height="24" rx="5" /><path d="M12 20h3M19 20h3M26 20h3M33 20h3M14 28h20" class="ln" /></svg>
+            <h3 data-i18n="f6.t">A proper Mac app</h3>
+            <p data-i18n="f6.d">Native menu bar, keyboard first, light and dark, English and 中文. Built with Tauri: a few megabytes, not a browser.</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- Read-only: the commands Retrace never runs get struck out, one by one. -->
+      <section class="readonly" id="readonly">
+        <div class="readonly-copy">
+          <h2 class="section-title" data-i18n-html="ro.title">Two writes. <span>That's it.</span></h2>
+          <p class="section-lede" data-i18n="ro.lede">Agents are busy in those trees. Retrace reads with GIT_OPTIONAL_LOCKS=0, never takes the index lock, and lists changes with plumbing that doesn't touch the index.</p>
+        </div>
+        <div class="term" id="term">
+          <div class="term-bar"><i></i><i></i><i></i><span>zsh — retrace</span></div>
+          <ol>
+            <li class="no"><code>git commit -m "…"</code><em data-i18n="ro.never">never</em></li>
+            <li class="no"><code>git add -A</code><em data-i18n="ro.never">never</em></li>
+            <li class="no"><code>git merge · git rebase</code><em data-i18n="ro.never">never</em></li>
+            <li class="no"><code>git reset --hard</code><em data-i18n="ro.never">never</em></li>
+            <li class="no"><code>git push --force</code><em data-i18n="ro.never">never</em></li>
+            <li class="no"><code>git stash drop</code><em data-i18n="ro.never">never</em></li>
+            <li class="yes"><code>git fetch</code><em data-i18n="ro.fetch">remote-tracking branches only · can be off</em></li>
+            <li class="yes"><code>git worktree remove</code><em data-i18n="ro.remove">merged &amp; clean · after you confirm · no --force</em></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="gallery">
+        <h2 class="section-title" data-i18n-html="gallery.title">Look <span>closer.</span></h2>
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected="true" data-shot="worktrees" data-i18n="g.worktrees">Worktrees</button>
+          <button role="tab" aria-selected="false" data-shot="files" data-i18n="g.files">Files &amp; README</button>
+          <button role="tab" aria-selected="false" data-shot="images" data-i18n="g.images">Image diffs</button>
+          <button role="tab" aria-selected="false" data-shot="settings" data-i18n="g.settings">Settings</button>
+        </div>
+        <figure class="frame">
+          <img id="gallery-shot" src="screens/en/worktrees.webp" alt="" width="1920" height="1200" loading="lazy" />
+        </figure>
+        <p class="caption" id="gallery-caption"></p>
+      </section>
+
+      <!-- Keyboard: press keys and the matching keycap lights up. -->
+      <section class="keys" id="keys">
+        <h2 class="section-title" data-i18n-html="keys.title">Keyboard first. <span>Try it.</span></h2>
+        <p class="section-lede" data-i18n="keys.lede">Press a key below — or on your keyboard.</p>
+        <div class="caps">
+          <button class="cap" data-key="ArrowUp ArrowDown j k"><kbd>↑</kbd><kbd>↓</kbd></button>
+          <button class="cap" data-key="ArrowRight Enter"><kbd>→</kbd></button>
+          <button class="cap" data-key="ArrowLeft"><kbd>←</kbd></button>
+          <button class="cap" data-key="f F"><kbd>F</kbd></button>
+          <button class="cap" data-key="Escape"><kbd>esc</kbd></button>
+          <button class="cap" data-key="mod+j"><kbd>⌘</kbd><kbd>J</kbd></button>
+          <button class="cap" data-key="mod+\"><kbd>⌘</kbd><kbd>\</kbd></button>
+          <button class="cap" data-key="mod+,"><kbd>⌘</kbd><kbd>,</kbd></button>
+        </div>
+        <p class="keys-out" id="keys-out" aria-live="polite">&nbsp;</p>
+      </section>
+
+      <section class="download" id="download">
+        <img src="icon.png" alt="" width="88" height="88" class="dl-icon" />
+        <h2 class="section-title" data-i18n-html="dl.title">Retrace <span class="version">v0.4.0</span></h2>
+        <p class="section-lede" data-i18n="dl.lede">Free and open source. macOS 13 or later.</p>
+        <div class="cta center" id="dl-buttons">
+          <a class="btn primary" href="https://github.com/linjiejim/retrace/releases/latest" data-i18n="dl.latest">Download the latest release</a>
+        </div>
+        <p class="note" data-i18n-html="dl.note">Not notarised yet: if macOS refuses the first launch, choose <strong>Open Anyway</strong> in System Settings → Privacy &amp; Security, or run <code>xattr -dr com.apple.quarantine /Applications/Retrace.app</code>.</p>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <span>© 2026 <a href="https://github.com/linjiejim">Jim Lin</a> · <a href="https://github.com/linjiejim/retrace/blob/main/LICENSE">MIT</a></span>
+      <span><a href="https://github.com/linjiejim/retrace">GitHub</a> · <a href="https://github.com/linjiejim/retrace/releases" data-i18n="foot.releases">Releases</a> · <a href="https://github.com/linjiejim/retrace/issues" data-i18n="foot.issues">Issues</a></span>
+    </footer>
+
+    <script src="main.js" type="module"></script>
+  </body>
+</html>

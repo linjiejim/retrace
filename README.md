@@ -4,7 +4,7 @@
 
 Agents now write code in a dozen worktrees at once. Retrace puts every project, worktree and branch in one window, keeps your integration branch pinned to the left of the commit graph, and lets you read each commit's message and diff, or browse the code as it was at any commit. It never commits, stages, merges or rebases.
 
-[中文说明](README.zh-CN.md)
+[Website](https://retrace.linjiejim.com) · [Download](../../releases/latest) · [中文说明](README.zh-CN.md)
 
 <p align="center">
   <img src="site/screens/en/main.webp" alt="Retrace: projects and changes on the left, the commit graph with the integration branch pinned left, and a commit's message, PR link and side-by-side diff" width="900" />
@@ -41,7 +41,9 @@ There are exactly two writes:
 
 Retrace runs on macOS 13 or later and uses the `git` on your machine. Windows support is planned.
 
-Download the `.dmg` for Apple silicon or Intel from [Releases](../../releases), or build it from source (below): `pnpm tauri build` produces `Retrace.app` and a `.dmg`. Until releases are signed and notarised, macOS asks you to confirm the first launch (right-click the app → Open).
+Download the `.dmg` for Apple silicon or Intel from [Releases](../../releases), or build it from source (below): `pnpm tauri build` produces `Retrace.app` and a `.dmg`.
+
+Releases aren't notarised yet, so macOS may refuse the first launch ("damaged" or "can't be verified"). After moving Retrace to Applications, choose **Open Anyway** in System Settings → Privacy & Security, or run `xattr -dr com.apple.quarantine /Applications/Retrace.app`.
 
 ## Keyboard
 
@@ -99,6 +101,7 @@ src/components/layout/   the dockable tiled layout (model in src/lib/layout.ts)
 src/lib/commands.ts      commands shared by the menu bar, shortcuts and buttons; menu.ts builds the menu bar
 src/lib/i18n.ts          UI language: English source strings, Chinese in src/locales/zh.ts
 src/components/ui/       jim-uiux components, installed from its registry
+site/                    the website (retrace.linjiejim.com): plain HTML, CSS and JS; the Site workflow deploys it
 ```
 
 ### Releasing
