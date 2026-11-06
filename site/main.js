@@ -55,7 +55,7 @@ const T = {
   ],
   "ro.never": ["never", "从不"],
   "ro.fetch": ["remote-tracking branches only · can be off", "只更新远程分支 · 可关闭"],
-  "ro.remove": ["merged worktrees & branches · after you confirm · no --force", "已合并的 worktree 和分支 · 你确认后 · 不加 --force"],
+  "ro.remove": ["merged worktrees & branches, with their settings · after you confirm · Undo for branches", "已合并的 worktree 和分支（连同设置）· 你确认后 · 分支可撤销"],
   "gallery.title": ["Look <span>closer.</span>", "再<span>近一点看。</span>"],
   "g.worktrees": ["Worktrees", "worktree"],
   "g.files": ["Files & README", "文件与 README"],
