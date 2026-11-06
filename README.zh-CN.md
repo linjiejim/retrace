@@ -45,6 +45,8 @@ macOS 13 及以上，使用本机的 `git`。Windows 以后补。
 
 发布的版本还没有经过 Apple 公证，第一次打开时 macOS 可能提示「已损坏」或「无法验证」。把 Retrace 拖进「应用程序」后，到「系统设置 → 隐私与安全性」点「仍要打开」，或运行 `xattr -dr com.apple.quarantine /Applications/Retrace.app`。
 
+之后 Retrace 会从 GitHub Releases 自动更新：启动时和之后每隔几小时查看最新版本，在后台下载，用 App 内置的签名公钥校验后装好，再提示你重启。在「设置 → 更新」里可以关掉，也可以用「Retrace → 检查更新…」马上查一次。0.5.0 及更早的版本还没有这个功能，需要手动下载一次新版本。
+
 ## 快捷键
 
 | 快捷键 | 作用 |
@@ -105,7 +107,7 @@ site/                    官网（retrace.linjiejim.com）：纯 HTML、CSS、JS
 
 ### 发布
 
-推一个 `v0.4.0` 这样的 tag，Release 工作流会构建两种架构并挂到一个草稿 release 上。要签名和公证，在仓库 secrets 里加 `APPLE_CERTIFICATE`（base64 的 Developer ID Application 证书）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`（App 专用密码）和 `APPLE_TEAM_ID`。
+推一个 `v0.4.0` 这样的 tag，Release 工作流会构建两种架构，连同签好名的更新包和更新清单 `latest.json` 一起挂到一个草稿 release 上。发布草稿才算真正推送更新：已安装的 App 只读最新一个已发布 release 里的 `latest.json`。更新签名需要仓库 secret `TAURI_SIGNING_PRIVATE_KEY`，即 `pnpm tauri signer generate` 生成的无密码私钥，公钥是 `tauri.conf.json` 里的 `plugins.updater.pubkey`。私钥要另存一份：已安装的 App 只接受这把钥匙签的更新。要签名和公证，在仓库 secrets 里加 `APPLE_CERTIFICATE`（base64 的 Developer ID Application 证书）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`（App 专用密码）和 `APPLE_TEAM_ID`。
 
 ## 致谢
 

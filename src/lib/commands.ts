@@ -8,6 +8,7 @@ import { DEFAULT_LAYOUT } from "./layout"
 import { queryClient } from "./query"
 import { prefs, selectionKey, ui, type Selection } from "./store"
 import type { Overview, Project } from "./types"
+import { checkForUpdates } from "./updater"
 import { invalidateProject, summaryQuery } from "@/hooks/queries"
 import { notify } from "@/components/ui/toast"
 
@@ -116,6 +117,7 @@ async function refresh() {
 
 export const commands = {
   settings: () => ui.set({ settingsOpen: true }),
+  checkForUpdates: () => void checkForUpdates(true),
   addProject: () => void addProject(),
   refresh: () => void refresh(),
   revealInFinder: () => openCurrent("finder"),

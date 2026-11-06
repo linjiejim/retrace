@@ -80,6 +80,7 @@ export async function installMenu(): Promise<() => void> {
         text: "Retrace",
         items: [
           await PredefinedMenuItem.new({ item: { About: { name: "Retrace", version } }, text: t("About Retrace") }),
+          await item("checkForUpdates", "Check for Updates…"),
           await sep(),
           await item("settings", "Settings…", "CmdOrCtrl+,"),
           await sep(),

@@ -50,5 +50,13 @@
     "macOS": {
       "minimumSystemVersion": "13.0"
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMyQ0IyNjA0MzcxRUE1NkIKUldScnBSNDNCQ2JMTWpZMUFyN1RpSG9KSDdmdDBNYnBnY21yRmVJaGp6Mm1OZ3IzZjdYQXQyYlgK",
+      "endpoints": [
+        "https://github.com/linjiejim/retrace/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

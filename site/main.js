@@ -67,8 +67,8 @@ const T = {
   "dl.lede": ["Free and open source. macOS 13 or later.", "免费开源，macOS 13 及以上。"],
   "dl.latest": ["Download the latest release", "下载最新版本"],
   "dl.note": [
-    "Not notarised yet: if macOS refuses the first launch, choose <strong>Open Anyway</strong> in System Settings → Privacy & Security, or run <code>xattr -dr com.apple.quarantine /Applications/Retrace.app</code>.",
-    "还没有经过 Apple 公证：第一次打开如果被拦，到「系统设置 → 隐私与安全性」点<strong>仍要打开</strong>，或运行 <code>xattr -dr com.apple.quarantine /Applications/Retrace.app</code>。",
+    "Not notarised yet: if macOS refuses the first launch, choose <strong>Open Anyway</strong> in System Settings → Privacy & Security, or run <code>xattr -dr com.apple.quarantine /Applications/Retrace.app</code>. After that it updates itself.",
+    "还没有经过 Apple 公证：第一次打开如果被拦，到「系统设置 → 隐私与安全性」点<strong>仍要打开</strong>，或运行 <code>xattr -dr com.apple.quarantine /Applications/Retrace.app</code>。之后它会自动更新。",
   ],
   "foot.releases": ["Releases", "版本"],
   "foot.issues": ["Issues", "反馈"],

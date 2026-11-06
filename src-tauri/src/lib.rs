@@ -31,6 +31,8 @@ pub fn run() {
     let state = core::State::load();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(state.clone())
         .manage(watch::Watcher::default())
         .setup(move |app| {

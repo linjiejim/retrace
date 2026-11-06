@@ -6,6 +6,7 @@ import { keyNav } from "@/lib/keys"
 import type { Node, PanelId } from "@/lib/layout"
 import { installMenu } from "@/lib/menu"
 import { prefs, ui, useStore } from "@/lib/store"
+import { scheduleUpdateChecks } from "@/lib/updater"
 import { invalidateProject, useOverview } from "@/hooks/queries"
 import { useDefaultSelection } from "@/hooks/use-project-view"
 import { LayoutView } from "@/components/layout/LayoutView"
@@ -49,6 +50,8 @@ export default function App() {
       off?.()
     }
   }, [])
+
+  useEffect(() => scheduleUpdateChecks(), [])
 
   // Watch the selected project (again whenever its worktrees change); refresh on file-system and fetch events.
   const overview = useOverview(projectId)

@@ -1,6 +1,6 @@
 import * as React from "react"
 import { Toaster as Sonner, toast } from "sonner"
-import { CircleAlert, CircleCheck, Info, TriangleAlert, X } from "lucide-react"
+import { CircleAlert, CircleCheck, Info, LoaderCircle, TriangleAlert, X } from "lucide-react"
 import { s } from "@/lib/strings"
 
 /*
@@ -10,6 +10,9 @@ import { s } from "@/lib/strings"
  *   - undo:    8s, for reversible actions done without a confirm dialog
  *   - error:   stays until closed, with Retry when possible. Errors that
  *              belong to a field or a section are shown there, not here.
+ *   - prompt:  stays until closed or acted on, for something waiting on
+ *              the user (an installed update to restart into)
+ *   - loading: a slow step the user asked for; dismissed by id when done
  *   - never toast and dialog for the same event
  * Top centre, stacked (newest in front, expands on hover); phones: top,
  * full width, below the safe area. Max 3 visible.
@@ -45,7 +48,7 @@ export function Toaster(props: React.ComponentProps<typeof Sonner>) {
             "order-last! static! translate-none! shrink-0 rounded-sm border-0! bg-transparent! text-muted-foreground! hover:text-foreground! [&_svg]:size-4",
         },
       }}
-      icons={{ success: <CircleCheck />, info: <Info />, warning: <TriangleAlert />, error: <CircleAlert />, close: <X /> }}
+      icons={{ success: <CircleCheck />, info: <Info />, warning: <TriangleAlert />, error: <CircleAlert />, loading: <LoaderCircle className="animate-spin" />, close: <X /> }}
       {...props}
     />
   )
@@ -68,5 +71,8 @@ export const notify = Object.assign((message: React.ReactNode) => toast(message,
       closeButton: true,
       action: opts?.retry ? { label: s().retry, onClick: opts.retry } : undefined,
     }),
+  prompt: (message: React.ReactNode, action: { label: string; onClick: () => void }) =>
+    toast(message, { duration: Infinity, closeButton: true, action }),
+  loading: (message: React.ReactNode): Id => toast.loading(message, { duration: Infinity }),
   dismiss: (id?: Id) => toast.dismiss(id),
 })

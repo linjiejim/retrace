@@ -76,6 +76,8 @@ export interface Prefs {
   /** Graph: also draw the other local branches, and optionally remote ones. */
   otherBranches: boolean
   remoteBranches: boolean
+  /** Look for a new release at launch and every few hours, and install it. */
+  autoUpdate: boolean
 }
 
 // v2: the layout became a tree and diff lines stopped wrapping by default.
@@ -95,6 +97,7 @@ const defaults: Prefs = {
   projectsCollapsed: false,
   otherBranches: false,
   remoteBranches: false,
+  autoUpdate: true,
 }
 
 function loadPrefs(): Prefs {
