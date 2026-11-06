@@ -315,37 +315,29 @@ function BranchPicker({ children, onPick, ...props }: Omit<React.ComponentProps<
 function GraphTools({ view }: { view: View }) {
   const query = useStore(ui, (s) => s.query)
   const fetching = useStore(ui, (s) => s.fetching)
-  const [searching, setSearching] = useState(false)
   const input = useRef<HTMLInputElement>(null)
-  keyNav.focusSearch = () => {
-    setSearching(true)
-    requestAnimationFrame(() => input.current?.focus())
-  }
+  keyNav.focusSearch = () => input.current?.select()
   return (
     <>
-      {searching || query ? (
-        <label className="flex h-6 w-[200px] min-w-[96px] shrink items-center gap-1.5 rounded-sm bg-background px-2 text-faint-foreground ring-1 ring-border focus-within:ring-ring">
+      {/* Always open; narrower headers give the tabs room first. */}
+      <Tooltip content={`${t("Filter commits")}  ⌘F`} side="bottom" delayDuration={700}>
+        <label className="flex h-6 w-[200px] shrink-0 items-center gap-1.5 rounded-sm bg-background px-2 text-faint-foreground ring-1 ring-border focus-within:ring-ring @max-[640px]/header:w-[150px] @max-[480px]/header:w-[110px] @max-[380px]/header:w-[80px]">
           <Search className="size-3.5 shrink-0" />
           <input
             ref={input}
-            autoFocus
             value={query}
             onChange={(e) => ui.set({ query: e.target.value })}
-            onBlur={() => setSearching(false)}
             placeholder={t("Filter commits, authors, hashes")}
+            aria-label={t("Filter commits")}
             className="w-full min-w-0 bg-transparent text-caption text-foreground outline-none placeholder:text-faint-foreground"
           />
           {query && (
-            <button aria-label={t("Clear filter")} onMouseDown={(e) => e.preventDefault()} onClick={() => ui.set({ query: "" })} className="hover:text-foreground">
+            <button aria-label={t("Clear filter")} onMouseDown={(e) => e.preventDefault()} onClick={() => ui.set({ query: "" })} className="shrink-0 hover:text-foreground">
               <X className="size-3.5" />
             </button>
           )}
         </label>
-      ) : (
-        <IconButton label={`${t("Filter commits")}  ⌘F`} size="icon-sm" onClick={() => keyNav.focusSearch?.()}>
-          <Search />
-        </IconButton>
-      )}
+      </Tooltip>
       <GraphOptions view={view} />
       <IconButton label={fetching ? t("Fetching from the remote") : `${t("Refresh and fetch")}  ⌘R`} size="icon-sm" onClick={() => run("refresh")}>
         <RefreshCw className={cn(fetching && "animate-spin")} />
