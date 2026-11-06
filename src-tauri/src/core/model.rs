@@ -243,7 +243,20 @@ pub struct BranchStatus {
 #[serde(rename_all = "camelCase")]
 pub struct RemoveOutcome {
     pub branch_deleted: bool,
+    /// The branch actually deleted, read again at removal time (it may have been renamed).
+    pub deleted_branch: Option<String>,
     pub branch_kept_reason: Option<String>,
+    /// What Undo needs to bring the deleted branch back; stays in the backend.
+    #[serde(skip)]
+    pub deleted: Option<DeletedBranch>,
+}
+
+/// A branch this app deleted: its tip and its `branch.<name>.*` settings, for Undo.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeletedBranch {
+    pub name: String,
+    pub tip: String,
+    pub config: Vec<(String, Option<String>)>,
 }
 
 #[derive(Debug, Clone, Serialize)]

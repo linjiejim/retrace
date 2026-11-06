@@ -112,25 +112,29 @@ export function ArchiveMenu({
     setConfirming(true)
   }
 
-  const restore = async (id: string, list: BranchStatus[]) => {
+  const restore = async (id: string, names: string[]) => {
     const failed: string[] = []
-    for (const b of list) {
+    const settings: string[] = []
+    for (const name of names) {
       try {
-        await api.restoreBranch(id, b.name)
+        settings.push(...(await api.restoreBranch(id, name)).settingsFailed)
       } catch (e) {
-        failed.push(`${b.name}：${e instanceof Error ? e.message : String(e)}`)
+        failed.push(`${name}：${e instanceof Error ? e.message : String(e)}`)
       }
     }
     invalidateProject(qc, id, { git: true, trees: [] })
     if (failed.length) notify.error(t("Couldn't restore {n} of the branches ({first})", { n: failed.length, first: failed[0] }))
-    else notify.success(tp("Restored {n} branch", "Restored {n} branches", list.length))
+    if (settings.length) notify.warning(t("Restored the branches, but not these settings: {keys}", { keys: settings.join(", ") }))
+    if (!failed.length && !settings.length) notify.success(tp("Restored {n} branch", "Restored {n} branches", names.length))
   }
 
   const removeChecked = async () => {
     const id = projectId!
     let removed = 0
-    const deleted: BranchStatus[] = []
+    /** Every branch deleted here, with a worktree or without: Undo brings them all back. */
+    const deleted: string[] = []
     const skipped: string[] = []
+    let branchesDeleted = 0
     const fail = (key: string, label: string, e: unknown) => {
       const reason = e instanceof Error ? e.message : String(e)
       setResults((r) => ({ ...r, [key]: { state: "skipped", reason } }))
@@ -141,9 +145,10 @@ export function ArchiveMenu({
       setResults((r) => ({ ...r, [key]: { state: "running" } }))
       try {
         const out = await api.removeWorktree(id, c.path, c.head, c.notableIgnored, deleteBranch)
-        const note = out.branchDeleted ? t("Deleted branch {name}", { name: c.branch ?? "" }) : out.branchKeptReason
+        const note = out.deletedBranch ? t("Deleted branch {name}", { name: out.deletedBranch }) : out.branchKeptReason
         setResults((r) => ({ ...r, [key]: { state: "removed", note } }))
         removed++
+        if (out.deletedBranch) deleted.push(out.deletedBranch)
       } catch (e) {
         fail(key, c.branch ?? c.path, e)
       }
@@ -154,7 +159,8 @@ export function ArchiveMenu({
       try {
         await api.deleteBranch(id, b.name, b.tip)
         setResults((r) => ({ ...r, [key]: { state: "removed", note: null } }))
-        deleted.push(b)
+        deleted.push(b.name)
+        branchesDeleted++
       } catch (e) {
         fail(key, b.name, e)
       }
@@ -162,7 +168,7 @@ export function ArchiveMenu({
     setChecked(new Set())
     invalidateProject(qc, id, { git: true, trees: [] })
     // The menu disappears once nothing is left in it, so say what happened.
-    if (skipped.length) notify.warning(t("Removed {removed}, skipped {skipped} ({first})", { removed: removed + deleted.length, skipped: skipped.length, first: skipped[0] }))
+    if (skipped.length) notify.warning(t("Removed {removed}, skipped {skipped} ({first})", { removed: removed + branchesDeleted, skipped: skipped.length, first: skipped[0] }))
     else if (removed) notify.success(tp("Removed {n} worktree", "Removed {n} worktrees", removed))
     if (deleted.length) notify.undo(tp("Deleted {n} branch", "Deleted {n} branches", deleted.length), () => restore(id, deleted))
   }
@@ -173,8 +179,12 @@ export function ArchiveMenu({
       await api.keepBranch(id, b.name, true)
       qc.invalidateQueries({ queryKey: ["branches", id] })
       notify.undo(t("Keeping {name}: it moves to Branches", { name: b.name }), async () => {
-        await api.keepBranch(id, b.name, false)
-        qc.invalidateQueries({ queryKey: ["branches", id] })
+        try {
+          await api.keepBranch(id, b.name, false)
+          qc.invalidateQueries({ queryKey: ["branches", id] })
+        } catch (e) {
+          notify.error(e instanceof Error ? e.message : String(e))
+        }
       })
     } catch (e) {
       notify.error(e instanceof Error ? e.message : String(e))

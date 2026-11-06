@@ -119,8 +119,6 @@ pub struct RefEntry {
     pub target: String,
     pub upstream: Option<String>,
     pub symref: Option<String>,
-    /// Committer date of the commit it points at (Unix seconds).
-    pub committed_at: Option<i64>,
 }
 
 pub fn refs(dir: &Path) -> Result<Vec<RefEntry>> {
@@ -128,7 +126,7 @@ pub fn refs(dir: &Path) -> Result<Vec<RefEntry>> {
         dir,
         &[
             "for-each-ref",
-            "--format=%(objectname)%00%(*objectname)%00%(refname)%00%(symref)%00%(upstream)%00%(committerdate:unix)",
+            "--format=%(objectname)%00%(*objectname)%00%(refname)%00%(symref)%00%(upstream)",
             "refs/heads",
             "refs/remotes",
             "refs/tags",
@@ -138,7 +136,7 @@ pub fn refs(dir: &Path) -> Result<Vec<RefEntry>> {
         .lines()
         .filter_map(|line| {
             let f: Vec<&str> = line.split('\0').collect();
-            if f.len() < 6 {
+            if f.len() < 5 {
                 return None;
             }
             let target = if f[1].is_empty() { f[0] } else { f[1] };
@@ -147,7 +145,6 @@ pub fn refs(dir: &Path) -> Result<Vec<RefEntry>> {
                 target: target.to_string(),
                 symref: (!f[3].is_empty()).then(|| f[3].to_string()),
                 upstream: (!f[4].is_empty()).then(|| f[4].to_string()),
-                committed_at: f[5].parse().ok(),
             })
         })
         .collect())
@@ -355,11 +352,16 @@ pub fn content_merged(dir: &Path, base: &str, tip: &str) -> bool {
 
 /// Squash merges `content_merged` misses because the trunk later changed the same lines: the
 /// branch's whole change has the same patch-id as one trunk commit since the merge base. Diffs are
-/// taken with no context lines, so later edits next to the change don't matter either. Read-only.
+/// taken with no context lines, so later edits next to the change don't matter either; whitespace
+/// does (`--verbatim`: a re-indent is not the same change). Read-only. Bounded, because it runs
+/// again for every unmerged branch whenever the trunk moves; past the bounds the answer is "not
+/// merged", the safe side.
 pub fn patch_merged(dir: &Path, base: &str, tip: &str) -> bool {
     /// A branch touching more files than this is not worth the scan (and the argument list).
     const MAX_PATHS: usize = 500;
-    const MAX_LOG: usize = 64 * 1024 * 1024;
+    /// Trunk commits scanned, oldest first: a squash lands soon after the merge base.
+    const MAX_COMMITS: usize = 500;
+    const MAX_LOG: usize = 16 * 1024 * 1024;
     let opts = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "-U0"];
     let Ok(mb) = git::text(dir, &["merge-base", base, tip]) else { return false };
     let mb = mb.trim();
@@ -368,7 +370,7 @@ pub fn patch_merged(dir: &Path, base: &str, tip: &str) -> bool {
     if paths.is_empty() || paths.len() > MAX_PATHS {
         return false;
     }
-    let patch_id = |input: Vec<u8>| git::run_with_input(dir, &["patch-id", "--stable"], input).map(|out| String::from_utf8_lossy(&out).into_owned());
+    let patch_id = |input: Vec<u8>| git::run_with_input(dir, &["patch-id", "--verbatim"], input).map(|out| String::from_utf8_lossy(&out).into_owned());
     let mut args = vec!["diff"];
     args.extend(opts);
     args.extend([mb, tip]);
@@ -376,14 +378,18 @@ pub fn patch_merged(dir: &Path, base: &str, tip: &str) -> bool {
     let Some(own) = own.split_whitespace().next().map(str::to_string) else { return false };
 
     let range = format!("{mb}..{base}");
-    let mut args = vec!["log", "--no-merges", "--format=commit %H", "-p"];
-    args.extend(opts);
-    args.extend([range.as_str(), "--"]);
+    let mut args = vec!["rev-list", "--reverse", "--no-merges", range.as_str(), "--"];
     args.extend(paths.iter().map(String::as_str));
-    let Ok((log, cut)) = git::run_limited(dir, &args, MAX_LOG) else { return false };
-    if cut || log.is_empty() {
+    let Ok(commits) = git::text(dir, &args) else { return false };
+    let oldest: Vec<&str> = commits.lines().take(MAX_COMMITS).collect();
+    if oldest.is_empty() {
         return false;
     }
+    let mut args = vec!["log", "--no-walk=unsorted", "--stdin", "--format=commit %H", "-p"];
+    args.extend(opts);
+    args.push("--");
+    args.extend(paths.iter().map(String::as_str));
+    let Ok((log, false)) = git::run_limited_with_input(dir, &args, Some((oldest.join("\n") + "\n").into_bytes()), MAX_LOG) else { return false };
     patch_id(log).is_ok_and(|ids| ids.lines().any(|l| l.split_whitespace().next() == Some(own.as_str())))
 }
 

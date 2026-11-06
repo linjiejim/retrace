@@ -384,7 +384,11 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let dir = project_dir(state, &id)?;
             let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
             let trunk = trunk.ok_or_else(|| anyhow!(tr!("没有找到集成分支", "No integration branch found")))?;
-            json!(cleanup::remove(&dir, &trunk, &path, &head, &acknowledged_ignored, delete_branch, &kept_branches(state, &id)?, &state.integration)?)
+            let outcome = cleanup::remove(&dir, &trunk, &path, &head, &acknowledged_ignored, delete_branch, &kept_branches(state, &id)?, &state.integration)?;
+            if let Some(deleted) = outcome.deleted.clone() {
+                remember_deleted(state, &id, deleted);
+            }
+            json!(outcome)
         }
         "branchStatuses" => {
             let Id { id } = args(a)?;
@@ -408,10 +412,8 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let dir = project_dir(state, &id)?;
             let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
             let trunk = trunk.ok_or_else(|| anyhow!(tr!("没有找到集成分支", "No integration branch found")))?;
-            cleanup::delete_branch(&dir, &trunk, &name, &tip, &kept_branches(state, &id)?, &state.integration)?;
-            if let Ok(mut deleted) = state.deleted_branches.lock() {
-                deleted.insert(format!("{id}\0{name}"), tip);
-            }
+            let deleted = cleanup::delete_branch(&dir, &trunk, &name, &tip, &kept_branches(state, &id)?, &state.integration)?;
+            remember_deleted(state, &id, deleted);
             Value::Null
         }
         "restoreBranch" => {
@@ -423,13 +425,14 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let A { id, name } = args(a)?;
             let dir = project_dir(state, &id)?;
             let key = format!("{id}\0{name}");
-            let tip = state.deleted_branches.lock().ok().and_then(|d| d.get(&key).cloned());
-            let tip = tip.ok_or_else(|| anyhow!(tr!("只能恢复刚才删掉的分支", "Only branches deleted here can be restored")))?;
-            cleanup::restore_branch(&dir, &name, &tip)?;
+            let deleted = state.deleted_branches.lock().ok().and_then(|d| d.get(&key).cloned());
+            let deleted = deleted.ok_or_else(|| anyhow!(tr!("只能恢复刚才删掉的分支", "Only branches deleted here can be restored")))?;
+            // Once the branch is back the record is spent, even if some settings couldn't be written.
+            let settings_failed = cleanup::restore_branch(&dir, &deleted)?;
             if let Ok(mut deleted) = state.deleted_branches.lock() {
                 deleted.remove(&key);
             }
-            Value::Null
+            json!({ "settingsFailed": settings_failed })
         }
         "keepBranch" => {
             #[derive(Deserialize)]
@@ -494,6 +497,13 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
         }
         _ => bail!(tr!("未知命令：{cmd}", "Unknown command: {cmd}")),
     })
+}
+
+/// Undo can bring back only what was recorded here.
+fn remember_deleted(state: &State, id: &str, deleted: DeletedBranch) {
+    if let Ok(mut map) = state.deleted_branches.lock() {
+        map.insert(format!("{id}\0{}", deleted.name), deleted);
+    }
 }
 
 fn kept_branches(state: &State, id: &str) -> Result<Vec<String>> {

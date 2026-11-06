@@ -147,6 +147,8 @@ export interface BranchStatus {
 
 export interface RemoveOutcome {
   branchDeleted: boolean
+  /** The branch actually deleted, read again at removal time. */
+  deletedBranch: string | null
   branchKeptReason: string | null
 }
 

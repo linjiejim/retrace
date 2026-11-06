@@ -18,8 +18,8 @@ pub struct State {
     pub config_path: PathBuf,
     pub integration: repo::IntegrationCache,
     pub history: history::HistoryCache,
-    /// Branches deleted in this session (`<project>\0<name>` → tip): the only ones Undo may bring back.
-    pub deleted_branches: Mutex<std::collections::HashMap<String, String>>,
+    /// Branches deleted in this session (key `<project>\0<name>`): the only ones Undo may bring back.
+    pub deleted_branches: Mutex<std::collections::HashMap<String, model::DeletedBranch>>,
 }
 
 impl State {

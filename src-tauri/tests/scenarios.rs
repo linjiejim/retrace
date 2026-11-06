@@ -461,7 +461,7 @@ fn cleanup_lists_merged_clean_trees_and_removes_them_safely() {
 
     let out = call(&f, "removeWorktree", json!({ "id": id, "path": merged["path"], "head": merged["head"], "acknowledgedIgnored": merged["notableIgnored"], "deleteBranch": true }));
     assert!(!wt_merged.exists());
-    assert_eq!(out["branchDeleted"], json!(true));
+    assert_eq!((&out["branchDeleted"], &out["deletedBranch"]), (&json!(true), &json!("feat/merged")));
     assert!(sh(&f.main, &["branch", "--list", "feat/merged"]).is_empty());
 
     // The main tree and unknown paths are never removed.
@@ -490,12 +490,33 @@ fn branches_without_a_worktree_are_judged_and_deleted_safely() {
     sh(&f.main, &["switch", "-q", "main"]);
     sh(&f.main, &["branch", "develop", "main~1"]);
     sh(&f.main, &["branch", "feat/empty"]);
+    // Changed lines the trunk later changed differently: the patch-id scan runs and finds no match,
+    // also when the only difference is whitespace (a re-indent is not the same change).
+    commit(&f.main, "src/ws.py", "def f():\n    x = 1\n", "ws base");
+    sh(&f.main, &["switch", "-q", "-c", "feat/reindent"]);
+    commit(&f.main, "src/ws.py", "def f():\n        x = 1\n", "reindent");
+    sh(&f.main, &["switch", "-q", "main"]);
+    commit(&f.main, "src/ws.py", "def f():\n  x = 1\n", "trunk reindent");
+    // A remote whose main is the trunk; a merged feature branch tracking it (what
+    // `git switch -c x origin/main` sets up) is still a feature branch.
+    sh(&f.main, &["config", "remote.origin.url", "/nonexistent"]);
+    sh(&f.main, &["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+    sh(&f.main, &["update-ref", "refs/remotes/origin/main", "main"]);
+    sh(&f.main, &["config", "branch.feat/merged.remote", "origin"]);
+    sh(&f.main, &["config", "branch.feat/merged.merge", "refs/heads/main"]);
+    // A setting written without a value means true; it must come back as true.
+    let cfg = f.main.join(".git/config");
+    let mut text = std::fs::read_to_string(&cfg).unwrap();
+    text.push_str("[branch \"feat/stale\"]\n\tflag\n");
+    std::fs::write(&cfg, text).unwrap();
 
     let list = call(&f, "branchStatuses", json!({ "id": id }));
     let get = |list: &Value, name: &str| list.as_array().unwrap().iter().find(|b| b["name"] == name).cloned();
     let mut names: Vec<&str> = list.as_array().unwrap().iter().map(|b| b["name"].as_str().unwrap()).collect();
     names.sort();
-    assert_eq!(names, vec!["develop", "feat/empty", "feat/merged", "feat/stale", "feat/unmerged"], "no trunk, no checked-out branches");
+    assert_eq!(names, vec!["develop", "feat/empty", "feat/merged", "feat/reindent", "feat/stale", "feat/unmerged"], "no trunk, no checked-out branches");
+    assert_eq!(get(&list, "feat/reindent").unwrap()["integration"], "none", "whitespace counts");
+    assert_eq!(sh(&f.main, &["rev-parse", "--abbrev-ref", "feat/merged@{upstream}"]), "origin/main");
     let merged = get(&list, "feat/merged").unwrap();
     assert_eq!((merged["integration"].as_str(), merged["ahead"].as_u64(), merged["neverCommitted"].as_bool()), (Some("ancestor"), Some(0), Some(false)));
     assert_eq!(get(&list, "feat/stale").unwrap()["integration"], "squash");
@@ -508,6 +529,26 @@ fn branches_without_a_worktree_are_judged_and_deleted_safely() {
     // Every guard is checked again on delete; nothing is deleted when one fails.
     let delete = |name: &str, tip: &str| dispatch(&f.state, "deleteBranch", json!({ "id": id, "name": name, "tip": tip }));
     let tip_of = |name: &str| sh(&f.main, &["rev-parse", name]);
+
+    // A branch being rebased in a worktree shows there as a detached HEAD, but it's in use.
+    let wt_rebase = f.main.parent().unwrap().join("wt-rebase");
+    sh(&f.main, &["worktree", "add", "-q", wt_rebase.to_str().unwrap(), "feat/stale"]);
+    let rebase = Command::new("git").args(["rebase", "main"]).current_dir(&wt_rebase).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_COMMITTER_NAME", "Test").env("GIT_COMMITTER_EMAIL", "test@example.com").output().unwrap();
+    assert!(!rebase.status.success(), "the rebase stops on a conflict");
+    assert!(get(&call(&f, "branchStatuses", json!({ "id": id })), "feat/stale").is_none());
+    let err = delete("feat/stale", &stale_tip).unwrap_err();
+    assert!(format!("{err:#}").contains("rebase"), "{err:#}");
+    sh(&wt_rebase, &["rebase", "--abort"]);
+    sh(&f.main, &["worktree", "remove", wt_rebase.to_str().unwrap()]);
+    assert!(get(&call(&f, "branchStatuses", json!({ "id": id })), "feat/stale").is_some());
+
+    // Removing a merged worktree keeps a long-lived branch, with the reason.
+    let wt_develop = f.main.parent().unwrap().join("wt-develop");
+    sh(&f.main, &["worktree", "add", "-q", wt_develop.to_str().unwrap(), "develop"]);
+    let out = call(&f, "removeWorktree", json!({ "id": id, "path": wt_develop, "head": tip_of("develop"), "deleteBranch": true }));
+    assert_eq!(out["branchDeleted"], json!(false));
+    assert!(out["branchKeptReason"].as_str().unwrap().contains("长期"), "{out}");
+    assert!(!sh(&f.main, &["branch", "--list", "develop"]).is_empty());
     let err = delete("feat/unmerged", &tip_of("feat/unmerged")).unwrap_err();
     assert!(format!("{err:#}").contains("合并"), "{err:#}");
     assert!(delete("develop", &tip_of("develop")).is_err());
@@ -532,8 +573,26 @@ fn branches_without_a_worktree_are_judged_and_deleted_safely() {
     assert!(!sh(&f.main, &["config", "--list"]).contains("branch.feat/stale."));
     call(&f, "restoreBranch", json!({ "id": id, "name": "feat/stale" }));
     assert_eq!(tip_of("feat/stale"), stale_tip);
+    assert_eq!(sh(&f.main, &["config", "branch.feat/stale.remote"]), "origin", "its settings come back too");
+    assert_eq!(sh(&f.main, &["config", "--bool", "branch.feat/stale.flag"]), "true");
     assert!(dispatch(&f.state, "restoreBranch", json!({ "id": id, "name": "feat/stale" })).is_err(), "restored once");
     assert!(dispatch(&f.state, "restoreBranch", json!({ "id": id, "name": "feat/new" })).is_err(), "never deleted here");
+}
+
+#[test]
+fn the_trunks_own_branch_is_never_offered_whatever_the_trunk_is_called() {
+    let f = fixture("trunk-names");
+    call(&f, "addPath", json!({ "path": f.main }));
+    let id = f.main.to_string_lossy().to_string();
+    // A fork: the trunk is another remote's branch, and its local copy is checked out nowhere.
+    sh(&f.main, &["branch", "integration"]);
+    sh(&f.main, &["update-ref", "refs/remotes/upstream/integration", "main"]);
+    call(&f, "setTrunk", json!({ "id": id, "branch": "upstream/integration" }));
+    let list = call(&f, "branchStatuses", json!({ "id": id }));
+    assert!(list.as_array().unwrap().iter().all(|b| b["name"] != "integration"), "{list}");
+    let tip = sh(&f.main, &["rev-parse", "integration"]);
+    assert!(dispatch(&f.state, "deleteBranch", json!({ "id": id, "name": "integration", "tip": tip })).is_err());
+    assert!(!sh(&f.main, &["branch", "--list", "integration"]).is_empty());
 }
 
 /// 2500 commits with a merged side branch every 100: big enough that history is read from git in
