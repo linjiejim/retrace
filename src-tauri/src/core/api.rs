@@ -74,7 +74,7 @@ fn add_roots(state: &State, roots: Vec<PathBuf>) -> Result<Vec<Project>> {
         for root in roots {
             let path = root.to_string_lossy().into_owned();
             if !cfg.projects.iter().any(|p| p.path == path) {
-                let entry = ProjectEntry { path, trunk: None };
+                let entry = ProjectEntry { path, ..Default::default() };
                 added.push(project_of(&entry));
                 cfg.projects.push(entry);
             }
@@ -384,7 +384,75 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let dir = project_dir(state, &id)?;
             let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
             let trunk = trunk.ok_or_else(|| anyhow!(tr!("没有找到集成分支", "No integration branch found")))?;
-            json!(cleanup::remove(&dir, &trunk, &path, &head, &acknowledged_ignored, delete_branch, &state.integration)?)
+            let outcome = cleanup::remove(&dir, &trunk, &path, &head, &acknowledged_ignored, delete_branch, &kept_branches(state, &id)?, &state.integration)?;
+            if let Some(deleted) = outcome.deleted.clone() {
+                remember_deleted(state, &id, deleted);
+            }
+            json!(outcome)
+        }
+        "branchStatuses" => {
+            let Id { id } = args(a)?;
+            let dir = project_dir(state, &id)?;
+            let entry = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.projects.iter().find(|p| p.path == id).cloned().unwrap_or_default();
+            let trees = repo::worktrees(&dir)?;
+            let refs = repo::refs(&dir)?;
+            match repo::resolve_trunk(&dir, entry.trunk.as_deref(), &refs, &trees) {
+                Some(trunk) => json!(cleanup::branch_statuses(&dir, &trunk, &refs, &trees, &entry.kept_branches, &state.integration)),
+                None => json!(Vec::<BranchStatus>::new()),
+            }
+        }
+        "deleteBranch" => {
+            #[derive(Deserialize)]
+            struct A {
+                id: String,
+                name: String,
+                tip: String,
+            }
+            let A { id, name, tip } = args(a)?;
+            let dir = project_dir(state, &id)?;
+            let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
+            let trunk = trunk.ok_or_else(|| anyhow!(tr!("没有找到集成分支", "No integration branch found")))?;
+            let deleted = cleanup::delete_branch(&dir, &trunk, &name, &tip, &kept_branches(state, &id)?, &state.integration)?;
+            remember_deleted(state, &id, deleted);
+            Value::Null
+        }
+        "restoreBranch" => {
+            #[derive(Deserialize)]
+            struct A {
+                id: String,
+                name: String,
+            }
+            let A { id, name } = args(a)?;
+            let dir = project_dir(state, &id)?;
+            let key = format!("{id}\0{name}");
+            let deleted = state.deleted_branches.lock().ok().and_then(|d| d.get(&key).cloned());
+            let deleted = deleted.ok_or_else(|| anyhow!(tr!("只能恢复刚才删掉的分支", "Only branches deleted here can be restored")))?;
+            // Once the branch is back the record is spent, even if some settings couldn't be written.
+            let settings_failed = cleanup::restore_branch(&dir, &deleted)?;
+            if let Ok(mut deleted) = state.deleted_branches.lock() {
+                deleted.remove(&key);
+            }
+            json!({ "settingsFailed": settings_failed })
+        }
+        "keepBranch" => {
+            #[derive(Deserialize)]
+            struct A {
+                id: String,
+                name: String,
+                keep: bool,
+            }
+            let A { id, name, keep } = args(a)?;
+            {
+                let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+                let entry = cfg.projects.iter_mut().find(|p| p.path == id).ok_or_else(|| anyhow!(tr!("没有这个项目", "No such project")))?;
+                entry.kept_branches.retain(|b| *b != name);
+                if keep {
+                    entry.kept_branches.push(name);
+                    entry.kept_branches.sort();
+                }
+            }
+            save(state)?;
+            Value::Null
         }
         "fetch" => {
             let Id { id } = args(a)?;
@@ -429,6 +497,18 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
         }
         _ => bail!(tr!("未知命令：{cmd}", "Unknown command: {cmd}")),
     })
+}
+
+/// Undo can bring back only what was recorded here.
+fn remember_deleted(state: &State, id: &str, deleted: DeletedBranch) {
+    if let Ok(mut map) = state.deleted_branches.lock() {
+        map.insert(format!("{id}\0{}", deleted.name), deleted);
+    }
+}
+
+fn kept_branches(state: &State, id: &str) -> Result<Vec<String>> {
+    let cfg = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+    Ok(cfg.projects.iter().find(|p| p.path == id).map(|p| p.kept_branches.clone()).unwrap_or_default())
 }
 
 fn trunk_and_trees(state: &State, id: &str, dir: &Path) -> Result<(Option<Trunk>, Vec<Worktree>)> {

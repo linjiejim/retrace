@@ -156,12 +156,25 @@ impl Drop for ScratchDir {
 
 /// Stdout up to `max` bytes; past that the process is stopped and `true` says the output was cut.
 pub fn run_limited(dir: &Path, args: &[&str], max: usize) -> Result<(Vec<u8>, bool)> {
+    run_limited_with_input(dir, args, None, max)
+}
+
+/// `run_limited` with `input` on stdin, written from its own thread so a process that answers
+/// while it reads can't fill its output pipe and stall us both.
+pub fn run_limited_with_input(dir: &Path, args: &[&str], input: Option<Vec<u8>>, max: usize) -> Result<(Vec<u8>, bool)> {
+    use std::io::Write;
     let _pass = PROCESSES.enter();
     let mut child = command(dir, args)
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| tr!("无法运行 git（{}）", "Can't run git ({})", binary().display()))?;
+    let writer = input.zip(child.stdin.take()).map(|(input, mut stdin)| {
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        })
+    });
     let mut stdout = child.stdout.take().expect("piped stdout");
     // Drain stderr on its own thread: a process that fills the stderr pipe would otherwise block
     // while we wait on stdout. Keep only the tail for the error message.
@@ -197,11 +210,37 @@ pub fn run_limited(dir: &Path, args: &[&str], max: usize) -> Result<(Vec<u8>, bo
     }
     let status = child.wait()?;
     let stderr = stderr_reader.join().unwrap_or_default();
+    if let Some(w) = writer {
+        let _ = w.join();
+    }
     if !cut && !status.success() {
         let reason = stderr.trim().lines().last().unwrap_or("").trim_start_matches("fatal: ").to_string();
         bail!(tr!("git {} 失败：{}", "git {} failed: {}", args.first().copied().unwrap_or(""), reason));
     }
     Ok((out, cut))
+}
+
+/// `run` with `input` on stdin (`patch-id`). The input is written from its own thread, so a
+/// process that answers while it reads can't fill its output pipe and stall us both.
+pub fn run_with_input(dir: &Path, args: &[&str], input: Vec<u8>) -> Result<Vec<u8>> {
+    use std::io::Write;
+    let _pass = PROCESSES.enter();
+    let mut child = command(dir, args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| tr!("无法运行 git（{}）", "Can't run git ({})", binary().display()))?;
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&input);
+    });
+    let out = child.wait_with_output()?;
+    let _ = writer.join();
+    if !out.status.success() {
+        bail!(failure(args, &out));
+    }
+    Ok(out.stdout)
 }
 
 /// Long-running network calls (fetch) get a hard timeout so a stuck remote can't pile up processes.

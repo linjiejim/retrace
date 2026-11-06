@@ -1,23 +1,62 @@
-//! Remove worktrees whose work is already in the trunk. The one write path besides `fetch`.
+//! Remove worktrees and local branches whose work is already in the trunk. The one write path
+//! besides `fetch`.
 //!
 //! Rules (from the foldgit fork's worktree cleanup spec): only linked, unlocked, clean trees whose
-//! HEAD is in the trunk (ancestor or squash); never `--force`; every tree is re-verified right before
-//! it is removed; ignored files that can't be regenerated (`.env`…) and recent activity are reported
-//! so the UI leaves those unticked; branches are deleted only with `git branch -d`.
+//! HEAD is in the trunk (ancestor or squash); never `--force`; every tree and branch is re-verified
+//! right before it is removed; ignored files that can't be regenerated (`.env`…) and recent activity
+//! are reported so the UI leaves those unticked. A branch is deleted only while it still points at
+//! the commit that was checked (`update-ref -d <ref> <old>`), which also covers squash merges that
+//! `git branch -d` refuses; long-lived and kept branches are never deleted.
 
 use crate::tr;
 use super::model::*;
 use super::repo::{self, IntegrationCache};
 use super::git;
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Folders and files that a build or install brings back.
 const REGENERABLE: [&str; 12] =
     ["node_modules", ".build", "DerivedData", "dist", "build", ".next", ".turbo", ".venv", "__pycache__", "target", ".gradle", ".DS_Store"];
 /// A tree touched this recently may belong to an agent that just started.
 const RECENT: Duration = Duration::from_secs(15 * 60);
+/// Branches that stay around after being merged, by design.
+const PROTECTED: [&str; 8] = ["main", "master", "develop", "development", "dev", "staging", "production", "gh-pages"];
+const PROTECTED_PREFIXES: [&str; 3] = ["release/", "releases/", "release-"];
+
+pub fn is_protected(name: &str) -> bool {
+    PROTECTED.contains(&name) || PROTECTED_PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
+/// The trunk's own local branch, however the trunk is named (`main`, `origin/main`, `upstream/main`).
+/// Not "tracks the trunk's remote branch": `git switch -c x origin/main` sets that upstream on
+/// every feature branch.
+fn is_trunk_branch(trunk: &Trunk, name: &str) -> bool {
+    let after_remote = |r: &str| r.split_once('/').is_some_and(|(_, b)| b == name);
+    [trunk.name.as_str(), trunk.tip_ref.as_str()].into_iter().chain(trunk.remote_ref.as_deref()).any(|r| r == name || after_remote(r))
+}
+
+/// Branches git itself counts as in use, so `git branch -d` would refuse them: checked out in a
+/// worktree, or being rebased or bisected there (the worktree shows a detached HEAD meanwhile).
+fn branches_in_use(trees: &[Worktree]) -> HashSet<String> {
+    let mut used: HashSet<String> = trees.iter().filter_map(|t| t.branch.clone()).collect();
+    for tree in trees.iter().filter(|t| !t.bare) {
+        let Some(gd) = git_dir_of(Path::new(&tree.path)) else { continue };
+        for file in ["rebase-merge/head-name", "rebase-apply/head-name", "BISECT_START", "rebase-merge/update-refs"] {
+            let Ok(text) = std::fs::read_to_string(gd.join(file)) else { continue };
+            for line in text.lines().map(str::trim) {
+                if let Some(name) = line.strip_prefix("refs/heads/") {
+                    used.insert(name.to_string());
+                } else if file == "BISECT_START" && !line.is_empty() {
+                    used.insert(line.to_string());
+                }
+            }
+        }
+    }
+    used
+}
 
 fn git_dir_of(tree: &Path) -> Option<PathBuf> {
     let dot = tree.join(".git");
@@ -83,7 +122,7 @@ fn eligible(dir: &Path, tree: &Worktree, trunk: &Trunk, cache: &IntegrationCache
     if tree.prunable || !path.is_dir() {
         bail!(tr!("worktree 目录已经不存在", "The worktree folder no longer exists"));
     }
-    if tree.branch.as_deref() == Some(trunk.name.as_str()) {
+    if tree.branch.as_deref().is_some_and(|b| is_trunk_branch(trunk, b)) {
         bail!(tr!("检出的是集成分支", "It has the integration branch checked out"));
     }
     let head = tree.head.as_deref().ok_or_else(|| anyhow::anyhow!(tr!("还没有提交", "No commits yet")))?;
@@ -131,9 +170,10 @@ pub fn candidates(dir: &Path, trunk: &Trunk, trees: &[Worktree], cache: &Integra
     })
 }
 
-/// Re-verify, then `git worktree remove` (never `--force`) and optionally `git branch -d`.
+/// Re-verify, then `git worktree remove` (never `--force`) and optionally delete its branch.
 /// `acknowledged_ignored`: the irreplaceable ignored files the user saw when confirming; any new one
 /// stops the removal, since `git worktree remove` deletes ignored files without asking.
+#[allow(clippy::too_many_arguments)]
 pub fn remove(
     dir: &Path,
     trunk: &Trunk,
@@ -141,6 +181,7 @@ pub fn remove(
     expect_head: &str,
     acknowledged_ignored: &[String],
     delete_branch: bool,
+    kept: &[String],
     cache: &IntegrationCache,
 ) -> Result<RemoveOutcome> {
     let trees = repo::worktrees(dir)?;
@@ -149,7 +190,7 @@ pub fn remove(
         bail!(tr!("HEAD 在确认之后变了，已跳过", "HEAD moved after you confirmed; skipped"));
     }
     let path = Path::new(tree_path);
-    let verdict = eligible(dir, tree, trunk, cache, true)?;
+    eligible(dir, tree, trunk, cache, true)?;
     let unseen: Vec<String> = notable_ignored(path).into_iter().filter(|n| !acknowledged_ignored.contains(n)).collect();
     if !unseen.is_empty() {
         bail!(tr!("确认之后出现了被忽略的 {}，已跳过；重新打开列表确认后再删", "Ignored {} appeared after you confirmed; skipped. Reopen the list and confirm again", unseen.join(", ")));
@@ -161,22 +202,170 @@ pub fn remove(
     }
     git::run(dir, &["worktree", "remove", tree_path])?;
 
-    let mut outcome = RemoveOutcome { branch_deleted: false, branch_kept_reason: None };
+    let mut outcome = RemoveOutcome { branch_deleted: false, deleted_branch: None, branch_kept_reason: None, deleted: None };
     if let (true, Some(branch)) = (delete_branch, tree.branch.as_deref()) {
-        if verdict.integration == Integration::Squash {
-            outcome.branch_kept_reason = Some(tr!("squash 合并的分支 git branch -d 删不掉，已保留", "Kept: git branch -d can't delete a squash-merged branch"));
+        // The tree is already gone: from here on a failure keeps the branch, it doesn't fail the removal.
+        let in_use = repo::worktrees(dir).map(|t| branches_in_use(&t).contains(branch));
+        let result = if is_trunk_branch(trunk, branch) {
+            Err(tr!("这是集成分支，没有删除", "Kept: it's the integration branch"))
+        } else if is_protected(branch) {
+            Err(tr!("长期分支，没有删除", "Kept: it's a long-lived branch"))
+        } else if kept.iter().any(|k| k == branch) {
+            Err(tr!("你设为保留的分支，没有删除", "Kept: it's a branch you keep"))
+        } else if !matches!(in_use, Ok(false)) {
+            Err(tr!("另一个 worktree 还在用这个分支，已保留", "Kept: another worktree is using it"))
         } else {
-            // `branch -d` judges "merged" against the current branch: run it where the trunk is checked out.
-            let at = trees
-                .iter()
-                .find(|t| t.branch.as_deref() == Some(trunk.name.as_str()) && Path::new(&t.path).is_dir())
-                .map(|t| PathBuf::from(&t.path))
-                .unwrap_or_else(|| dir.to_path_buf());
-            match git::run(&at, &["branch", "-d", "--", branch]) {
-                Ok(_) => outcome.branch_deleted = true,
-                Err(e) => outcome.branch_kept_reason = Some(format!("{e:#}")),
+            // HEAD was `expect_head` a moment ago, so that is where its branch points.
+            delete_ref_if_at(dir, branch, expect_head).map_err(|e| format!("{e:#}"))
+        };
+        match result {
+            Ok(deleted) => {
+                outcome.branch_deleted = true;
+                outcome.deleted_branch = Some(deleted.name.clone());
+                outcome.deleted = Some(deleted);
             }
+            Err(reason) => outcome.branch_kept_reason = Some(reason),
         }
     }
     Ok(outcome)
+}
+
+// ---------- branches without a worktree ----------
+
+fn unix_now() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+/// From the branch's reflog: when it last moved, and whether being created is all that happened.
+/// Read from the file (`<common dir>/logs/refs/heads/<name>`): this runs for every branch whenever
+/// refs change. Without a reflog file (reftable, logging off) both answers are unknown.
+fn branch_reflog(common_dir: Option<&Path>, name: &str) -> (Option<i64>, bool) {
+    let Some(Ok(text)) = common_dir.map(|d| std::fs::read_to_string(d.join("logs/refs/heads").join(name))) else { return (None, false) };
+    let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+    // `<old> <new> <name> <email> <time> <zone>\t<message>`
+    let time = |line: &str| line.split_once('\t').map_or(line, |(head, _)| head).split_whitespace().rev().nth(1).and_then(|t| t.parse().ok());
+    let only_created = lines.len() == 1 && lines[0].split_once('\t').is_some_and(|(_, msg)| msg.starts_with("branch: Created from"));
+    (lines.last().and_then(|l| time(l)), only_created)
+}
+
+/// Local branches no worktree is using (the trunk's own aside), each judged against the trunk.
+pub fn branch_statuses(dir: &Path, trunk: &Trunk, refs: &[repo::RefEntry], trees: &[Worktree], kept: &[String], cache: &IntegrationCache) -> Vec<BranchStatus> {
+    let in_use = branches_in_use(trees);
+    let existing: HashSet<&str> = refs.iter().map(|e| e.full.as_str()).collect();
+    let locals: Vec<(&repo::RefEntry, &str, bool)> = refs
+        .iter()
+        .filter(|e| e.symref.is_none())
+        .filter_map(|e| Some((e, e.full.strip_prefix("refs/heads/")?)))
+        .filter(|(_, name)| !is_trunk_branch(trunk, name) && !in_use.contains(*name))
+        .map(|(e, name)| (e, name, e.upstream.as_deref().is_some_and(|u| !existing.contains(u))))
+        .collect();
+    let committed: std::collections::HashMap<String, i64> = git::text(dir, &["for-each-ref", "--format=%(refname)%00%(committerdate:unix)", "refs/heads"])
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.split_once('\0').and_then(|(r, t)| Some((r.to_string(), t.parse().ok()?))))
+        .collect();
+    let committed = &committed;
+    let common_dir = git::text(dir, &["rev-parse", "--path-format=absolute", "--git-common-dir"]).ok().map(|d| PathBuf::from(d.trim()));
+    let common_dir = common_dir.as_deref().filter(|d| d.is_absolute());
+    let now = unix_now();
+    let mut out = Vec::with_capacity(locals.len());
+    for chunk in locals.chunks(8) {
+        std::thread::scope(|s| {
+            let handles: Vec<_> = chunk
+                .iter()
+                .map(|&(e, name, upstream_gone)| {
+                    s.spawn(move || {
+                        let cmp = repo::compare_with_trunk(dir, trunk, &e.target, cache).ok()?;
+                        let (moved_at, only_created) = branch_reflog(common_dir, name);
+                        let last_commit_at = committed.get(&e.full).copied();
+                        Some(BranchStatus {
+                            name: name.to_string(),
+                            tip: e.target.clone(),
+                            ahead: cmp.ahead,
+                            integration: cmp.integration,
+                            last_commit_at,
+                            upstream_gone,
+                            never_committed: only_created && cmp.integration == Integration::Ancestor,
+                            recent: moved_at.or(last_commit_at).is_some_and(|t| now - t < RECENT.as_secs() as i64),
+                            protected: is_protected(name),
+                            kept: kept.iter().any(|k| k == name),
+                        })
+                    })
+                })
+                .collect();
+            out.extend(handles.into_iter().filter_map(|h| h.join().ok().flatten()));
+        });
+    }
+    out
+}
+
+/// `branch.<name>.*` settings, exactly this branch's (not `branch.<name>.x.*` of a longer name).
+/// A key written without a value (`[branch "x"] flag`, meaning true) has no value here.
+fn branch_config(dir: &Path, name: &str) -> Vec<(String, Option<String>)> {
+    let Ok((0, out)) = git::code(dir, &["config", "--local", "--null", "--get-regexp", "^branch\\."]) else { return vec![] };
+    let prefix = format!("branch.{name}.");
+    git::nul_tokens(&out)
+        .into_iter()
+        .filter_map(|entry| {
+            let (key, value) = match entry.split_once('\n') {
+                Some((k, v)) => (k.to_string(), Some(v.to_string())),
+                None => (entry.clone(), None),
+            };
+            let var = key.strip_prefix(&prefix)?;
+            (!var.contains('.')).then_some((key, value))
+        })
+        .collect()
+}
+
+/// Remove `refs/heads/<name>` only while it still points at `tip`, in one step, then its
+/// `branch.<name>.*` settings, as `git branch -d` does. Returns what Undo needs.
+fn delete_ref_if_at(dir: &Path, name: &str, tip: &str) -> Result<DeletedBranch> {
+    let config = branch_config(dir, name);
+    git::run(dir, &["update-ref", "-d", &format!("refs/heads/{name}"), tip])?;
+    if !config.is_empty() {
+        let _ = git::run(dir, &["config", "--local", "--remove-section", &format!("branch.{name}")]);
+    }
+    Ok(DeletedBranch { name: name.to_string(), tip: tip.to_string(), config })
+}
+
+/// Delete a local branch already in the trunk, after checking everything again. Whether something
+/// uses the branch is checked last, right before the compare-and-delete.
+pub fn delete_branch(dir: &Path, trunk: &Trunk, name: &str, expect_tip: &str, kept: &[String], cache: &IntegrationCache) -> Result<DeletedBranch> {
+    let full = format!("refs/heads/{name}");
+    let refs = repo::refs(dir)?;
+    let entry = refs
+        .iter()
+        .find(|e| e.full == full && e.symref.is_none())
+        .ok_or_else(|| anyhow!(tr!("分支已经不存在", "The branch no longer exists")))?;
+    if entry.target != expect_tip {
+        bail!(tr!("分支在确认之后变了，已跳过", "The branch moved after you confirmed; skipped"));
+    }
+    if is_trunk_branch(trunk, name) {
+        bail!(tr!("这是集成分支", "It's the integration branch"));
+    }
+    if is_protected(name) {
+        bail!(tr!("这是长期分支", "It's a long-lived branch"));
+    }
+    if kept.iter().any(|k| k == name) {
+        bail!(tr!("这是你设为保留的分支", "It's a branch you keep"));
+    }
+    if repo::compare_with_trunk(dir, trunk, expect_tip, cache)?.integration == Integration::None {
+        bail!(tr!("还没有合并到 {}", "Not merged into {} yet", trunk.name));
+    }
+    if branches_in_use(&repo::worktrees(dir)?).contains(name) {
+        bail!(tr!("有 worktree 在用这个分支（检出、rebase 或 bisect 中）", "A worktree is using it (checked out, rebasing or bisecting)"));
+    }
+    delete_ref_if_at(dir, name, expect_tip)
+}
+
+/// Undo for a deletion: the branch comes back at its tip, only if the name is still free; then its
+/// settings, best effort. Returns the settings that couldn't be written back.
+pub fn restore_branch(dir: &Path, deleted: &DeletedBranch) -> Result<Vec<String>> {
+    git::run(dir, &["update-ref", &format!("refs/heads/{}", deleted.name), &deleted.tip, ""])?;
+    Ok(deleted
+        .config
+        .iter()
+        .filter(|(key, value)| git::run(dir, &["config", "--local", "--add", key, value.as_deref().unwrap_or("true")]).is_err())
+        .map(|(key, _)| key.clone())
+        .collect())
 }

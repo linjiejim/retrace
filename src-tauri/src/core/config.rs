@@ -16,6 +16,8 @@ pub struct Config {
 pub struct ProjectEntry {
     pub path: String,
     pub trunk: Option<String>,
+    /// Merged branches the user keeps: never offered for deletion.
+    pub kept_branches: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

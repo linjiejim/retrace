@@ -350,6 +350,49 @@ pub fn content_merged(dir: &Path, base: &str, tip: &str) -> bool {
     !merged.is_empty() && merged == base_tree.trim()
 }
 
+/// Squash merges `content_merged` misses because the trunk later changed the same lines: the
+/// branch's whole change has the same patch-id as one trunk commit since the merge base. Diffs are
+/// taken with no context lines, so later edits next to the change don't matter either; whitespace
+/// does (`--verbatim`: a re-indent is not the same change). Read-only. Bounded, because it runs
+/// again for every unmerged branch whenever the trunk moves; past the bounds the answer is "not
+/// merged", the safe side.
+pub fn patch_merged(dir: &Path, base: &str, tip: &str) -> bool {
+    /// A branch touching more files than this is not worth the scan (and the argument list).
+    const MAX_PATHS: usize = 500;
+    /// Trunk commits scanned, oldest first: a squash lands soon after the merge base.
+    const MAX_COMMITS: usize = 500;
+    const MAX_LOG: usize = 16 * 1024 * 1024;
+    let opts = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "-U0"];
+    let Ok(mb) = git::text(dir, &["merge-base", base, tip]) else { return false };
+    let mb = mb.trim();
+    let Ok(names) = git::run(dir, &["diff", "--name-only", "-z", "--no-renames", mb, tip]) else { return false };
+    let paths: Vec<String> = git::nul_tokens(&names).into_iter().map(|p| format!(":(literal){p}")).collect();
+    if paths.is_empty() || paths.len() > MAX_PATHS {
+        return false;
+    }
+    let patch_id = |input: Vec<u8>| git::run_with_input(dir, &["patch-id", "--verbatim"], input).map(|out| String::from_utf8_lossy(&out).into_owned());
+    let mut args = vec!["diff"];
+    args.extend(opts);
+    args.extend([mb, tip]);
+    let Ok(own) = git::run(dir, &args).and_then(patch_id) else { return false };
+    let Some(own) = own.split_whitespace().next().map(str::to_string) else { return false };
+
+    let range = format!("{mb}..{base}");
+    let mut args = vec!["rev-list", "--reverse", "--no-merges", range.as_str(), "--"];
+    args.extend(paths.iter().map(String::as_str));
+    let Ok(commits) = git::text(dir, &args) else { return false };
+    let oldest: Vec<&str> = commits.lines().take(MAX_COMMITS).collect();
+    if oldest.is_empty() {
+        return false;
+    }
+    let mut args = vec!["log", "--no-walk=unsorted", "--stdin", "--format=commit %H", "-p"];
+    args.extend(opts);
+    args.push("--");
+    args.extend(paths.iter().map(String::as_str));
+    let Ok((log, false)) = git::run_limited_with_input(dir, &args, Some((oldest.join("\n") + "\n").into_bytes()), MAX_LOG) else { return false };
+    patch_id(log).is_ok_and(|ids| ids.lines().any(|l| l.split_whitespace().next() == Some(own.as_str())))
+}
+
 /// Keyed by every input of the answer: branch tip and all trunk tips (local and remote).
 pub type IntegrationCache = std::sync::Mutex<HashMap<String, TrunkCompare>>;
 
@@ -378,7 +421,7 @@ pub fn compare_with_trunk(dir: &Path, trunk: &Trunk, tip: &str, cache: &Integrat
         }
         if bases.iter().skip(1).any(|b| is_ancestor(dir, tip, b)) {
             Integration::Ancestor
-        } else if bases.iter().any(|b| content_merged(dir, b, tip)) {
+        } else if bases.iter().any(|b| content_merged(dir, b, tip)) || bases.iter().any(|b| patch_merged(dir, b, tip)) {
             Integration::Squash
         } else {
             Integration::None

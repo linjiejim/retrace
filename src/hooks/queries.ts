@@ -1,6 +1,6 @@
 import { keepPreviousData, useInfiniteQuery, useQuery, type QueryClient } from "@tanstack/react-query"
 import { api } from "@/lib/api"
-import type { BranchRef, Overview, Target, TreeStatus, Trunk, TrunkCompare, Worktree } from "@/lib/types"
+import type { BranchRef, BranchStatus, Overview, Target, TreeStatus, Trunk, TrunkCompare, Worktree } from "@/lib/types"
 
 export const targetKey = (t: Target | null) =>
   !t ? "" : t.kind === "commit" ? `c:${t.hash}` : t.kind === "worktree" ? `w:${t.tree}` : `x:${t.base}:${t.tip}`
@@ -53,6 +53,13 @@ export const usePatch = (id: string | null, target: Target | null, enabled: bool
 export const useCleanupCandidates = (id: string | null, enabled: boolean) =>
   useQuery({ queryKey: ["cleanup", id], queryFn: () => api.cleanupCandidates(id!), enabled: enabled && !!id, staleTime: 5_000 })
 
+/** Local branches without a worktree, merged or not. Ref changes refresh it (`invalidateProject` with git). */
+export const useBranchStatuses = (id: string | null) =>
+  useQuery({ queryKey: ["branches", id], queryFn: () => api.branchStatuses(id!), enabled: !!id, staleTime: 30_000 })
+
+/** Merged, not protected and not kept: what the Merged menu offers to delete. */
+export const isRemovableBranch = (b: BranchStatus) => b.integration !== "none" && !b.protected && !b.kept
+
 export const useCommit = (id: string | null, hash: string | null) =>
   useQuery({ queryKey: ["commit", id, hash], queryFn: () => api.commit(id!, hash!), enabled: !!id && !!hash, staleTime: Infinity })
 
@@ -100,6 +107,7 @@ export function invalidateProject(qc: QueryClient, id: string, opts: { git: bool
     qc.invalidateQueries({ queryKey: ["overview", id] })
     qc.invalidateQueries({ queryKey: ["history", id] })
     qc.invalidateQueries({ queryKey: ["compare", id] })
+    qc.invalidateQueries({ queryKey: ["branches", id] })
   }
   qc.invalidateQueries({ queryKey: ["cleanup", id] })
   qc.invalidateQueries({ queryKey: ["changes", id], predicate: (q) => !String(q.queryKey[2]).startsWith("c:") })

@@ -125,8 +125,30 @@ export interface CleanupCandidate {
   recent: boolean
 }
 
+/** A local branch no worktree has checked out, judged against the trunk. */
+export interface BranchStatus {
+  name: string
+  tip: string
+  /** Commits the trunk doesn't have. */
+  ahead: number
+  integration: Integration
+  lastCommitAt: number | null
+  /** It tracked a remote branch that has since been deleted. */
+  upstreamGone: boolean
+  /** Created and never committed to. */
+  neverCommitted: boolean
+  /** Created or moved in the last 15 minutes. */
+  recent: boolean
+  /** A long-lived name (develop, release/*…): never offered for deletion. */
+  protected: boolean
+  /** The user chose to keep it. */
+  kept: boolean
+}
+
 export interface RemoveOutcome {
   branchDeleted: boolean
+  /** The branch actually deleted, read again at removal time. */
+  deletedBranch: string | null
   branchKeptReason: string | null
 }
 

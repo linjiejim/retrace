@@ -14,7 +14,7 @@ Agents now write code in a dozen worktrees at once. Retrace puts every project, 
 
 - **Many repositories, one window.** Add repositories, or a folder of them. A dot marks projects with uncommitted work; drag to reorder.
 - **The integration branch stays left.** `main` (or whatever you pick) owns column 0 of a compact one-line graph. Other branches join only when you ask, local first, remote optionally.
-- **Worktrees, folded.** The main tree, then *Active* (uncommitted work, or commits not yet in `main`), *Merged* (clean and already in `main`) and *Branches* without a worktree. Merged worktrees can be removed safely: no `--force`, every tree checked again first, branches deleted only with `git branch -d`.
+- **Worktrees and branches, folded.** The main tree, then *Active* (uncommitted work, or commits not yet in `main`), *Merged* (clean worktrees and local branches already in `main`, squash merges included) and *Branches* without a worktree still in progress. Merged ones can be removed safely: no `--force`, everything checked again first, a branch deleted only while it still points at the commit you saw, and Undo right after. `develop`, `release/*` and branches you keep are never offered.
 - **Commits as you'd review them.** Click a row to open its message and diff below the graph; click it again to close. The body is shown in full (fold it if you like), and squash or merge commits get a **PR #N** button that opens the pull request on GitHub.
 - **Diffs that read well.** Side by side by default, no wrapping, syntax highlighted off the main thread. Read one file at a time or every change in a row. Changed images show before and after.
 - **Browse any version.** Switch *Changes* to *Files* to see the whole tree at the selected commit (or on disk for uncommitted work): filter, fold, and preview code, images, and Markdown rendered like GitHub with its relative links and images.
@@ -35,7 +35,7 @@ Every git call runs with `GIT_OPTIONAL_LOCKS=0`, so Retrace never takes the `ind
 There are exactly two writes:
 
 - `git fetch`, which only updates remote-tracking branches (turn it off in Settings);
-- removing merged worktrees, only after you confirm.
+- removing merged worktrees and deleting merged local branches, only after you confirm (and restoring a branch you just deleted).
 
 ## Install
 

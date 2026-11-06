@@ -1,16 +1,16 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, FolderGit2, GitBranch, GitCompareArrows, House, PanelLeftOpen, Pin, RefreshCw, Search, SlidersHorizontal, Tag, X } from "lucide-react"
+import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, FolderGit2, GitBranch, GitCompareArrows, House, PanelLeftOpen, Pin, PinOff, RefreshCw, Search, SlidersHorizontal, Tag, X } from "lucide-react"
 import { api } from "@/lib/api"
 import { pickRow, run } from "@/lib/commands"
-import { absoluteTime, relativeTime, shortHash, tildify } from "@/lib/format"
+import { absoluteTime, ago, relativeTime, shortHash, tildify } from "@/lib/format"
 import { keyNav } from "@/lib/keys"
 import { prefs, selectionKey, ui, useStore, type Selection } from "@/lib/store"
-import { WORKTREE_ROW, type HistoryRow, type Overview, type RefLabel, type Trunk } from "@/lib/types"
+import { WORKTREE_ROW, type BranchStatus, type HistoryRow, type Overview, type RefLabel, type Trunk } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { t, tp } from "@/lib/i18n"
-import { branchKey, invalidateProject, isArchived, useHistory, type Tab } from "@/hooks/queries"
+import { branchKey, invalidateProject, isArchived, isRemovableBranch, useBranchStatuses, useHistory, type Tab } from "@/hooks/queries"
 import { useProjectView } from "@/hooks/use-project-view"
 import { useDelayedFlag } from "@/hooks/use-delayed-flag"
 import { IconButton } from "@/components/ui/button"
@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { StateView } from "@/components/ui/state"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip } from "@/components/ui/tooltip"
+import { notify } from "@/components/ui/toast"
 import { PanelHeader } from "@/components/layout/LayoutView"
 import { ArchiveMenu } from "./ArchiveMenu"
 import { Lanes, lanesWidth, ROW_H } from "./Lanes"
@@ -58,12 +59,21 @@ export function GraphPanel() {
 // ---------- tabs ----------
 
 /**
- * One row: the main tree, then three folded groups — worktrees in progress, worktrees already in the
- * trunk, and branches without a worktree. The group holding the shown tab displays its name.
+ * One row: the main tree, then three folded groups — worktrees in progress, worktrees and branches
+ * already in the trunk, and branches without a worktree still in progress. The group holding the
+ * shown tab displays its name.
  */
 function TabsBar({ view }: { view: View }) {
+  const qc = useQueryClient()
   const { projectId, tabs, tab, trunk, overview } = view
   const open = (key: string) => ui.set((s) => ({ tabs: { ...s.tabs, [projectId!]: key }, selection: null, file: null, focusMode: false }))
+  const openBranch = (name: string) =>
+    ui.set((s) => ({
+      branchTabs: { ...s.branchTabs, [projectId!]: [name] },
+      tabs: { ...s.tabs, [projectId!]: branchKey(name) },
+      selection: null,
+      file: null,
+    }))
   const archived = tabs.filter((t) => isArchived(t, trunk))
   const main = tabs.filter((t) => t.tree?.isMain || t.pinned)
   const active = tabs.filter((t) => t.kind === "tree" && !main.includes(t) && !archived.includes(t))
@@ -71,15 +81,32 @@ function TabsBar({ view }: { view: View }) {
   const branchTab = tab?.kind === "branch" && !tab.pinned ? tab : null
 
   const ov = overview.data!
+  const statuses = useBranchStatuses(projectId).data
+  const statusOf = useMemo(() => new Map((statuses ?? []).map((b) => [b.name, b])), [statuses])
+  const localNames = useMemo(() => new Set(ov.branches.filter((b) => !b.remote).map((b) => b.name)), [ov.branches])
+  // Merged branches go to the Merged group; the statuses may be a moment older than the overview.
+  const removable = useMemo(() => (statuses ?? []).filter((b) => isRemovableBranch(b) && localNames.has(b.name)), [statuses, localNames])
+  const removableNames = new Set(removable.map((b) => b.name))
   const checkedOut = new Set(ov.trees.map((t) => t.branch).filter(Boolean))
   // `origin/x` is redundant when `x` exists locally, is checked out, or is the trunk.
-  const localNames = new Set(ov.branches.filter((b) => !b.remote).map((b) => b.name))
   const bare = (b: { name: string; remote: boolean }) => (b.remote ? b.name.slice(b.name.indexOf("/") + 1) : b.name)
   const others = ov.branches.filter((b) => {
     const n = bare(b)
     if (checkedOut.has(n) || n === trunk?.name || n === "HEAD") return false
+    if (!b.remote && removableNames.has(n)) return false
     return !(b.remote && localNames.has(n))
   })
+  const mergedBranchTab = branchTab && removableNames.has(branchTab.label) ? branchTab : null
+  const listBranchTab = mergedBranchTab ? null : branchTab
+
+  const unkeep = async (name: string) => {
+    try {
+      await api.keepBranch(projectId!, name, false)
+      qc.invalidateQueries({ queryKey: ["branches", projectId] })
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   return (
     <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
@@ -87,30 +114,53 @@ function TabsBar({ view }: { view: View }) {
         <MainTab key={t.key} tab={t} trunk={trunk} selected={t.key === tab?.key} onOpen={() => open(t.key)} />
       ))}
       {active.length > 0 && <TreeMenu tabs={active} current={current(active)} trunk={trunk} onOpen={(t) => open(t.key)} />}
-      {archived.length > 0 && (
-        <ArchiveMenu view={view} archived={archived} onOpen={(t) => open(t.key)}>
-          <GroupTrigger icon={<Archive />} label={t("Merged")} count={archived.length} current={current(archived)} trunk={trunk} />
+      {(archived.length > 0 || removable.length > 0) && (
+        <ArchiveMenu view={view} archived={archived} branches={removable} onOpen={(t) => open(t.key)} onOpenBranch={openBranch}>
+          <GroupTrigger icon={<Archive />} label={t("Merged")} count={archived.length + removable.length} current={current(archived) ?? mergedBranchTab} trunk={trunk} />
         </ArchiveMenu>
       )}
-      {(others.length > 0 || branchTab) && (
+      {(others.length > 0 || listBranchTab) && (
         <BranchPicker
-          title={t("Branches without a worktree")}
-          branches={others.map((b) => ({ name: b.name, remote: b.remote }))}
-          current={branchTab?.label}
-          onPick={(name) =>
-            ui.set((s) => ({
-              branchTabs: { ...s.branchTabs, [projectId!]: [name] },
-              tabs: { ...s.tabs, [projectId!]: branchKey(name) },
-              selection: null,
-              file: null,
-            }))
-          }
+          title={t("Branches without a worktree: in progress or kept")}
+          branches={others.map((b) => {
+            const st = b.remote ? undefined : statusOf.get(b.name)
+            return { name: b.name, remote: b.remote, meta: st && <BranchMeta status={st} trunk={trunk} />, action: st?.kept && st.integration !== "none" ? { label: t("Stop keeping {name}", { name: b.name }), onClick: () => unkeep(b.name) } : undefined }
+          })}
+          current={listBranchTab?.label}
+          onPick={openBranch}
         >
-          <GroupTrigger icon={<GitBranch />} label={t("Branches")} count={others.length} current={branchTab} trunk={trunk} />
+          <GroupTrigger icon={<GitBranch />} label={t("Branches")} count={others.length} current={listBranchTab} trunk={trunk} />
         </BranchPicker>
       )}
       <span data-tauri-drag-region className="h-full min-w-2 flex-1" />
     </div>
+  )
+}
+
+/** What a branch in the Branches list still has to do with the trunk. */
+function BranchMeta({ status: b, trunk }: { status: BranchStatus; trunk: Trunk | null }) {
+  const trunkName = trunk?.name ?? t("the trunk")
+  if (b.integration !== "none") {
+    return b.kept ? (
+      <Tooltip content={t("In {trunk}; you chose to keep it", { trunk: trunkName })}>
+        <span className="shrink-0 text-caption text-faint-foreground">{t("Kept")}</span>
+      </Tooltip>
+    ) : (
+      <Tooltip content={t("In {trunk}; long-lived names like develop and release/* are never offered for removal", { trunk: trunkName })}>
+        <span className="shrink-0 text-caption text-faint-foreground">{t("Long-lived")}</span>
+      </Tooltip>
+    )
+  }
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 text-caption text-faint-foreground">
+      {b.upstreamGone && (
+        <Tooltip content={t("The remote branch it tracked was deleted: merged by other means, or abandoned. Worth a look")}>
+          <span className="text-warning">{t("Remote deleted")}</span>
+        </Tooltip>
+      )}
+      {b.ahead > 0 && <span className="tabular" aria-label={tp("{n} commit not in {trunk}", "{n} commits not in {trunk}", b.ahead, { trunk: trunkName })}>↑{b.ahead}</span>}
+      {b.lastCommitAt && <span>{ago(b.lastCommitAt)}</span>}
+    </span>
   )
 }
 
@@ -234,7 +284,7 @@ function TabBadges({ tab, trunk }: { tab: Tab; trunk: Trunk | null }) {
   )
 }
 
-type BranchItem = { name: string; remote: boolean }
+type BranchItem = { name: string; remote: boolean; meta?: React.ReactNode; action?: { label: string; onClick: () => void } }
 
 /** Filterable branch list; used for opening a branch and for picking the integration branch. */
 function BranchList({
@@ -279,11 +329,19 @@ function BranchList({
           </button>
         )}
         {list.slice(0, 300).map((b) => (
-          <button key={b.name} onClick={() => onPick(b.name)} className="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-body hover:bg-accent">
-            <GitBranch className={cn("size-4", b.remote ? "text-faint-foreground" : "text-muted-foreground")} />
-            <span className={cn("min-w-0 flex-1 truncate", b.remote && "text-muted-foreground")}>{b.name}</span>
-            {current === b.name && <Check className="size-4" />}
-          </button>
+          <div key={b.name} className="flex items-center rounded-sm hover:bg-accent">
+            <button onClick={() => onPick(b.name)} className="flex h-8 min-w-0 flex-1 items-center gap-2 px-2 text-left text-body">
+              <GitBranch className={cn("size-4 shrink-0", b.remote ? "text-faint-foreground" : "text-muted-foreground")} />
+              <span className={cn("min-w-0 flex-1 truncate", b.remote && "text-muted-foreground")}>{b.name}</span>
+              {b.meta}
+              {current === b.name && <Check className="size-4 shrink-0" />}
+            </button>
+            {b.action && (
+              <IconButton label={b.action.label} size="icon-sm" className="mr-1 text-faint-foreground" onClick={b.action.onClick}>
+                <PinOff />
+              </IconButton>
+            )}
+          </div>
         ))}
         {list.length > 300 && <div className="px-2 py-2 text-caption text-faint-foreground">{t("{n} more — type to filter", { n: list.length - 300 })}</div>}
         {list.length === 0 && <div className="px-2 py-3 text-small text-faint-foreground">{t("No matching branches")}</div>}

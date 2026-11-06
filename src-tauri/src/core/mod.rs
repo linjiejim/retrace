@@ -18,17 +18,19 @@ pub struct State {
     pub config_path: PathBuf,
     pub integration: repo::IntegrationCache,
     pub history: history::HistoryCache,
+    /// Branches deleted in this session (key `<project>\0<name>`): the only ones Undo may bring back.
+    pub deleted_branches: Mutex<std::collections::HashMap<String, model::DeletedBranch>>,
 }
 
 impl State {
     pub fn load() -> Arc<Self> {
         let config_path = config::path();
         let config = config::load(&config_path);
-        Arc::new(Self { config: RwLock::new(config), config_path, integration: Mutex::new(Default::default()), history: Default::default() })
+        Arc::new(Self { config: RwLock::new(config), config_path, integration: Mutex::new(Default::default()), history: Default::default(), deleted_branches: Default::default() })
     }
 
     pub fn with_config(config_path: PathBuf) -> Arc<Self> {
         let config = config::load(&config_path);
-        Arc::new(Self { config: RwLock::new(config), config_path, integration: Mutex::new(Default::default()), history: Default::default() })
+        Arc::new(Self { config: RwLock::new(config), config_path, integration: Mutex::new(Default::default()), history: Default::default(), deleted_branches: Default::default() })
     }
 }
