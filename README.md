@@ -108,6 +108,13 @@ site/                    the website (retrace.linjiejim.com): plain HTML, CSS an
 
 Push a tag such as `v0.4.0`: the Release workflow builds both architectures and attaches them to a draft release. To sign and notarise, add the repository secrets `APPLE_CERTIFICATE` (a base64 Developer ID Application certificate), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and `APPLE_TEAM_ID`.
 
+## Acknowledgements
+
+Retrace is inspired by:
+
+- [Git Graph](https://marketplace.visualstudio.com/items?itemName=mhutchie.git-graph), the VS Code extension: history read as a graph, right beside the code.
+- [FoldGit](https://foldgit.com/): many repositories in one window, worktrees under their repository.
+
 ## License
 
 [MIT](LICENSE). Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).

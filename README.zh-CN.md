@@ -107,6 +107,13 @@ site/                    官网（retrace.linjiejim.com）：纯 HTML、CSS、JS
 
 推一个 `v0.4.0` 这样的 tag，Release 工作流会构建两种架构并挂到一个草稿 release 上。要签名和公证，在仓库 secrets 里加 `APPLE_CERTIFICATE`（base64 的 Developer ID Application 证书）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`（App 专用密码）和 `APPLE_TEAM_ID`。
 
+## 致谢
+
+Retrace 受到以下项目的启发：
+
+- [Git Graph](https://marketplace.visualstudio.com/items?itemName=mhutchie.git-graph)，VS Code 扩展：在代码旁边把历史当成一张图来读。
+- [FoldGit](https://foldgit.com/)：多个仓库收在一个窗口里，worktree 挂在各自的仓库下面。
+
 ## 许可证
 
 [MIT](LICENSE)。欢迎贡献，见 [CONTRIBUTING.md](CONTRIBUTING.md)。
