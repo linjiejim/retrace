@@ -1,10 +1,12 @@
+import { useEffect, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { AppWindow, FolderGit2, LayoutPanelLeft, Palette } from "lucide-react"
-import { api } from "@/lib/api"
+import { AppWindow, FolderGit2, LayoutPanelLeft, Palette, RefreshCw } from "lucide-react"
+import { api, inTauri } from "@/lib/api"
 import { useAppearance, type Appearance } from "@/lib/appearance"
 import { run } from "@/lib/commands"
 import { t, type LangPref } from "@/lib/i18n"
 import { prefs as uiPrefs, useStore } from "@/lib/store"
+import { checkForUpdates } from "@/lib/updater"
 import type { Prefs } from "@/lib/types"
 import { usePrefs } from "@/hooks/queries"
 import { Button } from "@/components/ui/button"
@@ -157,8 +159,41 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               }
             />
           </SettingsSection>
+          {inTauri && <UpdatesSection />}
         </DialogBody>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** The app only: the browser dev bridge has nothing to update. */
+function UpdatesSection() {
+  const autoUpdate = useStore(uiPrefs, (s) => s.autoUpdate)
+  const [version, setVersion] = useState<string | null>(null)
+  const [checking, setChecking] = useState(false)
+  useEffect(() => {
+    import("@tauri-apps/api/app").then((m) => m.getVersion()).then(setVersion, () => {})
+  }, [])
+  const checkNow = async () => {
+    setChecking(true)
+    await checkForUpdates(true)
+    setChecking(false)
+  }
+  return (
+    <SettingsSection variant="grouped" icon={<RefreshCw />} title={t("Updates")}>
+      <SettingRow
+        label={t("Update automatically")}
+        description={t("Looks for a new release on GitHub at launch and every few hours, installs it and asks you to restart.")}
+        control={<Switch checked={autoUpdate} onCheckedChange={(v) => uiPrefs.set({ autoUpdate: v })} />}
+      />
+      <SettingRow
+        label={version ? t("Retrace {version}", { version }) : "Retrace"}
+        control={
+          <Button size="sm" loading={checking} onClick={() => void checkNow()}>
+            {t("Check now")}
+          </Button>
+        }
+      />
+    </SettingsSection>
   )
 }

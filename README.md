@@ -45,6 +45,8 @@ Download the `.dmg` for Apple silicon or Intel from [Releases](../../releases), 
 
 Releases aren't notarised yet, so macOS may refuse the first launch ("damaged" or "can't be verified"). After moving Retrace to Applications, choose **Open Anyway** in System Settings → Privacy & Security, or run `xattr -dr com.apple.quarantine /Applications/Retrace.app`.
 
+After that Retrace keeps itself up to date from GitHub Releases: at launch and every few hours it looks at the latest release, downloads it in the background, checks it against the signing key built into the app and asks you to restart. Turn it off in Settings → Updates, or look now with Retrace → Check for Updates…. Versions up to 0.5.0 don't have this yet: download the next one by hand once.
+
 ## Keyboard
 
 | Key | Action |
@@ -106,7 +108,7 @@ site/                    the website (retrace.linjiejim.com): plain HTML, CSS an
 
 ### Releasing
 
-Push a tag such as `v0.4.0`: the Release workflow builds both architectures and attaches them to a draft release. To sign and notarise, add the repository secrets `APPLE_CERTIFICATE` (a base64 Developer ID Application certificate), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and `APPLE_TEAM_ID`.
+Push a tag such as `v0.4.0`: the Release workflow builds both architectures and attaches them to a draft release, with the signed update bundles and the updater's `latest.json`. Publishing the draft is what ships the update: installed copies read `latest.json` from the latest published release. The update signature needs the repository secret `TAURI_SIGNING_PRIVATE_KEY`: the private half (no password) of the key whose public half is `plugins.updater.pubkey` in `tauri.conf.json`. Keep a copy. Installed copies accept updates signed with that key only, so a new key means a new `pubkey` and one manual download for everyone. Before writing `latest.json` the workflow checks both bundles against that key, and the tag against the version in `tauri.conf.json`. To sign and notarise, add the repository secrets `APPLE_CERTIFICATE` (a base64 Developer ID Application certificate), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and `APPLE_TEAM_ID`.
 
 ## Acknowledgements
 
