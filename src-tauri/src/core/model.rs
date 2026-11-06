@@ -20,6 +20,8 @@ pub struct ProjectSummary {
     pub last_commit_at: Option<i64>,
     pub linked_trees: usize,
     pub dirty_trees: usize,
+    /// The repository on GitHub (from `origin`, else the first remote), for "Open on GitHub".
+    pub web_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

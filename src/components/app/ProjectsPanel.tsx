@@ -1,8 +1,8 @@
 import { useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { Code, Ellipsis, FolderOpen, GitBranch, PanelLeftClose, Plus, Search, SquareTerminal, X } from "lucide-react"
+import { Code, Ellipsis, ExternalLink, FolderOpen, GitBranch, PanelLeftClose, Plus, Search, SquareTerminal, X } from "lucide-react"
 import { api } from "@/lib/api"
-import { run, selectProject } from "@/lib/commands"
+import { openLink, run, selectProject } from "@/lib/commands"
 import { prefs, ui, useStore } from "@/lib/store"
 import { ago, tildify } from "@/lib/format"
 import type { Project } from "@/lib/types"
@@ -167,6 +167,7 @@ function ProjectRow({
 }) {
   const summary = useSummary(project.id)
   const s = summary.data
+  const webUrl = s?.webUrl
   const tip = [
     tildify(project.id),
     s?.missing ? t("Folder not found") : null,
@@ -222,6 +223,12 @@ function ProjectRow({
             <Code />
             {t("Open in Editor")}
           </DropdownMenuItem>
+          {webUrl && (
+            <DropdownMenuItem onSelect={() => openLink(webUrl)}>
+              <ExternalLink />
+              {t("Open on GitHub")}
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onRemove}>{t("Remove from list")}</DropdownMenuItem>
         </DropdownMenuContent>

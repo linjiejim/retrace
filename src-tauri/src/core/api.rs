@@ -97,7 +97,7 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 bail!(tr!("没有这个项目：{id}", "No such project: {id}"));
             }
             if !dir.is_dir() {
-                return Ok(json!(ProjectSummary { id, missing: true, last_commit_at: None, linked_trees: 0, dirty_trees: 0 }));
+                return Ok(json!(ProjectSummary { id, missing: true, last_commit_at: None, linked_trees: 0, dirty_trees: 0, web_url: None }));
             }
             let trees = repo::worktrees(&dir)?;
             let linked: Vec<_> = trees.iter().filter(|t| !t.is_main && !t.bare).collect();
@@ -115,7 +115,9 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                     .collect();
                 handles.into_iter().map(|h| h.join().unwrap_or(false)).filter(|d| *d).count()
             });
-            json!(ProjectSummary { id, missing: false, last_commit_at: repo::last_commit_time(&dir), linked_trees: linked.len(), dirty_trees: dirty })
+            // The trunk isn't resolved here, so this is `origin` (else the first remote): the clone's own repository.
+            let web_url = repo::web_url(&dir, None);
+            json!(ProjectSummary { id, missing: false, last_commit_at: repo::last_commit_time(&dir), linked_trees: linked.len(), dirty_trees: dirty, web_url })
         }
         "addPath" => {
             #[derive(Deserialize)]

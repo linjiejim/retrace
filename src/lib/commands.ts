@@ -8,7 +8,7 @@ import { DEFAULT_LAYOUT } from "./layout"
 import { queryClient } from "./query"
 import { prefs, selectionKey, ui, type Selection } from "./store"
 import type { Overview, Project } from "./types"
-import { invalidateProject } from "@/hooks/queries"
+import { invalidateProject, summaryQuery } from "@/hooks/queries"
 import { notify } from "@/components/ui/toast"
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -60,6 +60,20 @@ function openCurrent(how: "finder" | "terminal" | "editor") {
   api.open(projectId, path, how).catch((e) => notify.error(message(e)))
 }
 
+/** The current project's repository on GitHub. */
+async function openOnGitHub() {
+  const { projectId } = ui.get()
+  if (!projectId) return notify.info(t("Pick a project first"))
+  try {
+    // Cached data will do, even stale: refetching runs `git status` in every worktree first.
+    const { webUrl } = await queryClient.query({ ...summaryQuery(projectId), staleTime: "static" })
+    if (!webUrl) return notify.info(t("This project has no GitHub remote"))
+    openLink(webUrl)
+  } catch (e) {
+    notify.error(message(e))
+  }
+}
+
 export async function addPaths(paths: string[]) {
   const added: Project[] = []
   const candidates = []
@@ -107,6 +121,7 @@ export const commands = {
   revealInFinder: () => openCurrent("finder"),
   openInTerminal: () => openCurrent("terminal"),
   openInEditor: () => openCurrent("editor"),
+  openOnGitHub: () => void openOnGitHub(),
   find: () => keyNav.focusSearch?.(),
   toggleProjects: () => prefs.set((p) => ({ projectsCollapsed: !p.projectsCollapsed })),
   toggleDiff: () => (ui.get().diffOpen ? closeDiff() : ui.set({ diffOpen: true })),

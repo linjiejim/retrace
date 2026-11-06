@@ -12,6 +12,8 @@ export interface ProjectSummary {
   lastCommitAt: number | null
   linkedTrees: number
   dirtyTrees: number
+  /** The repository on GitHub (from `origin`, else the first remote), when it has one. */
+  webUrl: string | null
 }
 
 export interface Candidate {

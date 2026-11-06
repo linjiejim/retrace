@@ -289,6 +289,24 @@ fn worktree_reads_stay_inside_the_tree() {
 }
 
 #[test]
+fn summary_links_github_without_credentials() {
+    let f = fixture("summary");
+    call(&f, "addPath", json!({ "path": f.main }));
+    let id = f.main.to_string_lossy().to_string();
+    assert!(call(&f, "projectSummary", json!({ "id": id }))["webUrl"].is_null(), "no remote, no link");
+
+    sh(&f.main, &["remote", "add", "origin", "https://x-access-token:secret@github.com/o/r.git"]);
+    let s = call(&f, "projectSummary", json!({ "id": id }));
+    assert_eq!(s["webUrl"], "https://github.com/o/r");
+    assert!(!s.to_string().contains("secret"));
+
+    std::fs::rename(&f.main, f.main.with_file_name("moved")).unwrap();
+    let s = call(&f, "projectSummary", json!({ "id": id }));
+    assert_eq!(s["missing"], json!(true));
+    assert!(s["webUrl"].is_null());
+}
+
+#[test]
 fn repository_without_commits() {
     let base = std::env::temp_dir().join(format!("retrace-test-unborn-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);

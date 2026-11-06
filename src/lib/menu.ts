@@ -102,6 +102,7 @@ export async function installMenu(): Promise<() => void> {
           await item("revealInFinder", "Show in Finder", "CmdOrCtrl+Shift+F"),
           await item("openInTerminal", "Open in Terminal", "Control+`"),
           await item("openInEditor", "Open in Editor", "CmdOrCtrl+Shift+A"),
+          await item("openOnGitHub", "Open on GitHub"),
         ],
       }),
       await Submenu.new({
