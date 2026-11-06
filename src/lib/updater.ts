@@ -10,6 +10,7 @@ import { notify } from "@/components/ui/toast"
 /** The first automatic check waits for the app to settle; then one every few hours. */
 const FIRST_CHECK = 10_000
 const EVERY = 6 * 60 * 60 * 1000
+const READY_TOAST = "update-ready"
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -18,11 +19,27 @@ let installed: string | null = null
 let running: Promise<void> | null = null
 /** Someone asked (the menu, Settings): show every outcome, not only a finished update. */
 let asked = false
+/** The version being downloaded, and its progress toast once someone asked. */
+let downloading: string | null = null
+let progress: ReturnType<typeof notify.loading> | null = null
+
+function showProgress() {
+  if (downloading && progress === null) progress = notify.loading(t("Downloading Retrace {version}…", { version: downloading }))
+}
+
+function hideProgress() {
+  if (progress !== null) notify.dismiss(progress)
+  progress = null
+}
 
 function offerRestart(version: string) {
-  notify.prompt(t("Retrace {version} is installed. Restart to use it.", { version }), {
+  notify.prompt(READY_TOAST, t("Retrace {version} is installed. Restart to use it.", { version }), {
     label: t("Restart"),
-    onClick: () => void import("@tauri-apps/plugin-process").then((p) => p.relaunch()),
+    onClick: () => {
+      import("@tauri-apps/plugin-process")
+        .then((p) => p.relaunch())
+        .catch((e) => notify.error(t("Couldn't restart Retrace: {reason}", { reason: message(e) })))
+    },
   })
 }
 
@@ -33,11 +50,13 @@ async function update() {
     if (asked) notify.success(t("Retrace {version} is the latest version", { version: await getVersion() }))
     return
   }
-  const progress = asked ? notify.loading(t("Downloading Retrace {version}…", { version: found.version })) : undefined
+  downloading = found.version
+  if (asked) showProgress()
   try {
     await found.downloadAndInstall()
   } finally {
-    if (progress !== undefined) notify.dismiss(progress)
+    downloading = null
+    hideProgress()
   }
   installed = found.version
   offerRestart(found.version)
@@ -54,7 +73,11 @@ export function checkForUpdates(manual: boolean): Promise<void> {
     if (manual) offerRestart(installed)
     return Promise.resolve()
   }
-  if (manual) asked = true
+  if (manual) {
+    asked = true
+    // Joining an automatic check that is already downloading.
+    showProgress()
+  }
   running ??= update()
     .catch((e) => {
       if (asked) notify.error(t("Couldn't update Retrace: {reason}", { reason: message(e) }))

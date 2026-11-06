@@ -107,7 +107,7 @@ site/                    官网（retrace.linjiejim.com）：纯 HTML、CSS、JS
 
 ### 发布
 
-推一个 `v0.4.0` 这样的 tag，Release 工作流会构建两种架构，连同签好名的更新包和更新清单 `latest.json` 一起挂到一个草稿 release 上。发布草稿才算真正推送更新：已安装的 App 只读最新一个已发布 release 里的 `latest.json`。更新签名需要仓库 secret `TAURI_SIGNING_PRIVATE_KEY`，即 `pnpm tauri signer generate` 生成的无密码私钥，公钥是 `tauri.conf.json` 里的 `plugins.updater.pubkey`。私钥要另存一份：已安装的 App 只接受这把钥匙签的更新。要签名和公证，在仓库 secrets 里加 `APPLE_CERTIFICATE`（base64 的 Developer ID Application 证书）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`（App 专用密码）和 `APPLE_TEAM_ID`。
+推一个 `v0.4.0` 这样的 tag，Release 工作流会构建两种架构，连同签好名的更新包和更新清单 `latest.json` 一起挂到一个草稿 release 上。发布草稿才算真正推送更新：已安装的 App 只读最新一个已发布 release 里的 `latest.json`。更新签名需要仓库 secret `TAURI_SIGNING_PRIVATE_KEY`：`tauri.conf.json` 里 `plugins.updater.pubkey` 对应的那把私钥（无密码）。私钥要另存一份：已安装的 App 只接受这把钥匙签的更新，换钥匙就得换 `pubkey`，所有人都要手动下载一次。写 `latest.json` 之前，工作流会用这把公钥校验两个更新包，并核对 tag 和 `tauri.conf.json` 里的版本号是否一致。要签名和公证，在仓库 secrets 里加 `APPLE_CERTIFICATE`（base64 的 Developer ID Application 证书）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`（App 专用密码）和 `APPLE_TEAM_ID`。
 
 ## 致谢
 

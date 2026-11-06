@@ -16,6 +16,15 @@ jobs:
     outputs:
       id: ${{ steps.release.outputs.id }}
     steps:
+      - uses: actions/checkout@v4
+      # The bundles are signed for tauri.conf.json's version and the updater announces the tag's:
+      # installed copies refuse an update whose two versions differ, so stop before building one.
+      - name: Tag matches the app version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(jq -r .version src-tauri/tauri.conf.json)
+          [ "$version" = "${TAG#v}" ] || { echo "::error::Tag $TAG, but tauri.conf.json says $version"; exit 1; }
       - id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -100,19 +109,31 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq minisign
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          version="${TAG#v}"
           dir=$(mktemp -d)
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.app.tar.gz.sig' --dir "$dir"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' --dir "$dir"
+          # Check each bundle the way installed copies will: against the public key in tauri.conf.json
+          # (a secret that doesn't match it only warns at build time) and signed for this version.
+          jq -r .plugins.updater.pubkey src-tauri/tauri.conf.json | base64 -d > "$dir/key.pub"
+          for arch in aarch64 x64; do
+            base64 -d < "$dir/Retrace_$arch.app.tar.gz.sig" > "$dir/$arch.minisig"
+            comment=$(minisign -V -Q -p "$dir/key.pub" -m "$dir/Retrace_$arch.app.tar.gz" -x "$dir/$arch.minisig")
+            printf '%s\n' "$comment" | tr '\t' '\n' | grep -x "version:$version" >/dev/null \
+              || { echo "::error::Retrace_$arch.app.tar.gz is signed as \"$comment\", not for $version"; exit 1; }
+          done
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
           platform() {
             jq -n --rawfile sig "$dir/Retrace_$1.app.tar.gz.sig" --arg url "$base/Retrace_$1.app.tar.gz" \
               '{signature: ($sig | rtrimstr("\n")), url: $url}'
           }
-          jq -n --arg version "${TAG#v}" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          jq -n --arg version "$version" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --argjson arm "$(platform aarch64)" --argjson intel "$(platform x64)" \
             '{version: $version, pub_date: $date, platforms: {"darwin-aarch64": $arm, "darwin-x86_64": $intel}}' \
             > "$dir/latest.json"

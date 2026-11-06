@@ -71,8 +71,9 @@ export const notify = Object.assign((message: React.ReactNode) => toast(message,
       closeButton: true,
       action: opts?.retry ? { label: s().retry, onClick: opts.retry } : undefined,
     }),
-  prompt: (message: React.ReactNode, action: { label: string; onClick: () => void }) =>
-    toast(message, { duration: Infinity, closeButton: true, action }),
+  /** `id` keeps one toast per thing waiting: showing it again replaces it. */
+  prompt: (id: Id, message: React.ReactNode, action: { label: string; onClick: () => void }) =>
+    toast(message, { id, duration: Infinity, closeButton: true, action }),
   loading: (message: React.ReactNode): Id => toast.loading(message, { duration: Infinity }),
   dismiss: (id?: Id) => toast.dismiss(id),
 })
