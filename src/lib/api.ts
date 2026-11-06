@@ -3,6 +3,7 @@
 
 import type {
   AddResult,
+  BranchStatus,
   CleanupCandidate,
   PatchText,
   RemoveOutcome,
@@ -71,6 +72,12 @@ export const api = {
   /** `acknowledgedIgnored`: irreplaceable ignored files shown when confirming; a new one stops the removal. */
   removeWorktree: (id: string, path: string, head: string, acknowledgedIgnored: string[], deleteBranch: boolean) =>
     call<RemoveOutcome>("removeWorktree", { id, path, head, acknowledgedIgnored, deleteBranch }),
+  branchStatuses: (id: string) => call<BranchStatus[]>("branchStatuses", { id }),
+  /** Deleted only while the branch still points at `tip`, after every check runs again. */
+  deleteBranch: (id: string, name: string, tip: string) => call<null>("deleteBranch", { id, name, tip }),
+  /** Undo: brings back a branch deleted in this session, at the same commit. */
+  restoreBranch: (id: string, name: string) => call<null>("restoreBranch", { id, name }),
+  keepBranch: (id: string, name: string, keep: boolean) => call<null>("keepBranch", { id, name, keep }),
   commit: (id: string, hash: string) => call<CommitDetail>("commit", { id, hash }),
   changes: (id: string, target: Target) => call<FileChange[]>("changes", { id, target }),
   filePair: (id: string, target: Target, path: string, oldPath: string | null) =>

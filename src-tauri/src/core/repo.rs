@@ -119,6 +119,8 @@ pub struct RefEntry {
     pub target: String,
     pub upstream: Option<String>,
     pub symref: Option<String>,
+    /// Committer date of the commit it points at (Unix seconds).
+    pub committed_at: Option<i64>,
 }
 
 pub fn refs(dir: &Path) -> Result<Vec<RefEntry>> {
@@ -126,7 +128,7 @@ pub fn refs(dir: &Path) -> Result<Vec<RefEntry>> {
         dir,
         &[
             "for-each-ref",
-            "--format=%(objectname)%00%(*objectname)%00%(refname)%00%(symref)%00%(upstream)",
+            "--format=%(objectname)%00%(*objectname)%00%(refname)%00%(symref)%00%(upstream)%00%(committerdate:unix)",
             "refs/heads",
             "refs/remotes",
             "refs/tags",
@@ -136,7 +138,7 @@ pub fn refs(dir: &Path) -> Result<Vec<RefEntry>> {
         .lines()
         .filter_map(|line| {
             let f: Vec<&str> = line.split('\0').collect();
-            if f.len() < 5 {
+            if f.len() < 6 {
                 return None;
             }
             let target = if f[1].is_empty() { f[0] } else { f[1] };
@@ -145,6 +147,7 @@ pub fn refs(dir: &Path) -> Result<Vec<RefEntry>> {
                 target: target.to_string(),
                 symref: (!f[3].is_empty()).then(|| f[3].to_string()),
                 upstream: (!f[4].is_empty()).then(|| f[4].to_string()),
+                committed_at: f[5].parse().ok(),
             })
         })
         .collect())
@@ -350,6 +353,40 @@ pub fn content_merged(dir: &Path, base: &str, tip: &str) -> bool {
     !merged.is_empty() && merged == base_tree.trim()
 }
 
+/// Squash merges `content_merged` misses because the trunk later changed the same lines: the
+/// branch's whole change has the same patch-id as one trunk commit since the merge base. Diffs are
+/// taken with no context lines, so later edits next to the change don't matter either. Read-only.
+pub fn patch_merged(dir: &Path, base: &str, tip: &str) -> bool {
+    /// A branch touching more files than this is not worth the scan (and the argument list).
+    const MAX_PATHS: usize = 500;
+    const MAX_LOG: usize = 64 * 1024 * 1024;
+    let opts = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "-U0"];
+    let Ok(mb) = git::text(dir, &["merge-base", base, tip]) else { return false };
+    let mb = mb.trim();
+    let Ok(names) = git::run(dir, &["diff", "--name-only", "-z", "--no-renames", mb, tip]) else { return false };
+    let paths: Vec<String> = git::nul_tokens(&names).into_iter().map(|p| format!(":(literal){p}")).collect();
+    if paths.is_empty() || paths.len() > MAX_PATHS {
+        return false;
+    }
+    let patch_id = |input: Vec<u8>| git::run_with_input(dir, &["patch-id", "--stable"], input).map(|out| String::from_utf8_lossy(&out).into_owned());
+    let mut args = vec!["diff"];
+    args.extend(opts);
+    args.extend([mb, tip]);
+    let Ok(own) = git::run(dir, &args).and_then(patch_id) else { return false };
+    let Some(own) = own.split_whitespace().next().map(str::to_string) else { return false };
+
+    let range = format!("{mb}..{base}");
+    let mut args = vec!["log", "--no-merges", "--format=commit %H", "-p"];
+    args.extend(opts);
+    args.extend([range.as_str(), "--"]);
+    args.extend(paths.iter().map(String::as_str));
+    let Ok((log, cut)) = git::run_limited(dir, &args, MAX_LOG) else { return false };
+    if cut || log.is_empty() {
+        return false;
+    }
+    patch_id(log).is_ok_and(|ids| ids.lines().any(|l| l.split_whitespace().next() == Some(own.as_str())))
+}
+
 /// Keyed by every input of the answer: branch tip and all trunk tips (local and remote).
 pub type IntegrationCache = std::sync::Mutex<HashMap<String, TrunkCompare>>;
 
@@ -378,7 +415,7 @@ pub fn compare_with_trunk(dir: &Path, trunk: &Trunk, tip: &str, cache: &Integrat
         }
         if bases.iter().skip(1).any(|b| is_ancestor(dir, tip, b)) {
             Integration::Ancestor
-        } else if bases.iter().any(|b| content_merged(dir, b, tip)) {
+        } else if bases.iter().any(|b| content_merged(dir, b, tip)) || bases.iter().any(|b| patch_merged(dir, b, tip)) {
             Integration::Squash
         } else {
             Integration::None

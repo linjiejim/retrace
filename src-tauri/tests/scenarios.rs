@@ -448,8 +448,8 @@ fn cleanup_lists_merged_clean_trees_and_removes_them_safely() {
 
     let out = call(&f, "removeWorktree", json!({ "id": id, "path": squash["path"], "head": squash["head"], "deleteBranch": true }));
     assert!(!f.wt_squash.exists());
-    assert_eq!(out["branchDeleted"], json!(false), "squash-merged branches are kept");
-    assert!(sh(&f.main, &["branch", "--list", "feat/squash"]).contains("feat/squash"));
+    assert_eq!(out["branchDeleted"], json!(true), "squash-merged branches go too: `git branch -d` would refuse them");
+    assert!(sh(&f.main, &["branch", "--list", "feat/squash"]).is_empty());
 
     // .env was listed; a second irreplaceable file appearing after the listing stops the removal.
     write(&wt_merged, ".env.local", "LATE=1\n");
@@ -468,6 +468,72 @@ fn cleanup_lists_merged_clean_trees_and_removes_them_safely() {
     let main_head = sh(&f.main, &["rev-parse", "HEAD"]);
     assert!(dispatch(&f.state, "removeWorktree", json!({ "id": id, "path": id, "head": main_head, "deleteBranch": false })).is_err());
     assert!(f.main.exists());
+}
+
+#[test]
+fn branches_without_a_worktree_are_judged_and_deleted_safely() {
+    let f = fixture("branch-cleanup");
+    call(&f, "addPath", json!({ "path": f.main }));
+    let id = f.main.to_string_lossy().to_string();
+    // Squash-merged, then the trunk changed the same lines: only the patch-id check sees it's in.
+    sh(&f.main, &["switch", "-q", "-c", "feat/stale"]);
+    commit(&f.main, "src/stale.rs", "a\nb\n", "stale 1");
+    let stale_tip = commit(&f.main, "src/stale.rs", "a\nb\nc\n", "stale 2");
+    sh(&f.main, &["switch", "-q", "main"]);
+    sh(&f.main, &["merge", "-q", "--squash", "feat/stale"]);
+    sh(&f.main, &["commit", "-q", "-m", "feat: stale (#3)"]);
+    commit(&f.main, "src/stale.rs", "a\nB\nc\n", "later edit");
+    sh(&f.main, &["config", "branch.feat/stale.remote", "origin"]);
+    // Still being worked on, a long-lived name, and one that never had a commit.
+    sh(&f.main, &["switch", "-q", "-c", "feat/unmerged"]);
+    commit(&f.main, "src/unmerged.rs", "u\n", "unmerged");
+    sh(&f.main, &["switch", "-q", "main"]);
+    sh(&f.main, &["branch", "develop", "main~1"]);
+    sh(&f.main, &["branch", "feat/empty"]);
+
+    let list = call(&f, "branchStatuses", json!({ "id": id }));
+    let get = |list: &Value, name: &str| list.as_array().unwrap().iter().find(|b| b["name"] == name).cloned();
+    let mut names: Vec<&str> = list.as_array().unwrap().iter().map(|b| b["name"].as_str().unwrap()).collect();
+    names.sort();
+    assert_eq!(names, vec!["develop", "feat/empty", "feat/merged", "feat/stale", "feat/unmerged"], "no trunk, no checked-out branches");
+    let merged = get(&list, "feat/merged").unwrap();
+    assert_eq!((merged["integration"].as_str(), merged["ahead"].as_u64(), merged["neverCommitted"].as_bool()), (Some("ancestor"), Some(0), Some(false)));
+    assert_eq!(get(&list, "feat/stale").unwrap()["integration"], "squash");
+    let unmerged = get(&list, "feat/unmerged").unwrap();
+    assert_eq!((unmerged["integration"].as_str(), unmerged["ahead"].as_u64()), (Some("none"), Some(1)));
+    assert_eq!(get(&list, "develop").unwrap()["protected"], json!(true));
+    let empty = get(&list, "feat/empty").unwrap();
+    assert_eq!((empty["neverCommitted"].as_bool(), empty["recent"].as_bool()), (Some(true), Some(true)));
+
+    // Every guard is checked again on delete; nothing is deleted when one fails.
+    let delete = |name: &str, tip: &str| dispatch(&f.state, "deleteBranch", json!({ "id": id, "name": name, "tip": tip }));
+    let tip_of = |name: &str| sh(&f.main, &["rev-parse", name]);
+    let err = delete("feat/unmerged", &tip_of("feat/unmerged")).unwrap_err();
+    assert!(format!("{err:#}").contains("合并"), "{err:#}");
+    assert!(delete("develop", &tip_of("develop")).is_err());
+    assert!(delete("main", &tip_of("main")).is_err());
+    assert!(delete("feat/squash", &tip_of("feat/squash")).is_err(), "checked out in a worktree");
+    assert!(delete("feat/merged", &tip_of("main")).is_err(), "the tip moved since it was listed");
+    assert!(delete("--force", &tip_of("main")).is_err());
+    for b in ["feat/unmerged", "develop", "main", "feat/squash", "feat/merged"] {
+        assert!(!sh(&f.main, &["branch", "--list", b]).is_empty(), "{b} survived");
+    }
+
+    // Kept by the user: listed as kept, refused on delete until it's released.
+    call(&f, "keepBranch", json!({ "id": id, "name": "feat/merged", "keep": true }));
+    assert_eq!(get(&call(&f, "branchStatuses", json!({ "id": id })), "feat/merged").unwrap()["kept"], json!(true));
+    assert!(delete("feat/merged", &tip_of("feat/merged")).is_err());
+    call(&f, "keepBranch", json!({ "id": id, "name": "feat/merged", "keep": false }));
+    delete("feat/merged", &tip_of("feat/merged")).unwrap();
+
+    // Squash-merged: deleted with its settings, and Undo brings it back at the same commit.
+    delete("feat/stale", &stale_tip).unwrap();
+    assert!(sh(&f.main, &["branch", "--list", "feat/merged", "feat/stale"]).is_empty());
+    assert!(!sh(&f.main, &["config", "--list"]).contains("branch.feat/stale."));
+    call(&f, "restoreBranch", json!({ "id": id, "name": "feat/stale" }));
+    assert_eq!(tip_of("feat/stale"), stale_tip);
+    assert!(dispatch(&f.state, "restoreBranch", json!({ "id": id, "name": "feat/stale" })).is_err(), "restored once");
+    assert!(dispatch(&f.state, "restoreBranch", json!({ "id": id, "name": "feat/new" })).is_err(), "never deleted here");
 }
 
 /// 2500 commits with a merged side branch every 100: big enough that history is read from git in

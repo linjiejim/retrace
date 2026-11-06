@@ -217,6 +217,28 @@ pub struct CleanupCandidate {
     pub recent: bool,
 }
 
+/// A local branch no worktree has checked out, judged against the trunk.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchStatus {
+    pub name: String,
+    pub tip: String,
+    /// Commits the trunk doesn't have.
+    pub ahead: u32,
+    pub integration: Integration,
+    pub last_commit_at: Option<i64>,
+    /// It tracked a remote branch that has since been deleted (`[gone]`).
+    pub upstream_gone: bool,
+    /// Its reflog only records its creation: it never had commits of its own.
+    pub never_committed: bool,
+    /// Created or moved in the last 15 minutes.
+    pub recent: bool,
+    /// A long-lived name (`develop`, `release/*`…): never offered for deletion.
+    pub protected: bool,
+    /// The user chose to keep it.
+    pub kept: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoveOutcome {

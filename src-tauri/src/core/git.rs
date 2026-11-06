@@ -204,6 +204,29 @@ pub fn run_limited(dir: &Path, args: &[&str], max: usize) -> Result<(Vec<u8>, bo
     Ok((out, cut))
 }
 
+/// `run` with `input` on stdin (`patch-id`). The input is written from its own thread, so a
+/// process that answers while it reads can't fill its output pipe and stall us both.
+pub fn run_with_input(dir: &Path, args: &[&str], input: Vec<u8>) -> Result<Vec<u8>> {
+    use std::io::Write;
+    let _pass = PROCESSES.enter();
+    let mut child = command(dir, args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| tr!("无法运行 git（{}）", "Can't run git ({})", binary().display()))?;
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&input);
+    });
+    let out = child.wait_with_output()?;
+    let _ = writer.join();
+    if !out.status.success() {
+        bail!(failure(args, &out));
+    }
+    Ok(out.stdout)
+}
+
 /// Long-running network calls (fetch) get a hard timeout so a stuck remote can't pile up processes.
 pub fn run_with_timeout(dir: &Path, args: &[&str], timeout: Duration) -> Result<()> {
     let _pass = PROCESSES.enter();
