@@ -1,25 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <!-- Retrace app icon source. Regenerate: rsvg-convert -w 1024 -h 1024 icons/source.svg -o /tmp/icon.png && pnpm tauri icon /tmp/icon.png -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5b67e6" />
-      <stop offset="1" stop-color="#3a44b8" />
-    </linearGradient>
     <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
-      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity="0.25" />
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity="0.22" />
     </filter>
   </defs>
-  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#shadow)" />
-  <g fill="none" stroke="#ffffff" stroke-width="44" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#141414" filter="url(#shadow)" />
+  <!-- An R drawn as a commit graph. Branches in the dark-theme accent, the integration branch in white. -->
+  <g fill="none" stroke-width="52" stroke-linecap="round" stroke-linejoin="round">
+    <!-- the bowl: a branch that left and merged back -->
+    <path d="M380 270 H540 A121 121 0 0 1 540 512 H380" stroke="#8f98ff" />
+    <!-- the leg: a branch still in progress -->
+    <path d="M380 512 L640 754" stroke="#8f98ff" />
     <!-- the integration branch, pinned left -->
-    <path d="M380 250 V774" />
-    <!-- a branch that leaves and comes back -->
-    <path d="M380 690 C380 610 640 640 640 540 V420 C640 330 380 360 380 300" stroke-opacity="0.72" />
+    <path d="M380 270 V754" stroke="#ffffff" />
   </g>
   <g fill="#ffffff">
-    <circle cx="380" cy="250" r="50" />
+    <circle cx="380" cy="270" r="50" />
     <circle cx="380" cy="512" r="50" />
-    <circle cx="380" cy="774" r="50" />
-    <circle cx="640" cy="480" r="42" fill="#3a44b8" stroke="#ffffff" stroke-width="30" />
+    <circle cx="380" cy="754" r="50" />
   </g>
+  <circle cx="640" cy="754" r="50" fill="#8f98ff" />
 </svg>
