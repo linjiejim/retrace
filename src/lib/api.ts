@@ -12,6 +12,7 @@ import type {
   FileContent,
   FileList,
   FilePair,
+  Group,
   HistoryPage,
   Overview,
   Prefs,
@@ -51,6 +52,14 @@ export const api = {
   addPath: (path: string) => call<AddResult>("addPath", { path }),
   addProjects: (paths: string[]) => call<Project[]>("addProjects", { paths }),
   removeProject: (id: string) => call<null>("removeProject", { id }),
+  listGroups: () => call<Group[]>("listGroups"),
+  /** `index`: position among the groups (the end when absent). */
+  createGroup: (name: string, projects: string[] = [], index?: number) => call<Group>("createGroup", { name, projects, index }),
+  renameGroup: (id: string, name: string) => call<null>("renameGroup", { id, name }),
+  /** Its projects stay in the list, ungrouped. */
+  deleteGroup: (id: string) => call<null>("deleteGroup", { id }),
+  reorderGroups: (ids: string[]) => call<null>("reorderGroups", { ids }),
+  setProjectGroup: (ids: string[], group: string | null) => call<null>("setProjectGroup", { ids, group }),
   setTrunk: (id: string, branch: string | null) => call<null>("setTrunk", { id, branch }),
   overview: (id: string) => call<Overview>("overview", { id }),
   treeStatuses: (id: string) => call<TreeStatus[]>("treeStatuses", { id }),
@@ -68,7 +77,8 @@ export const api = {
     /** Only this file's history. */
     path?: string | null
   }) => call<HistoryPage>("history", a),
-  reorderProjects: (ids: string[]) => call<null>("reorderProjects", { ids }),
+  /** `moved`: a project dragged into or out of a group, saved with the new order. */
+  reorderProjects: (ids: string[], moved?: { id: string; group: string | null }) => call<null>("reorderProjects", { ids, moved }),
   patch: (id: string, target: Target) => call<PatchText>("patch", { id, target }),
   cleanupCandidates: (id: string) => call<CleanupCandidate[]>("cleanupCandidates", { id }),
   /** `acknowledgedIgnored`: irreplaceable ignored files shown when confirming; a new one stops the removal. */

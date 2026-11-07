@@ -80,6 +80,8 @@ export interface Prefs {
   remoteBranches: boolean
   /** Look for a new release at launch and every few hours, and install it. */
   autoUpdate: boolean
+  /** Groups folded in the projects list. */
+  collapsedGroups: string[]
 }
 
 // v2: the layout became a tree and diff lines stopped wrapping by default.
@@ -100,6 +102,7 @@ const defaults: Prefs = {
   otherBranches: false,
   remoteBranches: false,
   autoUpdate: true,
+  collapsedGroups: [],
 }
 
 function loadPrefs(): Prefs {

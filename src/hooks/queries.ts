@@ -7,6 +7,8 @@ export const targetKey = (t: Target | null) =>
 
 export const useProjects = () => useQuery({ queryKey: ["projects"], queryFn: api.listProjects, staleTime: Infinity })
 
+export const useGroups = () => useQuery({ queryKey: ["groups"], queryFn: api.listGroups, staleTime: Infinity })
+
 export const summaryQuery = (id: string) => ({ queryKey: ["summary", id], queryFn: () => api.projectSummary(id), staleTime: 60_000 })
 
 export const useSummary = (id: string) => useQuery(summaryQuery(id))

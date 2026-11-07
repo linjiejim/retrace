@@ -4,6 +4,14 @@ export interface Project {
   id: string
   name: string
   trunkOverride: string | null
+  /** The group it's listed under; null, or an id no longer in the groups, means ungrouped. */
+  group: string | null
+}
+
+/** A folder in the projects list. */
+export interface Group {
+  id: string
+  name: string
 }
 
 export interface ProjectSummary {

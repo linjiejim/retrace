@@ -10,6 +10,14 @@ pub struct Project {
     pub id: String,
     pub name: String,
     pub trunk_override: Option<String>,
+    pub group: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Group {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

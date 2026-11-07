@@ -2,7 +2,7 @@
 //! dev bridge both forward here, so the command table exists once.
 
 use crate::tr;
-use super::config::{self, Prefs, ProjectEntry};
+use super::config::{self, GroupEntry, Prefs, ProjectEntry};
 use super::model::*;
 use super::{cleanup, diff, files, git, history, repo, State};
 use anyhow::{anyhow, bail, Context, Result};
@@ -64,7 +64,32 @@ fn save(state: &State) -> Result<()> {
 }
 
 fn project_of(entry: &ProjectEntry) -> Project {
-    Project { id: entry.path.clone(), name: repo::display_name(Path::new(&entry.path)), trunk_override: entry.trunk.clone() }
+    Project { id: entry.path.clone(), name: repo::display_name(Path::new(&entry.path)), trunk_override: entry.trunk.clone(), group: entry.group.clone() }
+}
+
+fn group_of(entry: &GroupEntry) -> Group {
+    Group { id: entry.id.clone(), name: entry.name.clone() }
+}
+
+fn group_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        bail!(tr!("分组名不能为空", "A group needs a name"));
+    }
+    Ok(name.chars().take(80).collect())
+}
+
+/// A fresh group id: unique in this config, stable once saved.
+fn new_group_id(groups: &[GroupEntry]) -> String {
+    let base = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let mut n = 0u32;
+    loop {
+        let id = format!("g{base:x}{}", if n == 0 { String::new() } else { format!("-{n}") });
+        if !groups.iter().any(|g| g.id == id) {
+            return id;
+        }
+        n += 1;
+    }
 }
 
 fn add_roots(state: &State, roots: Vec<PathBuf>) -> Result<Vec<Project>> {
@@ -146,6 +171,98 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let A { paths } = args(a)?;
             let roots = paths.iter().filter_map(|p| repo::project_root(Path::new(p)).ok()).collect();
             json!(add_roots(state, roots)?)
+        }
+        "listGroups" => {
+            let cfg = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+            json!(cfg.groups.iter().map(group_of).collect::<Vec<_>>())
+        }
+        "createGroup" => {
+            #[derive(Deserialize)]
+            struct A {
+                name: String,
+                #[serde(default)]
+                projects: Vec<String>,
+                /// Where to put it among the groups; the end when absent.
+                index: Option<usize>,
+            }
+            let A { name, projects, index } = args(a)?;
+            let name = group_name(&name)?;
+            let group = {
+                let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+                let entry = GroupEntry { id: new_group_id(&cfg.groups), name };
+                let at = index.unwrap_or(usize::MAX).min(cfg.groups.len());
+                cfg.groups.insert(at, entry.clone());
+                for p in cfg.projects.iter_mut().filter(|p| projects.contains(&p.path)) {
+                    p.group = Some(entry.id.clone());
+                }
+                entry
+            };
+            save(state)?;
+            json!(group_of(&group))
+        }
+        "renameGroup" => {
+            #[derive(Deserialize)]
+            struct A {
+                id: String,
+                name: String,
+            }
+            let A { id, name } = args(a)?;
+            let name = group_name(&name)?;
+            {
+                let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+                let g = cfg.groups.iter_mut().find(|g| g.id == id).ok_or_else(|| anyhow!(tr!("没有这个分组", "No such group")))?;
+                g.name = name;
+            }
+            save(state)?;
+            Value::Null
+        }
+        "deleteGroup" => {
+            // The projects stay in the list, ungrouped.
+            let Id { id } = args(a)?;
+            {
+                let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+                cfg.groups.retain(|g| g.id != id);
+                for p in cfg.projects.iter_mut().filter(|p| p.group.as_deref() == Some(id.as_str())) {
+                    p.group = None;
+                }
+            }
+            save(state)?;
+            Value::Null
+        }
+        "reorderGroups" => {
+            #[derive(Deserialize)]
+            struct A {
+                ids: Vec<String>,
+            }
+            let A { ids } = args(a)?;
+            {
+                let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+                let rank = |g: &str| ids.iter().position(|i| i == g).unwrap_or(usize::MAX);
+                cfg.groups.sort_by_key(|g| rank(&g.id));
+            }
+            save(state)?;
+            Value::Null
+        }
+        "setProjectGroup" => {
+            #[derive(Deserialize)]
+            struct A {
+                ids: Vec<String>,
+                group: Option<String>,
+            }
+            let A { ids, group } = args(a)?;
+            {
+                let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+                if let Some(g) = &group {
+                    if !cfg.groups.iter().any(|x| &x.id == g) {
+                        bail!(tr!("没有这个分组", "No such group"));
+                    }
+                }
+                for p in cfg.projects.iter_mut().filter(|p| ids.contains(&p.path)) {
+                    p.group = group.clone();
+                }
+            }
+            save(state)?;
+            Value::Null
         }
         "removeProject" => {
             let Id { id } = args(a)?;
@@ -344,14 +461,27 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
         }
         "reorderProjects" => {
             #[derive(Deserialize)]
+            struct Moved {
+                id: String,
+                group: Option<String>,
+            }
+            #[derive(Deserialize)]
             struct A {
                 ids: Vec<String>,
+                /// A project dragged into (or out of) a group along with the new order.
+                moved: Option<Moved>,
             }
-            let A { ids } = args(a)?;
+            let A { ids, moved } = args(a)?;
             {
                 let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
                 let rank = |p: &str| ids.iter().position(|i| i == p).unwrap_or(usize::MAX);
                 cfg.projects.sort_by_key(|p| rank(&p.path));
+                if let Some(Moved { id, group }) = moved {
+                    let group = group.filter(|g| cfg.groups.iter().any(|x| &x.id == g));
+                    if let Some(p) = cfg.projects.iter_mut().find(|p| p.path == id) {
+                        p.group = group;
+                    }
+                }
             }
             save(state)?;
             Value::Null

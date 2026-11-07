@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { DropdownMenu as MenuPrimitive } from "radix-ui"
-import { Check } from "lucide-react"
+import { Check, ChevronRight } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 /*
@@ -13,6 +13,7 @@ export const DropdownMenu = MenuPrimitive.Root
 export const DropdownMenuTrigger = MenuPrimitive.Trigger
 export const DropdownMenuGroup = MenuPrimitive.Group
 export const DropdownMenuRadioGroup = MenuPrimitive.RadioGroup
+export const DropdownMenuSub = MenuPrimitive.Sub
 
 export function DropdownMenuContent({ className, align = "end", sideOffset = 4, ...props }: React.ComponentProps<typeof MenuPrimitive.Content>) {
   return (
@@ -72,4 +73,29 @@ export function DropdownMenuSeparator({ className, ...props }: React.ComponentPr
 
 export function DropdownMenuShortcut({ className, ...props }: React.ComponentProps<"span">) {
   return <span className={cn("ml-auto pl-4 text-caption text-faint-foreground", className)} {...props} />
+}
+
+export function DropdownMenuSubTrigger({ className, children, ...props }: React.ComponentProps<typeof MenuPrimitive.SubTrigger>) {
+  return (
+    <MenuPrimitive.SubTrigger className={cn(itemClass, "data-[state=open]:bg-accent", className)} {...props}>
+      {children}
+      <ChevronRight className="ml-auto" />
+    </MenuPrimitive.SubTrigger>
+  )
+}
+
+export function DropdownMenuSubContent({ className, ...props }: React.ComponentProps<typeof MenuPrimitive.SubContent>) {
+  return (
+    <MenuPrimitive.Portal>
+      <MenuPrimitive.SubContent
+        collisionPadding={8}
+        className={cn(
+          "z-50 min-w-44 max-w-72 overflow-hidden rounded-lg bg-popover p-1 shadow-popover outline-none",
+          "data-[state=open]:animate-drop-in data-[state=closed]:animate-drop-out",
+          className,
+        )}
+        {...props}
+      />
+    </MenuPrimitive.Portal>
+  )
 }

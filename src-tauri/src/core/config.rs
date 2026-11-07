@@ -8,7 +8,16 @@ use std::path::PathBuf;
 #[serde(rename_all = "camelCase", default)]
 pub struct Config {
     pub projects: Vec<ProjectEntry>,
+    /// Folders in the projects list, in display order.
+    pub groups: Vec<GroupEntry>,
     pub prefs: Prefs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GroupEntry {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -18,6 +27,8 @@ pub struct ProjectEntry {
     pub trunk: Option<String>,
     /// Merged branches the user keeps: never offered for deletion.
     pub kept_branches: Vec<String>,
+    /// The group (`GroupEntry::id`) the project is listed under; none = ungrouped.
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -774,3 +774,42 @@ fn file_history_lists_only_commits_that_touch_the_file() {
     assert!(ids(&magic).is_empty());
     assert!(dispatch(&f.state, "history", json!({ "id": id, "trunkTip": trunk, "tip": trunk, "path": "../x" })).is_err());
 }
+
+#[test]
+fn groups_hold_projects_and_survive_reordering() {
+    let f = fixture("groups");
+    let other = f.main.parent().unwrap().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    sh(&other, &["init", "-q", "-b", "main"]);
+    commit(&other, "a.txt", "a\n", "init");
+    call(&f, "addPath", json!({ "path": f.main }));
+    call(&f, "addPath", json!({ "path": other }));
+    let a = f.main.to_string_lossy().to_string();
+    let b = other.to_string_lossy().to_string();
+
+    let g = call(&f, "createGroup", json!({ "name": "  Work  ", "projects": [b] }));
+    assert_eq!(g["name"], "Work", "names are trimmed");
+    let gid = g["id"].as_str().unwrap().to_string();
+    let group_of = |id: &str| call(&f, "listProjects", json!({})).as_array().unwrap().iter().find(|p| p["id"] == id).unwrap()["group"].clone();
+    assert_eq!(group_of(&b), json!(gid));
+    assert!(group_of(&a).is_null());
+
+    assert!(dispatch(&f.state, "renameGroup", json!({ "id": gid, "name": "   " })).is_err());
+    call(&f, "renameGroup", json!({ "id": gid, "name": "Clients" }));
+    let g2 = call(&f, "createGroup", json!({ "name": "First", "index": 0 }));
+    let names: Vec<String> = call(&f, "listGroups", json!({})).as_array().unwrap().iter().map(|g| g["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names, vec!["First", "Clients"]);
+
+    // Dragging a project into a group reorders and regroups it at once.
+    call(&f, "reorderProjects", json!({ "ids": [b, a], "moved": { "id": a, "group": g2["id"] } }));
+    let list = call(&f, "listProjects", json!({}));
+    assert_eq!(list[0]["id"], json!(b));
+    assert_eq!(list[1]["group"], g2["id"]);
+    assert!(dispatch(&f.state, "setProjectGroup", json!({ "ids": [a], "group": "nope" })).is_err());
+
+    // Deleting a group keeps its projects, ungrouped.
+    call(&f, "deleteGroup", json!({ "id": gid }));
+    assert!(group_of(&b).is_null());
+    assert_eq!(call(&f, "listProjects", json!({})).as_array().unwrap().len(), 2);
+    assert_eq!(call(&f, "listGroups", json!({})).as_array().unwrap().len(), 1);
+}
