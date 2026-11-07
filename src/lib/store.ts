@@ -57,6 +57,12 @@ export interface UiState {
   adding: AddState | null
   /** A fetch from the remote is running. */
   fetching: boolean
+  /** The agent session shown in the Agent view. */
+  agentSession: string | null
+  /** The agent drawer is open. */
+  agentOpen: boolean
+  /** The new-session dialog, for this project. */
+  newAgent: { projectId: string } | null
 }
 
 export interface Prefs {
@@ -84,6 +90,12 @@ export interface Prefs {
   collapsedGroups: string[]
   /** Icons in the changes and files lists. */
   fileIcons: FileIconTheme
+  /** The agent picked last in the new-session dialog. */
+  lastAgent: string | null
+  /** The message box under the agent terminal. */
+  agentInput: boolean
+  /** Width of the agent drawer in px, once dragged; null = min(60vw, 960). */
+  agentWidth: number | null
 }
 
 export type FileIconTheme = "minimal" | "outline" | "color" | "letters"
@@ -108,6 +120,9 @@ const defaults: Prefs = {
   autoUpdate: true,
   collapsedGroups: [],
   fileIcons: "color",
+  lastAgent: null,
+  agentInput: true,
+  agentWidth: null,
 }
 
 function loadPrefs(): Prefs {
@@ -142,6 +157,9 @@ export const ui = createStore<UiState>({
   settingsOpen: false,
   adding: null,
   fetching: false,
+  agentSession: null,
+  agentOpen: false,
+  newAgent: null,
 })
 ui.subscribe(() => {
   const id = ui.get().projectId

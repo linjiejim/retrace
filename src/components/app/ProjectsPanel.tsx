@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { ArrowDown, ArrowUp, Check, ChevronRight, Code, Ellipsis, ExternalLink, FolderInput, FolderMinus, FolderOpen, FolderPlus, GitBranch, PanelLeftClose, Pencil, Plus, Search, SquareTerminal, Trash2, X } from "lucide-react"
+import { ArrowDown, ArrowUp, Bot, Check, ChevronRight, CircleDot, Code, Ellipsis, ExternalLink, FolderInput, FolderMinus, FolderOpen, FolderPlus, GitBranch, PanelLeftClose, Pencil, Plus, Search, SquareTerminal, Trash2, X } from "lucide-react"
 import { api } from "@/lib/api"
 import { openLink, run, selectProject } from "@/lib/commands"
-import { buildRows, dropTarget, moveProject, sections, type DropTarget, type Row } from "@/lib/groups"
+import { buildRows, dropTarget, moveProject, projectRows, sections, sessionsByProject, snapGap, type DropTarget, type Row } from "@/lib/groups"
+import { agentState } from "@/lib/agent-state"
 import { prefs, ui, useStore } from "@/lib/store"
 import { ago, tildify } from "@/lib/format"
 import type { Group, Project } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { t, tp } from "@/lib/i18n"
 import { useGroups, useProjects, useSummary } from "@/hooks/queries"
+import { useAgentKinds, useAgentSessions, useInstalledAgents, useNow } from "@/hooks/agents"
+import { AgentSessionRow } from "./AgentSessionRow"
 import { useDelayedFlag } from "@/hooks/use-delayed-flag"
 import { Button, IconButton } from "@/components/ui/button"
 import { Tooltip } from "@/components/ui/tooltip"
@@ -69,13 +72,27 @@ export function ProjectsPanel() {
   const list = useRef<HTMLUListElement>(null)
   const showSkeleton = useDelayedFlag(projects.isLoading)
   const all = useMemo(() => projects.data ?? [], [projects.data])
+  const sessionList = useAgentSessions().data
+  const sessions = useMemo(() => sessionsByProject(sessionList), [sessionList])
+  const kinds = useAgentKinds().data
+  const canStartAgents = useInstalledAgents().length > 0
+  const now = useNow(!!sessionList?.some((x) => x.running))
   const rows: Row[] = useMemo(() => {
     if (filter) {
       const q = filter.toLowerCase()
-      return all.filter((p) => p.name.toLowerCase().includes(q)).map((project) => ({ kind: "project", project, group: null }))
+      return all.filter((p) => p.name.toLowerCase().includes(q)).flatMap((project) => projectRows(project, null, sessions))
     }
-    return buildRows(all, groups, collapsed)
-  }, [all, groups, collapsed, filter])
+    return buildRows(all, groups, collapsed, sessions)
+  }, [all, groups, collapsed, filter, sessions])
+  /** Folded groups with an agent waiting inside: their header shows it. */
+  const waitingGroups = useMemo(() => {
+    const out = new Set<string>()
+    for (const s of sessionList ?? []) {
+      const group = all.find((p) => p.id === s.project)?.group
+      if (group && agentState(s, now) === "waiting") out.add(group)
+    }
+    return out
+  }, [sessionList, all, now])
   const groupName = useMemo(() => new Map(groups.map((g) => [g.id, g.name])), [groups])
   const projectCount = rows.filter((r) => r.kind === "project").length
 
@@ -182,7 +199,7 @@ export function ProjectsPanel() {
       if (under?.kind === "group" && frac > 0.25 && frac < 0.75) {
         return { id: p.id, gap: -1, target: { group: under.group.id, before: null }, onHeader: under.group.id }
       }
-      const gap = Math.max(0, Math.min(rows.length, Math.round(y / ROW)))
+      const gap = snapGap(rows, Math.max(0, Math.min(rows.length, Math.round(y / ROW))))
       const dx = ev.clientX - startX
       const indented = dx > 12 ? true : dx < -12 ? false : nestedAtStart
       return { id: p.id, gap, target: dropTarget(rows, secs, gap, indented), onHeader: null }
@@ -276,6 +293,7 @@ export function ProjectsPanel() {
               count={r.count}
               collapsed={r.collapsed}
               holdsSelected={r.collapsed && all.some((p) => p.id === selected && p.group === r.group.id)}
+              agentWaiting={r.collapsed && waitingGroups.has(r.group.id)}
               dropping={drag?.onHeader === r.group.id}
               renaming={renaming === r.group.id}
               first={groups[0]?.id === r.group.id}
@@ -287,6 +305,8 @@ export function ProjectsPanel() {
               onShift={(dir) => shiftGroup(r.group, dir)}
               onDelete={() => deleteGroup(r.group)}
             />
+          ) : r.kind === "session" ? (
+            <AgentSessionRow key={"s:" + r.session.id} session={r.session} kinds={kinds} now={now} indent={(r.group !== null && !filter ? NESTED : 8) + 10} />
           ) : r.kind === "empty" ? (
             <li key={"e:" + r.group} className="flex h-7 items-center truncate pr-2 text-caption text-faint-foreground" style={{ paddingLeft: NESTED }}>
               {t("Drag projects here")}
@@ -305,6 +325,7 @@ export function ProjectsPanel() {
               onMove={(g) => moveTo(r.project, g)}
               onNewGroup={() => newGroup([r.project.id], true)}
               onMenuClosed={menuClosed}
+              onNewAgent={canStartAgents ? () => ui.set({ newAgent: { projectId: r.project.id } }) : undefined}
             />
           ),
         )}
@@ -325,6 +346,7 @@ function GroupRow({
   count,
   collapsed,
   holdsSelected,
+  agentWaiting,
   dropping,
   renaming,
   first,
@@ -341,6 +363,8 @@ function GroupRow({
   collapsed: boolean
   /** Folded with the selected project inside. */
   holdsSelected: boolean
+  /** Folded with an agent waiting for you inside. */
+  agentWaiting: boolean
   dropping: boolean
   renaming: boolean
   first: boolean
@@ -391,6 +415,7 @@ function GroupRow({
           ) : (
             <>
               <span className="min-w-0 flex-1 truncate font-medium">{group.name}</span>
+              {agentWaiting && <CircleDot role="img" aria-label={t("An agent is waiting for you")} className="size-3 shrink-0 text-warning group-hover:hidden" />}
               <span className="shrink-0 text-caption tabular text-faint-foreground group-hover:hidden">{count}</span>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -459,6 +484,7 @@ function ProjectRow({
   onMove,
   onNewGroup,
   onMenuClosed,
+  onNewAgent,
 }: {
   project: Project
   nested: boolean
@@ -472,6 +498,8 @@ function ProjectRow({
   onMove: (group: string | null) => void
   onNewGroup: () => void
   onMenuClosed: (e: Event) => void
+  /** Absent when no agent is installed. */
+  onNewAgent?: () => void
 }) {
   const summary = useSummary(project.id)
   const s = summary.data
@@ -490,6 +518,15 @@ function ProjectRow({
 
   const menu = (k: MenuKit) => (
     <>
+      {onNewAgent && (
+        <>
+          <k.Item onSelect={onNewAgent}>
+            <Bot />
+            {t("New Agent Session…")}
+          </k.Item>
+          <k.Separator />
+        </>
+      )}
       <k.Item onSelect={() => open("finder")}>
         <FolderOpen />
         {t("Open in Finder")}
@@ -566,6 +603,18 @@ function ProjectRow({
             </span>
           )}
           {!!s?.dirtyTrees && <span aria-label={t("Has uncommitted changes")} className="size-1.5 shrink-0 rounded-full bg-warning group-hover:hidden" />}
+          {onNewAgent && (
+            <Tooltip content={t("New agent session")}>
+              <button
+                aria-label={t("New agent session")}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={onNewAgent}
+                className="hidden size-5 shrink-0 items-center justify-center rounded-xs text-faint-foreground hover:bg-pressed hover:text-foreground group-hover:inline-flex"
+              >
+                <Plus className="size-3.5" />
+              </button>
+            </Tooltip>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button

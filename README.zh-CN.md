@@ -18,6 +18,7 @@ agent 会同时在十几棵 worktree 里写代码。Retrace 把所有项目、wo
 - **按审查的方式看提交。** 点提交行，在提交图下方打开说明和 diff，再点一次收起。正文默认完整显示（可折叠并记住）；squash 合并或 merge 提交会出现「PR #N」，一键打开 GitHub 上的 PR。
 - **好读的 diff。** 默认并排、不换行，语法高亮在后台线程里做；可以一个文件一个文件看，也可以连续阅读整个提交。图片改动显示改前改后。
 - **浏览任一版本。** 把「改动」切到「文件」，看选中提交时的整个目录（未提交的改动就是磁盘上的文件）：筛选、折叠，预览代码、图片，Markdown 像 GitHub 一样渲染，相对链接和图片都能用。点开一个文件，提交图就只列改过它的提交，可以逐个看它每次的改动。文件图标有四套主题（设置 → 文件图标）。
+- **在项目上派活。** 项目行悬停点「+」（或 ⌘N），写下任务，选 OpenCode、Codex 或 Claude Code：默认在仓库旁边的 `<仓库名>.worktrees/` 里新开一棵 worktree 和 `agent/…` 分支，先跑你为这个项目记下的准备命令（比如 `pnpm install`），再把 agent 自己的终端界面开起来。会话挂在项目下面，图标说明它在干活、在等你回应、已结束还是出错；点它就切到那棵 worktree，终端从右侧浮出来，提交图和 diff 就是 agent 正在写的改动。关掉终端 agent 也继续在后台跑；退出 Retrace 前会先问你。本机找不到 agent 命令行时不显示入口。
 - **布局随你。** 拖动视图左上角的把手，停靠到别的视图四边或交换位置；每块视图都有最小尺寸，挤不坏。
 - **像样的 Mac App。** 原生菜单栏，键盘优先，浅色 / 深色，中文 / 英文。
 
@@ -32,10 +33,13 @@ agent 会同时在十几棵 worktree 里写代码。Retrace 把所有项目、wo
 
 所有 git 调用都带 `GIT_OPTIONAL_LOCKS=0`，不抢 agent 正在用的 `index.lock`；列改动只用 `diff-tree` / `diff-index` 这类不碰 index 的命令；判断 squash 合并时的临时对象写在仓库外面。
 
-写操作只有两个：
+Retrace 自己的写操作只有三个：
 
 - `git fetch`：只更新远程分支，可在设置里关掉；
-- 删除已合并的 worktree 和本地分支：只在你确认后执行（以及撤销时恢复刚删的分支）。
+- 删除已合并的 worktree 和本地分支：只在你确认后执行（以及撤销时恢复刚删的分支）；
+- 给 agent 会话新建 worktree 和分支：只在你点「开始会话」时执行，分支或目录已存在就报错，不覆盖。
+
+agent 在它的 worktree 里做的改动是 agent 的，Retrace 只把终端的输入输出转过去。
 
 ## 安装
 
@@ -61,6 +65,8 @@ macOS 13 及以上，使用本机的 `git`。Windows 以后补。
 | ⌘R | 刷新并从远程获取 |
 | ⌘\\ | 收起 / 展开项目栏 |
 | ⌘O | 添加项目 |
+| ⌘N | 在当前项目新建 Agent 会话 |
+| ⌘T | 打开 / 收起 Agent 终端（终端有焦点时，除 ⌘ 组合键外的按键都交给 agent，Esc 也是） |
 | ⇧⌘F / ⌃\` / ⇧⌘A | 在 Finder / 终端 / 编辑器打开当前 worktree |
 | ⌘, | 设置 |
 
@@ -80,7 +86,7 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin retrace-devbridge
 pnpm dev                       # http://localhost:1420
 ```
 
-`RETRACE_CONFIG_DIR=/tmp/retrace-dev` 可以让 App 和开发桥用一份临时配置，不碰真实的项目列表（默认在 `~/Library/Application Support/me.jimlin.retrace/config.json`）。
+`RETRACE_CONFIG_DIR=/tmp/retrace-dev` 可以让 App 和开发桥用一份临时配置，不碰真实的项目列表（默认在 `~/Library/Application Support/me.jimlin.retrace/config.json`）。开发桥默认不启动 agent；要在浏览器里调 Agent 会话的界面，启动时加 `RETRACE_DEVBRIDGE_AGENTS=1`。
 
 ### 检查
 
@@ -95,10 +101,12 @@ pnpm tauri build                                  # 产出 Retrace.app 和 dmg
 
 ```text
 src-tauri/src/core/      git 调用（只读环境）、仓库与 worktree、车道算法、历史、改动与文件内容、命令分发、后端提示语言（i18n.rs）
+src-tauri/src/core/agent.rs      agent 会话：伪终端、新建 worktree；shell_env.rs：登录 shell 的 PATH
 src-tauri/src/watch.rs   监听当前项目的 .git 和工作区；定时 fetch
 src-tauri/src/bin/       开发桥
 src/components/app/      四块视图：项目、改动 / 文件、提交图、diff / 预览
 src/components/layout/   可拖动停靠的平铺布局（模型在 src/lib/layout.ts）
+src/lib/terminals.ts     每个 agent 会话一个 xterm；Agent 抽屉在 src/components/app/AgentPanel.tsx
 src/lib/commands.ts      菜单栏、快捷键和按钮共用的命令；menu.ts 是 macOS 菜单栏
 src/lib/i18n.ts          界面语言：代码里写英文原文，中文在 src/locales/zh.ts
 src/components/ui/       jim-uiux 组件（从 registry 安装）

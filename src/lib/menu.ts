@@ -11,6 +11,7 @@ type Checked = (p: Prefs, u: UiState) => boolean
 const CHECKS: Partial<Record<CommandId, Checked>> = {
   toggleProjects: (p) => !p.projectsCollapsed,
   toggleDiff: (_, u) => u.diffOpen,
+  toggleAgent: (_, u) => u.agentOpen,
   toggleFocus: (_, u) => u.focusMode,
   toggleSplit: (p) => p.diffStyle === "split",
   toggleWrap: (p) => p.wrap,
@@ -48,7 +49,7 @@ export async function installMenu(): Promise<() => void> {
   }
 
   const sep = () => PredefinedMenuItem.new({ item: "Separator" })
-  const sys = (item: "Hide" | "HideOthers" | "ShowAll" | "Quit" | "Services" | "Undo" | "Redo" | "Cut" | "Copy" | "Paste" | "SelectAll" | "Minimize" | "Maximize" | "Fullscreen" | "CloseWindow", text: string) =>
+  const sys = (item: "Hide" | "HideOthers" | "ShowAll" | "Services" | "Undo" | "Redo" | "Cut" | "Copy" | "Paste" | "SelectAll" | "Minimize" | "Maximize" | "Fullscreen" | "CloseWindow", text: string) =>
     PredefinedMenuItem.new({ item, text: t(text) })
   const item = (id: CommandId, text: string, accelerator?: string) => MenuItem.new({ id, text: t(text), accelerator, action: () => run(id) })
   const check = async (id: CommandId, text: string, accelerator?: string) => {
@@ -90,13 +91,15 @@ export async function installMenu(): Promise<() => void> {
           await sys("HideOthers", "Hide Others"),
           await sys("ShowAll", "Show All"),
           await sep(),
-          await sys("Quit", "Quit Retrace"),
+          // Not the system item: quitting asks first while agents run.
+          await item("quit", "Quit Retrace", "CmdOrCtrl+Q"),
         ],
       }),
       await Submenu.new({
         text: t("Project"),
         items: [
           await item("addProject", "Add Project…", "CmdOrCtrl+O"),
+          await item("newAgent", "New Agent Session…", "CmdOrCtrl+N"),
           await sep(),
           await item("refresh", "Refresh and Fetch", "CmdOrCtrl+R"),
           await sep(),
@@ -125,6 +128,7 @@ export async function installMenu(): Promise<() => void> {
         items: [
           await check("toggleProjects", "Show Projects", "CmdOrCtrl+\\"),
           await check("toggleDiff", "Show Diff", "CmdOrCtrl+J"),
+          await check("toggleAgent", "Show Agent", "CmdOrCtrl+T"),
           await check("toggleFocus", "Focus: Changes and Diff Only (F)"),
           await sep(),
           await check("toggleSplit", "Side-by-Side Diff"),
