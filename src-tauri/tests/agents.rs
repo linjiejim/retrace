@@ -187,3 +187,31 @@ fn the_dev_bridge_refuses_agent_commands_unless_enabled() {
     state.agents_allowed.store(true, std::sync::atomic::Ordering::Relaxed);
     assert_eq!(dispatch(&state, "agentSessions", json!({})).unwrap(), json!([]));
 }
+
+#[test]
+fn stopping_also_ends_children_that_ignore_the_hangup() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = temp("group");
+    let bin = tmp.0.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    // The agent starts a helper that ignores SIGHUP, reports its pid, and waits.
+    let path = bin.join("claude");
+    std::fs::write(&path, "#!/bin/sh\n(trap '' HUP; exec sleep 60) &\necho \"child:$!\"\nwait\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let sessions = Arc::new(Sessions::default());
+    let launch = agent::launch(agent::kind("claude").unwrap(), "", None, &tmp.0, &tmp.0, &env_with(&bin), (80, 24)).unwrap();
+    let info = sessions.spawn(launch, meta(&tmp.0)).unwrap();
+    wait_for("child pid", || output(&sessions, &info.id).contains("child:"));
+    let text = output(&sessions, &info.id);
+    let pid: i32 = text.split("child:").nth(1).unwrap().trim().split_whitespace().next().unwrap().parse().unwrap();
+    let alive = |pid: i32| unsafe { libc::kill(pid, 0) == 0 };
+    assert!(alive(pid));
+    sessions.stop(&info.id).unwrap();
+    wait_for("agent ends", || !sessions.list()[0].running);
+    // The helper outlives the hangup, then goes with the group kill.
+    let started = Instant::now();
+    while alive(pid) && started.elapsed() < Duration::from_secs(8) {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(!alive(pid), "helper {pid} survived the stop");
+}

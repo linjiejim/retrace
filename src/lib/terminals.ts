@@ -121,14 +121,15 @@ async function catchUp(id: string, h: Handle) {
   for (const c of queued) if (write(h, c.offset, c.bytes) === "gap") return void catchUp(id, h)
 }
 
-function listen() {
-  unlisten ??= onAgentOutput((e) => {
+/** The output subscription, shared by every terminal; resolves once events are flowing. */
+function listen(): Promise<() => void> {
+  return (unlisten ??= onAgentOutput((e) => {
     const h = handles.get(e.session)
     if (!h) return
     const bytes = fromBase64(e.data)
     if (h.syncing) return void h.pending.push({ offset: e.offset, bytes })
     if (write(h, e.offset, bytes) === "gap") void catchUp(e.session, h)
-  })
+  }))
 }
 
 /** The terminal for a session, made on first sight. */
@@ -170,7 +171,8 @@ export function ensureTerminal(id: string): Handle {
     fit,
     host,
     next: 0,
-    syncing: false,
+    // Live chunks queue until the first read of the scrollback is done.
+    syncing: true,
     pending: [],
     shown: false,
     stop: () => {
@@ -180,8 +182,9 @@ export function ensureTerminal(id: string): Handle {
   }
   handles.set(id, h)
   if (inTauri) {
-    listen()
-    void catchUp(id, h)
+    // Subscribe first, then read: output between the read and a late subscription would be lost
+    // (and an agent waiting on a terminal query would then wait forever).
+    void listen().then(() => catchUp(id, h))
   } else {
     void catchUp(id, h)
     poll = setInterval(() => !h.syncing && void catchUp(id, h), POLL_MS)

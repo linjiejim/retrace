@@ -42,9 +42,10 @@ export function NewAgentDialog() {
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
 
-  // Every opening starts from a clean form.
+  // Every opening starts from a clean form, and looks for agents again (one may be new).
   useEffect(() => {
     if (!req) return
+    void qc.invalidateQueries({ queryKey: ["agentKinds"] })
     setTask("")
     setWhere("new")
     setBranch(defaultBranch("", new Date()))
@@ -53,7 +54,7 @@ export function NewAgentDialog() {
     setSetupEdited(false)
     setError(null)
     setPending(false)
-  }, [req])
+  }, [req, qc])
 
   useEffect(() => {
     if (!installed.length) return

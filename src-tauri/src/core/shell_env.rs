@@ -29,6 +29,9 @@ const HOST_VARS: &[&str] = &[
     "CLAUDE_CODE_ENTRYPOINT",
     "CLAUDE_CODE_SSE_PORT",
     "OPENCODE",
+    // Retrace's own development switches: an agent building Retrace must not inherit them.
+    "RETRACE_CONFIG_DIR",
+    "RETRACE_DEVBRIDGE_AGENTS",
 ];
 const HOST_PREFIXES: &[&str] = &["ITERM_", "KITTY_", "GHOSTTY_", "WEZTERM_", "VSCODE_", "ZELLIJ", "ALACRITTY_", "WT_"];
 
@@ -154,13 +157,14 @@ mod tests {
             ("CLAUDECODE", "1"),
             ("CLAUDE_CODE_USE_BEDROCK", "1"),
             ("CODEX_HOME", "/c"),
+            ("RETRACE_CONFIG_DIR", "/tmp/x"),
             ("TERM", "dumb"),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
         let env = clean(env);
-        assert!(!env.contains_key("TERM_PROGRAM") && !env.contains_key("GHOSTTY_RESOURCES_DIR") && !env.contains_key("CLAUDECODE"));
+        assert!(!env.contains_key("TERM_PROGRAM") && !env.contains_key("GHOSTTY_RESOURCES_DIR") && !env.contains_key("CLAUDECODE") && !env.contains_key("RETRACE_CONFIG_DIR"));
         // The user's own agent settings stay.
         assert_eq!(env["CLAUDE_CODE_USE_BEDROCK"], "1");
         assert_eq!(env["CODEX_HOME"], "/c");

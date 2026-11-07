@@ -332,6 +332,9 @@ impl Session {
         unsafe {
             libc::killpg(pid, libc::SIGHUP);
         }
+        // An agent that ignores the hangup is killed with its group. While it runs (or is an
+        // unreaped zombie) its pid, and so the group id, can't belong to anyone else. Children
+        // left behind when the agent does exit are handled by the wait thread (`end_group`).
         let me = self.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(3));
@@ -341,6 +344,18 @@ impl Session {
                 }
             }
         });
+    }
+}
+
+/// Blocks until `pid` exits, without reaping it: until it is reaped, its pid (and its process
+/// group id) can't be given to another process.
+fn wait_exit_unreaped(pid: i32) {
+    loop {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let r = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) };
+        if r == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+            return;
+        }
     }
 }
 
@@ -428,7 +443,18 @@ impl Sessions {
         let (me, s) = (self.clone(), session.clone());
         std::thread::spawn(move || me.pump(s, reader));
         let (me, s) = (self.clone(), session);
+        let pid = child.process_id().map(|p| p as i32).filter(|p| *p > 1);
         std::thread::spawn(move || {
+            if let Some(pid) = pid {
+                wait_exit_unreaped(pid);
+                // Stopped by the user: whatever the agent left in its group goes too, while the
+                // unreaped agent still holds the group id.
+                if s.info.lock().is_ok_and(|i| i.stopped) {
+                    unsafe {
+                        libc::killpg(pid, libc::SIGKILL);
+                    }
+                }
+            }
             let code = match child.wait() {
                 Ok(status) if status.success() => 0,
                 Ok(status) => status.exit_code().max(1) as i32,

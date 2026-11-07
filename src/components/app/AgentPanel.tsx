@@ -188,7 +188,7 @@ export function AgentDrawer() {
                   : t("{agent} stopped (exit code {code}).", { agent: agentName, code: s.exitCode ?? "?" })}
             </p>
           )}
-          {showInput && s.running && <MessageBox id={s.id} agent={agentName} disabled={!s.running} />}
+          {showInput && s.running && <MessageBox key={s.id} id={s.id} agent={agentName} disabled={!s.running} />}
         </>
       ) : (
         <StateView size="sm" kind="empty" title={t("No agent session open")} description={t("Start one with + on a project, or press ⌘N.")} />

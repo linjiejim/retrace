@@ -77,6 +77,8 @@ export default function App() {
         if (id) invalidateProject(qc, id, { git: true, trees: [] })
         // Other projects' dots: only the ones older than their stale time.
         qc.refetchQueries({ queryKey: ["summary"], stale: true, type: "active" })
+        // An agent installed while Retrace was in the background.
+        qc.invalidateQueries({ queryKey: ["agentKinds"] })
       }),
     ]
     return () => offs.forEach((p) => p.then((off) => off()))
