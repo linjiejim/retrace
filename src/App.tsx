@@ -7,6 +7,8 @@ import type { Node, PanelId } from "@/lib/layout"
 import { installMenu } from "@/lib/menu"
 import { prefs, ui, useStore } from "@/lib/store"
 import { scheduleUpdateChecks } from "@/lib/updater"
+import { guardWindowClose, leave, leaving } from "@/lib/quit"
+import { t, tp } from "@/lib/i18n"
 import { invalidateProject, useOverview } from "@/hooks/queries"
 import { useDefaultSelection } from "@/hooks/use-project-view"
 import { LayoutView } from "@/components/layout/LayoutView"
@@ -16,6 +18,9 @@ import { ChangesPanel } from "@/components/app/ChangesPanel"
 import { DiffPanel } from "@/components/app/DiffPanel"
 import { SettingsDialog } from "@/components/app/SettingsDialog"
 import { AddProjectsDialog } from "@/components/app/AddProjectsDialog"
+import { AgentDrawer, AgentTerminals } from "@/components/app/AgentPanel"
+import { NewAgentDialog } from "@/components/app/NewAgentDialog"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 
 /** Focus mode: just the file list and the diff, side by side. */
 const FOCUS_LAYOUT: Node = {
@@ -53,6 +58,11 @@ export default function App() {
 
   useEffect(() => scheduleUpdateChecks(), [])
 
+  useEffect(() => {
+    const off = guardWindowClose()
+    return () => void off.then((f) => f())
+  }, [])
+
   // Watch the selected project (again whenever its worktrees change); refresh on file-system and fetch events.
   const overview = useOverview(projectId)
   const treesKey = overview.data?.trees.map((t) => t.path).join("\n") ?? ""
@@ -86,9 +96,13 @@ export default function App() {
       r: "refresh",
       ",": "settings",
       j: "toggleDiff",
+      n: "newAgent",
+      t: "toggleAgent",
       o: "addProject",
     }
     const onKey = (e: KeyboardEvent) => {
+      // An agent terminal gets every key, Esc included (it interrupts the agent); ⌘ keys still reach the menu.
+      if (e.target instanceof HTMLElement && e.target.closest(".xterm")) return
       const typing = e.target instanceof HTMLElement && e.target.closest("input, textarea, [contenteditable]")
       const s = ui.get()
       if (e.key === "Escape") {
@@ -144,10 +158,32 @@ export default function App() {
   const hidden = useMemo(() => [...(collapsed ? (["projects"] as const) : []), ...(diffOpen ? [] : (["diff"] as const))], [collapsed, diffOpen])
 
   return (
-    <div className="h-full overflow-hidden">
+    <div className="relative h-full overflow-hidden">
       {focusMode ? <LayoutView layout={FOCUS_LAYOUT} hidden={NONE} editable={false} render={render} /> : <LayoutView layout={layout} hidden={hidden} render={render} />}
       <SettingsDialog open={settingsOpen} onOpenChange={(o) => ui.set({ settingsOpen: o })} />
       {adding && <AddProjectsDialog state={adding} onClose={() => ui.set({ adding: null })} onAddPaths={addPaths} onAdded={selectProject} />}
+      <AgentDrawer />
+      <NewAgentDialog />
+      <AgentTerminals />
+      <QuitGuard />
     </div>
+  )
+}
+
+/** "Agents are still running" before quitting or restarting. */
+function QuitGuard() {
+  const ask = useStore(leaving, (s) => s.ask)
+  const running = useStore(leaving, (s) => s.running)
+  const restart = ask === "restart"
+  return (
+    <ConfirmDialog
+      open={!!ask}
+      onOpenChange={(o) => !o && leaving.set({ ask: null })}
+      title={restart ? t("Restart Retrace?") : t("Quit Retrace?")}
+      description={tp("{n} agent session is still running. It ends with Retrace; its worktree and changes stay.", "{n} agent sessions are still running. They end with Retrace; their worktrees and changes stay.", running)}
+      confirmLabel={restart ? t("End Sessions and Restart") : t("End Sessions and Quit")}
+      tone="danger"
+      onConfirm={() => leave(restart ? "restart" : "quit", true)}
+    />
   )
 }
