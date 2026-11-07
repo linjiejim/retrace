@@ -51,6 +51,8 @@ export interface UiState {
   diffOpen: boolean
   /** File previewed in the files view: a path in the selected version. */
   preview: string | null
+  /** The graph lists only this file's commits (set by picking a file in the files view). */
+  historyFile: string | null
   settingsOpen: boolean
   adding: AddState | null
   /** A fetch from the remote is running. */
@@ -128,6 +130,7 @@ export const ui = createStore<UiState>({
   focusMode: false,
   diffOpen: false,
   preview: null,
+  historyFile: null,
   settingsOpen: false,
   adding: null,
   fetching: false,

@@ -15,7 +15,7 @@ import { notify } from "@/components/ui/toast"
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 export function selectProject(id: string) {
-  ui.set({ projectId: id, selection: null, file: null, preview: null, query: "", focusMode: false, diffOpen: false })
+  ui.set({ projectId: id, selection: null, file: null, preview: null, historyFile: null, query: "", focusMode: false, diffOpen: false })
 }
 
 /** A graph row was clicked: select it and show its diff; clicking the selected row shows or hides the diff. */
@@ -31,8 +31,14 @@ export function openFile(file: { path: string; oldPath: string | null }) {
   ui.set({ file, focusArea: "changes", jump: Date.now(), diffOpen: true })
 }
 
+/** A file picked in the files view: preview it, and narrow the graph to its history. */
 export function openPreview(path: string) {
-  ui.set({ preview: path, focusArea: "changes", diffOpen: true })
+  ui.set({ preview: path, historyFile: path, focusArea: "changes", diffOpen: true })
+}
+
+/** Narrow the graph to one file's commits, or (null) back to all of them. */
+export function showFileHistory(path: string | null) {
+  ui.set({ historyFile: path })
 }
 
 /** A web link, in the browser chosen in settings (the system default unless set). */

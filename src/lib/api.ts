@@ -65,6 +65,8 @@ export const api = {
     offset: number
     count: number
     tips?: string[]
+    /** Only this file's history. */
+    path?: string | null
   }) => call<HistoryPage>("history", a),
   reorderProjects: (ids: string[]) => call<null>("reorderProjects", { ids }),
   patch: (id: string, target: Target) => call<PatchText>("patch", { id, target }),

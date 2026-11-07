@@ -3,6 +3,9 @@
 //! A `Stream` per (repository, tips, uncommitted row) keeps the rows read so far and the lane state,
 //! so the next page only reads and lays out new rows. Tips are commit ids, so a moved branch is a
 //! new key and stale streams simply age out of the small cache.
+//!
+//! With a path, the history is that file's: only commits that change it, with parents rewritten
+//! to the nearest such ancestor so the graph still connects.
 
 use super::git;
 use super::graph::Lanes;
@@ -50,7 +53,11 @@ fn parse_log(text: &str) -> Vec<Raw> {
 struct Stream {
     dir: PathBuf,
     revs: Vec<String>,
+    /// A literal pathspec (`:(literal)…`) limiting history to one file.
+    path: Option<String>,
     worktree_head: Option<String>,
+    /// Uncommitted work on a file no commit has touched yet: its row goes first, with no parent.
+    worktree_first: bool,
     /// Commits read from git so far (the uncommitted row is not counted).
     read: usize,
     done: bool,
@@ -59,20 +66,29 @@ struct Stream {
 }
 
 impl Stream {
-    fn new(dir: &Path, trunk_tip: Option<&str>, revs: Vec<String>, worktree_head: Option<String>) -> Self {
-        Self { dir: dir.to_path_buf(), revs, worktree_head, read: 0, done: false, rows: Vec::new(), lanes: Lanes::new(trunk_tip) }
+    fn new(dir: &Path, trunk_tip: Option<&str>, revs: Vec<String>, path: Option<String>, worktree_head: Option<String>, worktree_first: bool) -> Self {
+        Self { dir: dir.to_path_buf(), revs, path, worktree_head, worktree_first, read: 0, done: false, rows: Vec::new(), lanes: Lanes::new(trunk_tip) }
     }
 
     /// Read and lay out commits until at least `want` rows exist or history ends.
     fn fill(&mut self, want: usize) -> Result<()> {
+        if self.worktree_first && self.rows.is_empty() {
+            let p = self.lanes.place(WORKTREE_ROW, &[], self.lanes.trunk_lane_free());
+            self.rows.push(HistoryRow { id: WORKTREE_ROW.into(), parents: vec![], author: String::new(), time: 0, subject: String::new(), col: p.col, color: p.color, segs: p.segs });
+        }
         while !self.done && self.rows.len() < want {
             // The topological walk costs about the same for 1k or 10k rows, so read generously.
             let chunk = (want - self.rows.len()).max(self.read).clamp(1000, 20_000);
             let skip = format!("--skip={}", self.read);
             let n = format!("-n{chunk}");
             let mut args = vec!["log", "--topo-order", "--format=%H%x1f%P%x1f%an%x1f%at%x1f%s%x1e", skip.as_str(), n.as_str()];
+            if self.path.is_some() {
+                // Rewrites %P to the nearest commits that touch the path.
+                args.push("--parents");
+            }
             args.extend(self.revs.iter().map(String::as_str));
             args.push("--");
+            args.extend(self.path.as_deref());
             let batch = parse_log(&git::text(&self.dir, &args)?);
             self.read += batch.len();
             if batch.len() < chunk || self.read >= MAX_ROWS {
@@ -105,6 +121,8 @@ pub struct Query<'a> {
     /// Commit ids to show besides the trunk (the tab's HEAD, other branch tips).
     pub tips: Vec<String>,
     pub worktree_head: Option<&'a str>,
+    /// Only this file's history (a repository-relative path).
+    pub path: Option<&'a str>,
     pub offset: usize,
     pub count: usize,
 }
@@ -121,7 +139,7 @@ impl HistoryCache {
         if revs.is_empty() {
             return Ok(HistoryPage { rows: vec![], has_more: false, capped: false, tips });
         }
-        let key = format!("{}\0{}\0{}\0{}", q.dir.display(), q.trunk_tip.unwrap_or(""), revs.join(" "), q.worktree_head.unwrap_or(""));
+        let key = format!("{}\0{}\0{}\0{}\0{}", q.dir.display(), q.trunk_tip.unwrap_or(""), revs.join(" "), q.worktree_head.unwrap_or(""), q.path.unwrap_or(""));
         let stream = {
             let mut streams = self.streams.lock().map_err(|_| anyhow::anyhow!("history cache poisoned"))?;
             match streams.iter().position(|(k, _)| *k == key) {
@@ -132,7 +150,18 @@ impl HistoryCache {
                     s
                 }
                 None => {
-                    let s = Arc::new(Mutex::new(Stream::new(q.dir, q.trunk_tip, revs, q.worktree_head.map(str::to_string))));
+                    let s = Arc::new(Mutex::new(match q.path {
+                        None => Stream::new(q.dir, q.trunk_tip, revs, None, q.worktree_head.map(str::to_string), false),
+                        Some(path) => {
+                            // The trunk tip and the worktree's HEAD may not touch the file: lay out
+                            // against the latest commits that do.
+                            let spec = format!(":(literal){path}");
+                            let trunk = q.trunk_tip.map(|t| last_touching(q.dir, t, &spec)).transpose()?.flatten();
+                            let head = q.worktree_head.map(|h| last_touching(q.dir, h, &spec)).transpose()?.flatten();
+                            let first = q.worktree_head.is_some() && head.is_none();
+                            Stream::new(q.dir, trunk.as_deref(), revs, Some(spec), head, first)
+                        }
+                    }));
                     streams.push((key, s.clone()));
                     if streams.len() > CACHE_SIZE {
                         streams.remove(0);
@@ -153,6 +182,12 @@ impl HistoryCache {
             tips,
         })
     }
+}
+
+/// The latest commit reachable from `rev` that changes the path: what `rev` becomes in the file's history.
+fn last_touching(dir: &Path, rev: &str, spec: &str) -> Result<Option<String>> {
+    let out = git::text(dir, &["log", "--topo-order", "--parents", "-1", "--format=%H", rev, "--", spec])?;
+    Ok(out.split_whitespace().next().map(str::to_string))
 }
 
 /// Every local branch tip, plus remote ones when asked (for "show other branches").

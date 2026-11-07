@@ -740,3 +740,37 @@ fn file_content_reads_text_images_and_both_sides() {
     assert!(dispatch(&f.state, "fileContent", json!({ "id": id, "target": wt, "path": "../outside", "side": "new" })).is_err());
     assert!(dispatch(&f.state, "fileContent", json!({ "id": id, "target": wt, "path": "x", "side": "old", "oldPath": "/etc/passwd" })).is_err());
 }
+
+#[test]
+fn file_history_lists_only_commits_that_touch_the_file() {
+    let f = fixture("file-history");
+    call(&f, "addPath", json!({ "path": f.main }));
+    let id = f.main.to_string_lossy().to_string();
+    let trunk = sh(&f.main, &["rev-parse", "main"]);
+    let ids = |v: &Value| v["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+
+    let page = call(&f, "history", json!({ "id": id, "trunkTip": trunk, "tip": trunk, "path": "src/merged.rs" }));
+    let rows = page["rows"].as_array().unwrap();
+    let subjects: Vec<&str> = rows.iter().map(|r| r["subject"].as_str().unwrap()).collect();
+    assert_eq!(subjects, vec!["merged 2", "merged 1"], "only the commits that change the file");
+    assert_eq!(rows[0]["parents"], json!([rows[1]["id"]]), "parents are rewritten to the file's previous commit");
+    assert_eq!(rows[0]["col"], 0, "the file's latest trunk commit takes the trunk column");
+    assert_eq!(rows[1]["col"], 0);
+
+    // A file changed in the worktree: its uncommitted row sits above the file's last commit.
+    let head = sh(&f.wt_open, &["rev-parse", "HEAD"]);
+    let lib = call(&f, "history", json!({ "id": id, "trunkTip": trunk, "tip": head, "worktreeHead": head, "path": "src/lib.rs" }));
+    let lib_ids = ids(&lib);
+    assert_eq!(lib_ids[0], "WORKTREE");
+    assert_eq!(lib_ids.len(), 2, "uncommitted row + the one commit that added lib.rs");
+    assert_eq!(lib["rows"][0]["parents"], json!([lib_ids[1]]));
+
+    // A file no commit has touched yet: only the uncommitted row.
+    let new = call(&f, "history", json!({ "id": id, "trunkTip": trunk, "tip": head, "worktreeHead": head, "path": "notes/todo.md" }));
+    assert_eq!(ids(&new), vec!["WORKTREE"]);
+
+    // Pathspec magic is taken literally, and paths can't leave the repository.
+    let magic = call(&f, "history", json!({ "id": id, "trunkTip": trunk, "tip": trunk, "path": ":(glob)**" }));
+    assert!(ids(&magic).is_empty());
+    assert!(dispatch(&f.state, "history", json!({ "id": id, "trunkTip": trunk, "tip": trunk, "path": "../x" })).is_err());
+}

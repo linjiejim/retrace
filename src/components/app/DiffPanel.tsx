@@ -1,7 +1,7 @@
 import { lazy, Suspense } from "react"
-import { ChevronDown, ChevronRight, ChevronUp, Columns2, Copy, FileText, Files, GitCompareArrows, GitPullRequest, Maximize2, Minimize2, Rows2, WrapText, X } from "lucide-react"
+import { ChevronDown, ChevronRight, ChevronUp, Columns2, Copy, FileText, Files, GitCompareArrows, GitPullRequest, History, Maximize2, Minimize2, Rows2, WrapText, X } from "lucide-react"
 import { copyText } from "@/lib/api"
-import { closeDiff, openFile, openLink } from "@/lib/commands"
+import { closeDiff, openFile, openLink, showFileHistory } from "@/lib/commands"
 import { prNumber, prUrl } from "@/lib/github"
 import { isImage, isMarkdown, isSvg } from "@/lib/filetype"
 import { absoluteTime, shortHash } from "@/lib/format"
@@ -87,6 +87,22 @@ function StepButtons() {
   )
 }
 
+/** Narrows the graph to the commits that changed this file, or back to all of them. */
+function HistoryButton({ path }: { path: string }) {
+  const on = useStore(ui, (s) => s.historyFile === path)
+  return (
+    <IconButton
+      label={on ? t("Show all commits") : t("Only commits that changed this file")}
+      size="icon-sm"
+      aria-pressed={on}
+      className={cn(on && "bg-pressed text-primary")}
+      onClick={() => showFileHistory(on ? null : path)}
+    >
+      <History />
+    </IconButton>
+  )
+}
+
 function CloseButton() {
   const focusMode = useStore(ui, (s) => s.focusMode)
   return (
@@ -122,6 +138,7 @@ function DiffArea({ projectId, target, files: loaded, info }: { projectId: strin
       <PanelHeader className="gap-1">
         {change && <span className={cn("w-3.5 shrink-0 text-center font-mono text-caption font-semibold", STATUS_TONE[change.status])}>{STATUS_LETTER[change.status]}</span>}
         {file ? <PathLabel path={file.path} from={change?.oldPath} /> : <span className="min-w-0 flex-1 truncate text-caption text-faint-foreground">{diffView === "all" && files.length ? tp("All {n} file", "All {n} files", files.length) : t("Diff")}</span>}
+        {file && diffView === "file" && <HistoryButton path={file.path} />}
         <StepButtons />
         <span className="@max-[560px]/header:hidden">
           <Segmented
@@ -204,6 +221,7 @@ function PreviewArea({ projectId, target, changes, info }: { projectId: string |
             </Button>
           </Tooltip>
         )}
+        {path && <HistoryButton path={path} />}
         {renderable && (
           <Segmented
             size="sm"

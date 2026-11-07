@@ -231,9 +231,15 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 count: Option<usize>,
                 /// Tips returned by the first page; when set, branches are not resolved again.
                 tips: Option<Vec<String>>,
+                /// Only this file's history.
+                path: Option<String>,
             }
-            let A { id, trunk_tip, tip, worktree_head, all_branches, remotes, offset, count, tips: snapshot } = args(a)?;
+            let A { id, trunk_tip, tip, worktree_head, all_branches, remotes, offset, count, tips: snapshot, path } = args(a)?;
             let dir = project_dir(state, &id)?;
+            let path = path.filter(|p| !p.is_empty());
+            if path.as_deref().is_some_and(|p| p.starts_with('/') || p.contains('\0') || p.split('/').any(|s| s == "..")) {
+                bail!(tr!("文件路径无效", "Invalid file path"));
+            }
             for r in [&trunk_tip, &tip, &worktree_head].into_iter().flatten() {
                 if r.starts_with('-') {
                     bail!(tr!("提交标识无效", "Invalid commit id"));
@@ -257,6 +263,7 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 trunk_tip: trunk_tip.as_deref(),
                 tips,
                 worktree_head: worktree_head.as_deref(),
+                path: path.as_deref(),
                 offset,
                 count: count.unwrap_or(500).clamp(1, 5000),
             })?)

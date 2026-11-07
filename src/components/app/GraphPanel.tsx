@@ -1,16 +1,16 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, FolderGit2, GitBranch, GitCompareArrows, House, PanelLeftOpen, Pin, PinOff, RefreshCw, Search, SlidersHorizontal, Tag, X } from "lucide-react"
+import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, FolderGit2, GitBranch, GitCompareArrows, History, House, PanelLeftOpen, Pin, PinOff, RefreshCw, Search, SlidersHorizontal, Tag, X } from "lucide-react"
 import { api } from "@/lib/api"
-import { pickRow, run } from "@/lib/commands"
+import { pickRow, run, showFileHistory } from "@/lib/commands"
 import { absoluteTime, ago, relativeTime, shortHash, tildify } from "@/lib/format"
 import { keyNav } from "@/lib/keys"
 import { prefs, selectionKey, ui, useStore, type Selection } from "@/lib/store"
 import { WORKTREE_ROW, type BranchStatus, type HistoryRow, type Overview, type RefLabel, type Trunk } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { t, tp } from "@/lib/i18n"
-import { branchKey, invalidateProject, isArchived, isRemovableBranch, useBranchStatuses, useHistory, type Tab } from "@/hooks/queries"
+import { branchKey, invalidateProject, isArchived, isRemovableBranch, useBranchStatuses, useChanges, useHistory, type Tab } from "@/hooks/queries"
 import { useProjectView } from "@/hooks/use-project-view"
 import { useDelayedFlag } from "@/hooks/use-delayed-flag"
 import { IconButton } from "@/components/ui/button"
@@ -31,6 +31,7 @@ export function GraphPanel() {
   const view = useProjectView()
   const collapsed = useStore(prefs, (s) => s.projectsCollapsed)
   const { projectId, overview, tab, trunk } = view
+  const historyFile = useStore(ui, (s) => s.historyFile)
 
   return (
     <section className="flex h-full min-w-0 flex-col">
@@ -50,7 +51,10 @@ export function GraphPanel() {
       ) : !overview.data ? (
         <GraphSkeleton />
       ) : tab ? (
-        <Graph key={`${projectId}:${tab.key}`} view={view} tab={tab} trunk={trunk} overview={overview.data} />
+        <>
+          {historyFile && <FileHistoryBar path={historyFile} />}
+          <Graph key={`${projectId}:${tab.key}:${historyFile ?? ""}`} view={view} tab={tab} trunk={trunk} overview={overview.data} path={historyFile} />
+        </>
       ) : null}
     </section>
   )
@@ -66,13 +70,14 @@ export function GraphPanel() {
 function TabsBar({ view }: { view: View }) {
   const qc = useQueryClient()
   const { projectId, tabs, tab, trunk, overview } = view
-  const open = (key: string) => ui.set((s) => ({ tabs: { ...s.tabs, [projectId!]: key }, selection: null, file: null, focusMode: false }))
+  const open = (key: string) => ui.set((s) => ({ tabs: { ...s.tabs, [projectId!]: key }, selection: null, file: null, historyFile: null, focusMode: false }))
   const openBranch = (name: string) =>
     ui.set((s) => ({
       branchTabs: { ...s.branchTabs, [projectId!]: [name] },
       tabs: { ...s.tabs, [projectId!]: branchKey(name) },
       selection: null,
       file: null,
+      historyFile: null,
     }))
   const archived = tabs.filter((t) => isArchived(t, trunk))
   const main = tabs.filter((t) => t.tree?.isMain || t.pinned)
@@ -479,6 +484,29 @@ function GraphOptions({ view }: { view: View }) {
 
 // ---------- graph ----------
 
+/** Above the graph while it lists one file's commits. */
+function FileHistoryBar({ path }: { path: string }) {
+  const name = path.split("/").pop()
+  const dir = path.slice(0, -(name?.length ?? 0))
+  return (
+    <div className="flex h-8 shrink-0 items-center gap-1.5 border-b bg-primary-subtle pl-3 pr-1.5 text-caption">
+      <History className="size-3.5 shrink-0 text-primary" />
+      <span className="shrink-0 text-muted-foreground">{t("History of")}</span>
+      <Tooltip content={t("Only the commits that changed this file (renames aren't followed)")} side="bottom">
+        <span className="selectable min-w-0 flex-1 truncate font-mono [direction:rtl] [text-align:left]">
+          <span className="[unicode-bidi:plaintext]">
+            <span className="text-faint-foreground">{dir}</span>
+            <span className="font-medium text-foreground">{name}</span>
+          </span>
+        </span>
+      </Tooltip>
+      <IconButton label={t("Show all commits")} size="icon-sm" onClick={() => showFileHistory(null)}>
+        <X />
+      </IconButton>
+    </div>
+  )
+}
+
 function GraphSkeleton() {
   const shown = useDelayedFlag(true)
   if (!shown) return null
@@ -505,17 +533,24 @@ const selectItem = (it: Item) => ui.set({ selection: selectionOf(it), focusArea:
 /** Click (module-level so memoised rows get a stable callback): the selected row toggles the diff. */
 const clickItem = (it: Item) => pickRow(selectionOf(it))
 
-function Graph({ view, tab, trunk, overview }: { view: View; tab: Tab; trunk: Trunk | null; overview: Overview }) {
-  const { projectId, dirtyFiles, showCompare, compare } = view
+function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; trunk: Trunk | null; overview: Overview; path: string | null }) {
+  const { projectId, dirtyFiles, compare } = view
+  // One file's history leaves out "everything since the trunk": it isn't a commit to the file.
+  const showCompare = view.showCompare && !path
   const others = useStore(prefs, (s) => s.otherBranches)
   const remotes = useStore(prefs, (s) => s.remoteBranches)
+  // In a file's history the uncommitted row shows only when that file is among the uncommitted changes.
+  const worktree = useChanges(projectId, path && dirtyFiles > 0 && tab.tree ? { kind: "worktree", tree: tab.tree.path } : null)
+  const fileDirty = !!worktree.data?.some((f) => f.path === path)
+  const waiting = !!path && dirtyFiles > 0 && !!tab.tree && !worktree.data && !worktree.isError
   const history = useHistory({
-    id: projectId,
+    id: waiting ? null : projectId,
     trunkTip: trunk?.tip ?? null,
     tip: tab.head,
-    worktreeHead: dirtyFiles > 0 ? tab.head : null,
+    worktreeHead: dirtyFiles > 0 && (!path || fileDirty) ? tab.head : null,
     allBranches: others,
     remotes: others && remotes,
+    path,
   })
   const selection = useStore(ui, (s) => s.selection)
   const query = useStore(ui, (s) => s.query).trim().toLowerCase()
@@ -548,7 +583,8 @@ function Graph({ view, tab, trunk, overview }: { view: View; tab: Tab; trunk: Tr
   }, [last, items.length, hasNextPage, isFetchingNextPage, fetchNextPage])
 
   // A branch far behind the trunk has its HEAD below the first page: keep loading until it shows up.
-  const headLoaded = !tab.head || !!rows?.some((r) => r.id === tab.head)
+  // (A file's history may not hold the HEAD at all.)
+  const headLoaded = !tab.head || !!path || !!rows?.some((r) => r.id === tab.head)
   useEffect(() => {
     if (rows && !headLoaded && hasNextPage && !isFetchingNextPage) fetchNextPage()
   }, [rows, headLoaded, hasNextPage, isFetchingNextPage, fetchNextPage])
@@ -576,7 +612,7 @@ function Graph({ view, tab, trunk, overview }: { view: View; tab: Tab; trunk: Tr
   if (!trunk?.tip && !tab.head) return <StateView kind="empty" title={t("No commits yet")} description={dirtyFiles ? t("Changes lists the files not committed yet.") : undefined} />
   if (history.isError) return <StateView kind="error" description={history.error.message} onRetry={() => history.refetch()} />
   if (!rows) return <GraphSkeleton />
-  if (items.length === 0) return <StateView kind="empty" title={t("No commits yet")} />
+  if (items.length === 0) return path ? <StateView kind="empty" title={t("No commits change this file")} description={t("It may only exist under another name in earlier commits.")} /> : <StateView kind="empty" title={t("No commits yet")} />
 
   return (
     <div ref={scroller} tabIndex={-1} onMouseDown={() => ui.set({ focusArea: "graph" })} className="@container relative min-h-0 flex-1 overflow-y-auto outline-none">
@@ -597,7 +633,7 @@ function Graph({ view, tab, trunk, overview }: { view: View; tab: Tab; trunk: Tr
               trunk={trunk}
               isHead={it.kind === "row" && it.row.id === tab.head && dirtyFiles === 0}
               compareAhead={compare?.ahead ?? 0}
-              dirtyFiles={dirtyFiles}
+              dirtyFiles={path ? 0 : dirtyFiles}
               treePath={tab.tree?.path}
               onSelect={clickItem}
             />
@@ -646,7 +682,10 @@ const GraphRow = memo(function GraphRow(p: {
     return (
       <div style={style} className={cn(base, tone)} onClick={() => p.onSelect(p.item)}>
         <Lanes row={r} width={p.width} isHead={false} isWorktree />
-        <span className="min-w-0 flex-1 truncate font-medium text-warning">{t("Uncommitted changes")} · {tp("{n} file", "{n} files", p.dirtyFiles)}</span>
+        <span className="min-w-0 flex-1 truncate font-medium text-warning">
+          {t("Uncommitted changes")}
+          {p.dirtyFiles > 0 && ` · ${tp("{n} file", "{n} files", p.dirtyFiles)}`}
+        </span>
         <span className="shrink-0 truncate text-caption text-faint-foreground">{p.treePath ? tildify(p.treePath) : ""}</span>
       </div>
     )

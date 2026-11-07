@@ -286,4 +286,10 @@ export const zh: Record<string, string> = {
   "{size}, can't be previewed.": "{size}，不能预览。",
   "{size}, over the preview limit.": "{size}，超过预览上限。",
   "{status} in this version": "这一版{status}",
+  "Show all commits": "显示全部提交",
+  "Only commits that changed this file": "只看改过这个文件的提交",
+  "History of": "文件历史",
+  "Only the commits that changed this file (renames aren't followed)": "只列出改过这个文件的提交（不追踪改名前的历史）",
+  "No commits change this file": "没有提交改过这个文件",
+  "It may only exist under another name in earlier commits.": "它在更早的提交里可能用的是别的名字。",
 }

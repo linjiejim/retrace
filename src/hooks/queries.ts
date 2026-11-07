@@ -30,9 +30,11 @@ export const useHistory = (a: {
   worktreeHead: string | null
   allBranches: boolean
   remotes: boolean
+  /** Only this file's history. */
+  path: string | null
 }) =>
   useInfiniteQuery({
-    queryKey: ["history", a.id, a.trunkTip, a.tip, a.worktreeHead, a.allBranches, a.remotes],
+    queryKey: ["history", a.id, a.trunkTip, a.tip, a.worktreeHead, a.allBranches, a.remotes, a.path],
     // Later pages reuse the first page's branch tips: a branch moving in between can't splice two histories.
     queryFn: ({ pageParam }) => api.history({ ...a, id: a.id!, offset: pageParam.offset, count: HISTORY_PAGE, tips: pageParam.tips }),
     initialPageParam: { offset: 0, tips: undefined } as { offset: number; tips: string[] | undefined },
