@@ -29,6 +29,8 @@ pub struct ProjectEntry {
     pub kept_branches: Vec<String>,
     /// The group (`GroupEntry::id`) the project is listed under; none = ungrouped.
     pub group: Option<String>,
+    /// Shell command run in a new agent worktree before the agent starts (e.g. `pnpm install`).
+    pub setup: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

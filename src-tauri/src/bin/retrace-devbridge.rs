@@ -2,14 +2,18 @@
 //! worked on in a normal browser (`pnpm dev`, Vite proxies `/api`). Not part of the app bundle.
 //!
 //! Requests must carry `X-Retrace: 1`; browsers can't add that header cross-site without a
-//! preflight, which this server never approves.
+//! preflight, which this server never approves. Agent sessions answer only with
+//! `RETRACE_DEVBRIDGE_AGENTS=1`.
 
 use tiny_http::{Header, Method, Response, Server};
 
 fn main() {
     let state = retrace_lib::core::State::load();
+    // Agents start processes; the bridge runs them only when asked to (for working on their UI).
+    let agents = std::env::var("RETRACE_DEVBRIDGE_AGENTS").is_ok_and(|v| v == "1");
+    state.agents_allowed.store(agents, std::sync::atomic::Ordering::Relaxed);
     let server = Server::http("127.0.0.1:5198").expect("port 5198 is busy");
-    eprintln!("retrace-devbridge listening on http://127.0.0.1:5198 (config: {})", state.config_path.display());
+    eprintln!("retrace-devbridge listening on http://127.0.0.1:5198 (config: {}, agents: {})", state.config_path.display(), if agents { "on" } else { "off" });
     for mut request in server.incoming_requests() {
         let state = state.clone();
         std::thread::spawn(move || {
