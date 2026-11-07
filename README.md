@@ -12,12 +12,12 @@ Agents now write code in a dozen worktrees at once. Retrace puts every project, 
 
 ## Features
 
-- **Many repositories, one window.** Add repositories, or a folder of them. A dot marks projects with uncommitted work; drag to reorder.
+- **Many repositories, one window.** Add repositories, or a folder of them. A dot marks projects with uncommitted work; drag to reorder, and sort them into groups that fold away. Right-click a project or group for its menu.
 - **The integration branch stays left.** `main` (or whatever you pick) owns column 0 of a compact one-line graph. Other branches join only when you ask, local first, remote optionally.
 - **Worktrees and branches, folded.** The main tree, then *Active* (uncommitted work, or commits not yet in `main`), *Merged* (clean worktrees and local branches already in `main`, squash merges included) and *Branches* without a worktree still in progress. Merged ones can be removed safely: no `--force`, everything checked again first, a branch deleted only while it still points at the commit you saw, and Undo right after. `develop`, `release/*` and branches you keep are never offered.
 - **Commits as you'd review them.** Click a row to open its message and diff below the graph; click it again to close. The body is shown in full (fold it if you like), and squash or merge commits get a **PR #N** button that opens the pull request on GitHub.
 - **Diffs that read well.** Side by side by default, no wrapping, syntax highlighted off the main thread. Read one file at a time or every change in a row. Changed images show before and after.
-- **Browse any version.** Switch *Changes* to *Files* to see the whole tree at the selected commit (or on disk for uncommitted work): filter, fold, and preview code, images, and Markdown rendered like GitHub with its relative links and images.
+- **Browse any version.** Switch *Changes* to *Files* to see the whole tree at the selected commit (or on disk for uncommitted work): filter, fold, and preview code, images, and Markdown rendered like GitHub with its relative links and images. Pick a file and the graph narrows to the commits that changed it, so you can step through its history diff by diff. File icons come in four themes (Settings → File icons).
 - **Your layout.** Drag any view's grip to dock it on another view's edge or swap them. Each view keeps a minimum size, so nothing gets squeezed.
 - **A proper Mac app.** Native menu bar, keyboard first, light and dark, English and Chinese.
 
