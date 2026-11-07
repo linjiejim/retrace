@@ -5,7 +5,7 @@ import { api, inTauri } from "@/lib/api"
 import { useAppearance, type Appearance } from "@/lib/appearance"
 import { run } from "@/lib/commands"
 import { t, type LangPref } from "@/lib/i18n"
-import { prefs as uiPrefs, useStore } from "@/lib/store"
+import { prefs as uiPrefs, useStore, type FileIconTheme } from "@/lib/store"
 import { checkForUpdates } from "@/lib/updater"
 import type { Prefs } from "@/lib/types"
 import { usePrefs } from "@/hooks/queries"
@@ -16,6 +16,7 @@ import { Select } from "@/components/ui/select"
 import { SettingRow, SettingsSection } from "@/components/ui/settings"
 import { Switch } from "@/components/ui/switch"
 import { notify } from "@/components/ui/toast"
+import { FileIcon, FolderIcon } from "./FileIcon"
 
 const EDITORS = ["Visual Studio Code", "Cursor", "Zed", "Sublime Text", "Xcode", "Nova"]
 const TERMINALS = ["Terminal", "iTerm", "Ghostty", "Warp", "WezTerm", "kitty"]
@@ -39,6 +40,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const diffStyle = useStore(uiPrefs, (s) => s.diffStyle)
   const wrap = useStore(uiPrefs, (s) => s.wrap)
   const language = useStore(uiPrefs, (s) => s.language)
+  const fileIcons = useStore(uiPrefs, (s) => s.fileIcons)
 
   const save = async (patch: Partial<Prefs>) => {
     if (!server.data) return
@@ -98,6 +100,23 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                   options={[
                     { value: "split", label: t("Side by side") },
                     { value: "unified", label: t("Unified") },
+                  ]}
+                />
+              }
+            />
+            <SettingRow
+              label={t("File icons")}
+              description={<IconSample theme={fileIcons} />}
+              control={
+                <Segmented<FileIconTheme>
+                  size="sm"
+                  value={fileIcons}
+                  onValueChange={(v) => uiPrefs.set({ fileIcons: v })}
+                  options={[
+                    { value: "minimal", label: t("Minimal") },
+                    { value: "outline", label: t("Outline") },
+                    { value: "color", label: t("Color") },
+                    { value: "letters", label: t("Letters") },
                   ]}
                 />
               }
@@ -163,6 +182,20 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
         </DialogBody>
       </DialogContent>
     </Dialog>
+  )
+}
+
+const SAMPLE = ["src/App.tsx", "src/main.ts", "package.json", "README.md", "src/index.css", "icon.png", "Cargo.toml", "build.sh"]
+
+/** How the changes and files lists look in a theme. */
+function IconSample({ theme }: { theme: FileIconTheme }) {
+  return (
+    <span className="mt-1 flex flex-wrap items-center gap-2" aria-hidden>
+      <FolderIcon name="src" open={false} theme={theme} />
+      {SAMPLE.map((p) => (
+        <FileIcon key={p} path={p} theme={theme} />
+      ))}
+    </span>
   )
 }
 

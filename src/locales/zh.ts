@@ -307,4 +307,9 @@ export const zh: Record<string, string> = {
   "Group name": "分组名",
   "Move to group": "移到分组",
   "Take out of the group": "移出分组",
+  "File icons": "文件图标",
+  "Minimal": "极简",
+  "Outline": "线条",
+  "Color": "彩色",
+  "Letters": "字母",
 }

@@ -82,7 +82,11 @@ export interface Prefs {
   autoUpdate: boolean
   /** Groups folded in the projects list. */
   collapsedGroups: string[]
+  /** Icons in the changes and files lists. */
+  fileIcons: FileIconTheme
 }
+
+export type FileIconTheme = "minimal" | "outline" | "color" | "letters"
 
 // v2: the layout became a tree and diff lines stopped wrapping by default.
 // v3: the default layout changed (two columns) and presets went away; v2 keeps everything but the layout.
@@ -103,6 +107,7 @@ const defaults: Prefs = {
   remoteBranches: false,
   autoUpdate: true,
   collapsedGroups: [],
+  fileIcons: "color",
 }
 
 function loadPrefs(): Prefs {

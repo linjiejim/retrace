@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, File, Folder, List, ListTree, Search, X } from "lucide-react"
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, List, ListTree, Search, X } from "lucide-react"
 import { openFile, openPreview } from "@/lib/commands"
 import { shortHash, tildify } from "@/lib/format"
 import { keyNav } from "@/lib/keys"
@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { StateView } from "@/components/ui/state"
 import { Tooltip } from "@/components/ui/tooltip"
 import { PanelHeader } from "@/components/layout/LayoutView"
+import { FileIcon, FolderIcon } from "./FileIcon"
 
 export const STATUS_TONE: Record<FileChange["status"], string> = {
   added: "text-success",
@@ -381,6 +382,7 @@ function TreeRows<T extends Pathed>({
   footer?: string
 }) {
   const scroller = useRef<HTMLDivElement>(null)
+  const icons = useStore(prefs, (s) => s.fileIcons)
   const v = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current, estimateSize: () => 26, overscan: 20 })
 
   // Keep the current file in view when the keyboard or the diff moves it.
@@ -401,7 +403,7 @@ function TreeRows<T extends Pathed>({
             return (
               <div key={"d:" + node.path} style={style} className={cn(base, "text-muted-foreground hover:bg-accent")} onClick={() => onFolder(node.path)}>
                 <ChevronRight className={cn("size-3.5 shrink-0 text-faint-foreground transition-transform duration-(--duration-fast)", isOpen(node.path) && "rotate-90")} />
-                <Folder className="size-3.5 shrink-0 text-faint-foreground" />
+                <FolderIcon name={node.name} open={isOpen(node.path)} theme={icons} />
                 <span className="min-w-0 truncate">{node.name}</span>
               </div>
             )
@@ -411,7 +413,7 @@ function TreeRows<T extends Pathed>({
             <Tooltip key={"f:" + f.path} content={tip(f)} side="right" delayDuration={900}>
               <div style={style} className={cn(base, selected === f.path ? "bg-selected" : "hover:bg-accent")} onClick={() => onFile(f)}>
                 <span className="w-3.5 shrink-0" />
-                <File className="size-3.5 shrink-0 text-faint-foreground" />
+                <FileIcon path={f.path} theme={icons} />
                 <span className="min-w-0 flex-1 truncate">{renderName(f, node.name)}</span>
                 {renderEnd(f)}
               </div>
