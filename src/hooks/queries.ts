@@ -139,13 +139,19 @@ export interface Tab {
 export const treeKey = (path: string) => `tree:${path}`
 export const branchKey = (name: string) => `branch:${name}`
 
-/** A linked worktree with nothing uncommitted whose HEAD is already in the trunk: safe to delete. */
+/**
+ * A linked worktree with nothing uncommitted whose HEAD is already in the trunk: safe to delete.
+ * Also one whose folder is already gone, by the HEAD git recorded: only that record is left.
+ */
 export function isArchived(tab: Tab, trunk: Trunk | null): boolean {
   const t = tab.tree
   const s = tab.status
-  if (!t || t.isMain || t.bare || t.locked || t.prunable || !s || s.error) return false
+  if (!t || t.isMain || t.bare || t.locked || !s) return false
   if (t.branch && t.branch === trunk?.name) return false
-  return s.files === 0 && !s.operation && !!s.trunk && s.trunk.integration !== "none"
+  const merged = !!s.trunk && s.trunk.integration !== "none"
+  if (s.missing) return t.prunable && merged
+  if (t.prunable || s.error) return false
+  return s.files === 0 && !s.operation && merged
 }
 
 export function buildTabs(ov: Overview | undefined, statuses: TreeStatus[] | undefined, branchTabs: string[]): Tab[] {

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
-import { buildRows, dropTarget, moveProject, sections } from "./groups"
+import { PINNED, buildRows, dropTarget, groupGaps, moveGroup, moveProject, sections } from "./groups"
 import type { Group, Project } from "./types"
 
-const p = (id: string, group: string | null = null): Project => ({ id, name: id, trunkOverride: null, group })
+const p = (id: string, group: string | null = null, pinned = false): Project => ({ id, name: id, trunkOverride: null, group, pinned })
 const groups: Group[] = [
   { id: "g1", name: "Work" },
   { id: "g2", name: "Side" },
@@ -45,6 +45,48 @@ describe("groups", () => {
     // rows: [g1] b d [g2] c a e — between c and a the pointer decides
     expect(dropTarget(open, all, 5, false)).toEqual({ group: null, before: "a" })
     expect(dropTarget(open, all, 5, true)).toEqual({ group: "g2", before: null })
+  })
+
+  it("lists pinned projects first, out of their own groups", () => {
+    const withPins = [...projects, p("f", "g1", true), p("g", null, true)]
+    expect(sections(withPins, groups)).toEqual([
+      { group: PINNED, ids: ["f", "g"] },
+      { group: "g1", ids: ["b", "d"] },
+      { group: "g2", ids: ["c"] },
+      { group: null, ids: ["a", "e"] },
+    ])
+    const rows = buildRows(withPins, groups, new Set(["g2"]))
+    expect(rows.map((r) => (r.kind === "group" ? `[${r.group.id}:${r.count}]` : r.kind === "empty" ? `(${r.group})` : r.project.id))).toEqual([
+      `[${PINNED}:2]`,
+      "f",
+      "g",
+      "[g1:2]",
+      "b",
+      "d",
+      "[g2:1]",
+      "a",
+      "e",
+    ])
+    // Dragged between the pinned ones: it lands there.
+    expect(dropTarget(rows, sections(withPins, groups), 2, false)).toEqual({ group: PINNED, before: "g" })
+  })
+
+  it("finds the gaps between groups and moves a group", () => {
+    const withPins = [...projects, p("f", "g1", true)]
+    const rows = buildRows(withPins, [...groups, { id: "g3", name: "New" }], new Set(["g2"]))
+    // rows: [pinned] f [g1] b d [g2] [g3] (g3) a e
+    expect(groupGaps(rows)).toEqual([
+      { before: "g1", row: 2 },
+      { before: "g2", row: 5 },
+      { before: "g3", row: 6 },
+      { before: null, row: 8 },
+    ])
+    expect(groupGaps(buildRows([p("a")], [], new Set()))).toEqual([])
+    const order = ["g1", "g2", "g3"]
+    expect(moveGroup(order, "g1", { before: null, row: 8 })).toEqual(["g2", "g3", "g1"])
+    expect(moveGroup(order, "g3", { before: "g1", row: 2 })).toEqual(["g3", "g1", "g2"])
+    expect(moveGroup(order, "g2", { before: "g2", row: 5 })).toEqual(order)
+    expect(moveGroup(order, "g2", { before: "g3", row: 6 })).toEqual(order)
   })
 
   it("moves a project into, within and out of groups", () => {

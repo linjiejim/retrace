@@ -6,6 +6,8 @@ export interface Project {
   trunkOverride: string | null
   /** The group it's listed under; null, or an id no longer in the groups, means ungrouped. */
   group: string | null
+  /** Listed first, above the groups; `group` is where it goes back when unpinned. */
+  pinned: boolean
 }
 
 /** A folder in the projects list. */
@@ -96,6 +98,8 @@ export interface TreeStatus {
   operation: "merge" | "rebase" | "cherry-pick" | "revert" | "bisect" | null
   trunk: TrunkCompare | null
   error: string | null
+  /** Its folder is gone: git only keeps a record of it, with the HEAD it had (compared in `trunk`). */
+  missing: boolean
 }
 
 /** `[kind, from, to, color]`; kind 0 pass-through, 1 into the node, 2 out of the node, 3 cut-off edge. */
@@ -131,6 +135,10 @@ export interface CleanupCandidate {
   notableIgnored: string[]
   /** HEAD, index or reflog changed in the last 15 minutes. */
   recent: boolean
+  /** Its branch has a copy on origin (its upstream, or the same commit), as of the last fetch. */
+  onOrigin: boolean
+  /** Its folder is already gone: removing it drops git's record of it, nothing on disk. */
+  missing: boolean
 }
 
 /** A local branch no worktree has checked out, judged against the trunk. */
@@ -151,6 +159,8 @@ export interface BranchStatus {
   protected: boolean
   /** The user chose to keep it. */
   kept: boolean
+  /** It has a copy on origin (its upstream, or the same commit), as of the last fetch. */
+  onOrigin: boolean
 }
 
 export interface RemoveOutcome {
@@ -158,6 +168,15 @@ export interface RemoveOutcome {
   /** The branch actually deleted, read again at removal time. */
   deletedBranch: string | null
   branchKeptReason: string | null
+  remote: RemoteDeletion
+}
+
+/** The branch's copy on origin. Both null: there was none, or deleting it wasn't asked for. */
+export interface RemoteDeletion {
+  /** `origin/<name>`, now deleted on origin. */
+  deleted: string | null
+  /** Why the copy on origin was kept. */
+  keptReason: string | null
 }
 
 export interface PatchText {

@@ -243,26 +243,38 @@ pub fn run_with_input(dir: &Path, args: &[&str], input: Vec<u8>) -> Result<Vec<u
     Ok(out.stdout)
 }
 
-/// Long-running network calls (fetch) get a hard timeout so a stuck remote can't pile up processes.
-pub fn run_with_timeout(dir: &Path, args: &[&str], timeout: Duration) -> Result<()> {
+/// A network call that ran to the end, successfully or not.
+pub struct Finished {
+    pub ok: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Long-running network calls (fetch, push) get a hard timeout so a stuck remote can't pile up
+/// processes. Only running out of time or failing to start is an error; a git failure is `ok: false`.
+pub fn run_with_timeout_output(dir: &Path, args: &[&str], timeout: Duration) -> Result<Finished> {
     let _pass = PROCESSES.enter();
     let mut child = command(dir, args)
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| tr!("无法运行 git（{}）", "Can't run git ({})", binary().display()))?;
+    // Drained while it runs, so a full pipe can't stall it.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_string(&mut text);
+            }
+            text
+        })
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let started = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
-            if status.success() {
-                return Ok(());
-            }
-            let mut stderr = String::new();
-            if let Some(mut pipe) = child.stderr.take() {
-                let _ = pipe.read_to_string(&mut stderr);
-            }
-            let reason = stderr.trim().lines().last().unwrap_or("").trim_start_matches("fatal: ").to_string();
-            bail!(tr!("git {} 失败：{}", "git {} failed: {}", args.first().copied().unwrap_or(""), reason));
+            return Ok(Finished { ok: status.success(), stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() });
         }
         if started.elapsed() > timeout {
             let _ = child.kill();
@@ -271,6 +283,20 @@ pub fn run_with_timeout(dir: &Path, args: &[&str], timeout: Duration) -> Result<
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// The last line git wrote to stderr, without its `fatal:` / `error:` prefix.
+pub fn last_error_line(stderr: &str) -> &str {
+    let line = stderr.trim().lines().last().unwrap_or("").trim();
+    line.strip_prefix("fatal: ").or_else(|| line.strip_prefix("error: ")).unwrap_or(line)
+}
+
+pub fn run_with_timeout(dir: &Path, args: &[&str], timeout: Duration) -> Result<()> {
+    let out = run_with_timeout_output(dir, args, timeout)?;
+    if !out.ok {
+        bail!(tr!("git {} 失败：{}", "git {} failed: {}", args.first().copied().unwrap_or(""), last_error_line(&out.stderr)));
+    }
+    Ok(())
 }
 
 /// Splits NUL-terminated output into tokens, dropping the trailing empty one.
