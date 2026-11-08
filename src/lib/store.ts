@@ -47,7 +47,7 @@ export interface UiState {
   focusArea: "graph" | "changes"
   /** Diff takes the whole window. */
   focusMode: boolean
-  /** The diff (or file preview) area is shown. Clicking the selected graph row toggles it. */
+  /** The diff (or file preview) area is shown. Clicking its selected graph row deselects it and closes it. */
   diffOpen: boolean
   /** File previewed in the files view: a path in the selected version. */
   preview: string | null

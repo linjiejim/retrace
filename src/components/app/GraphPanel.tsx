@@ -530,7 +530,7 @@ const selectionOf = (it: Item): Selection =>
   it.kind === "compare" ? { kind: "compare" } : it.row.id === WORKTREE_ROW ? { kind: "worktree" } : { kind: "commit", hash: it.row.id }
 /** Keyboard: move the selection, leave the diff as it is. */
 const selectItem = (it: Item) => ui.set({ selection: selectionOf(it), focusArea: "graph" })
-/** Click (module-level so memoised rows get a stable callback): the selected row toggles the diff. */
+/** Click (module-level so memoised rows get a stable callback): open the row or deselect it. */
 const clickItem = (it: Item) => pickRow(selectionOf(it))
 
 function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; trunk: Trunk | null; overview: Overview; path: string | null }) {

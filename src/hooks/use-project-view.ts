@@ -25,7 +25,9 @@ export function useProjectView() {
 }
 
 export function targetOf(sel: Selection | null, tab: Tab | undefined, trunk: Trunk | null): Target | null {
-  if (!sel || !tab) return null
+  if (!tab) return null
+  // With no graph row selected, browse the current worktree's uncommitted changes and files.
+  if (!sel) return tab.tree ? { kind: "worktree", tree: tab.tree.path } : null
   if (sel.kind === "commit") return { kind: "commit", hash: sel.hash }
   if (sel.kind === "worktree") return tab.tree ? { kind: "worktree", tree: tab.tree.path } : null
   return trunk && tab.head ? { kind: "compare", base: trunk.tip, tip: tab.head } : null
@@ -45,6 +47,8 @@ export function useDefaultSelection() {
   useEffect(() => {
     if (!tab || !statusReady) return
     const key = `${projectId}\0${tab.key}`
+    // An explicit deselection stays empty until another tab is opened.
+    if (owner.current === key && !ui.get().selection) return
     const moved = owner.current !== null && owner.current !== key
     owner.current = key
     const sel = ui.get().selection
