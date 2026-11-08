@@ -254,3 +254,39 @@ export interface FileContent {
   binary: boolean
   tooLarge: boolean
 }
+
+/** A coding agent Retrace knows how to start; `path` is null when it isn't installed. */
+export interface AgentKind {
+  id: string
+  name: string
+  path: string | null
+}
+
+/** An agent running in a terminal. Times are milliseconds since the epoch. */
+export interface AgentSession {
+  id: string
+  project: string
+  tree: string
+  branch: string | null
+  agent: string
+  task: string
+  /** What the agent put in the terminal title. */
+  title: string | null
+  startedAt: number
+  lastOutputAt: number
+  /** The last bell or desktop notification from the agent. */
+  bellAt: number | null
+  /** The last time the user typed or sent something. */
+  inputAt: number | null
+  running: boolean
+  exitCode: number | null
+  /** Ended because the user stopped or closed it. */
+  stopped: boolean
+}
+
+/** Terminal output from `start` on (base64), and where the stream is now. */
+export interface AgentChunk {
+  data: string
+  start: number
+  next: number
+}

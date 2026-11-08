@@ -4,7 +4,7 @@
 use crate::tr;
 use super::config::{self, GroupEntry, Prefs, ProjectEntry};
 use super::model::*;
-use super::{cleanup, diff, files, git, history, repo, State};
+use super::{agent, cleanup, diff, files, git, history, repo, shell_env, State};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -531,7 +531,11 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let dir = project_dir(state, &id)?;
             let (trunk, trees) = trunk_and_trees(state, &id, &dir)?;
             match trunk {
-                Some(trunk) => json!(cleanup::candidates(&dir, &trunk, &trees, &state.integration)),
+                Some(trunk) => {
+                    let mut candidates = cleanup::candidates(&dir, &trunk, &trees, &state.integration);
+                    candidates.retain(|c| !state.agents.tree_in_use(&c.path));
+                    json!(candidates)
+                }
                 None => json!(Vec::<CleanupCandidate>::new()),
             }
         }
@@ -552,7 +556,9 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let dir = project_dir(state, &id)?;
             let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
             let trunk = trunk.ok_or_else(|| anyhow!(tr!("没有找到集成分支", "No integration branch found")))?;
-            let outcome = cleanup::remove(&dir, &trunk, &path, &head, &acknowledged_ignored, delete_branch, delete_remote, &kept_branches(state, &id)?, &state.integration)?;
+            let outcome = state.agents.with_idle_tree(&path, || {
+                cleanup::remove(&dir, &trunk, &path, &head, &acknowledged_ignored, delete_branch, delete_remote, &kept_branches(state, &id)?, &state.integration)
+            })?;
             if let Some(deleted) = outcome.deleted.clone() {
                 remember_deleted(state, &id, deleted);
             }
@@ -664,6 +670,156 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 bail!(tr!("只能打开这个项目里的路径", "Only paths inside this project can be opened"));
             }
             open_with(state, &target.to_string_lossy(), &with)?;
+            Value::Null
+        }
+        cmd if cmd.starts_with("agent") => agent_command(state, cmd, a)?,
+        _ => bail!(tr!("未知命令：{cmd}", "Unknown command: {cmd}")),
+    })
+}
+
+#[derive(Deserialize)]
+struct SessionId {
+    session: String,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn b64() -> base64::engine::GeneralPurpose {
+    base64::engine::general_purpose::STANDARD
+}
+
+/// Agent sessions (see `agent.rs`). The dev bridge answers these only when started with
+/// `RETRACE_DEVBRIDGE_AGENTS=1`: a development tool shouldn't start processes by default.
+fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
+    use base64::Engine;
+    if !state.agents_allowed.load(std::sync::atomic::Ordering::Relaxed) {
+        bail!(tr!("开发桥默认不启动 agent：设 RETRACE_DEVBRIDGE_AGENTS=1 再启动它", "The dev bridge doesn't run agents unless started with RETRACE_DEVBRIDGE_AGENTS=1"));
+    }
+    let sessions = &state.agents;
+    Ok(match cmd {
+        "agentKinds" => json!(agent::kinds(shell_env::agent_env())),
+        "agentStart" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct A {
+                id: String,
+                agent: String,
+                #[serde(default)]
+                task: String,
+                /// An existing worktree; none = a new one on `branch`.
+                tree: Option<String>,
+                branch: Option<String>,
+                setup: Option<String>,
+                cols: Option<u16>,
+                rows: Option<u16>,
+            }
+            let a: A = args(a)?;
+            let dir = project_dir(state, &a.id)?;
+            let kind = agent::kind(&a.agent)?;
+            let env = shell_env::agent_env();
+            // Before touching git: an agent that isn't installed shouldn't leave a worktree behind.
+            if shell_env::which(env, kind.binary_name()).is_none() {
+                bail!(tr!("找不到 {}：登录 shell 的 PATH 里没有它", "Can't find {}: it isn't on your login shell's PATH", kind.name));
+            }
+            let (tree, branch, setup) = match a.tree {
+                Some(tree) => {
+                    let found = repo::worktrees(&dir)?.into_iter().find(|t| t.path == tree && !t.bare);
+                    let Some(found) = found else {
+                        bail!(tr!("不是这个项目的 worktree：{tree}", "Not a worktree of this project: {tree}"));
+                    };
+                    (found.path, found.branch, None)
+                }
+                None => {
+                    let branch = a.branch.as_deref().map(str::trim).filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("新 worktree 需要一个分支名", "A new worktree needs a branch name")))?.to_string();
+                    let (trunk, _) = trunk_and_trees(state, &a.id, &dir)?;
+                    let trunk = trunk.ok_or_else(|| anyhow!(tr!("这个项目还没有集成分支，没法新建 worktree", "This project has no integration branch to start a worktree from")))?;
+                    let setup = a.setup.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                    // Remembered per project, whatever happens next.
+                    {
+                        let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+                        if let Some(p) = cfg.projects.iter_mut().find(|p| p.path == a.id) {
+                            p.setup = setup.clone();
+                        }
+                    }
+                    save(state)?;
+                    let path = agent::create_worktree(&dir, &branch, &trunk.tip)?;
+                    (path, Some(branch), setup)
+                }
+            };
+            let launch = agent::launch(kind, &a.task, setup.as_deref(), Path::new(&tree), &dir, env, (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))?;
+            json!(sessions.spawn(launch, agent::Meta { project: a.id, tree, branch, agent: kind.id.into(), task: a.task.trim().to_string() })?)
+        }
+        "agentResume" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                cols: Option<u16>,
+                rows: Option<u16>,
+            }
+            let a: A = args(a)?;
+            json!(sessions.resume(&a.session, |saved| {
+                let dir = project_dir(state, &saved.project)?;
+                if !Path::new(&saved.tree).is_dir() {
+                    bail!(tr!("会话的 worktree 目录不存在：{}", "The session's worktree folder no longer exists: {}", saved.tree));
+                }
+                let known = repo::worktrees(&dir)?.into_iter().any(|t| t.path == saved.tree && !t.bare);
+                if !known {
+                    bail!(tr!("不是这个项目的 worktree：{}", "Not a worktree of this project: {}", saved.tree));
+                }
+                agent::resume_launch(agent::kind(&saved.agent)?, Path::new(&saved.tree), &dir, shell_env::agent_env(), (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))
+            })?)
+        }
+        "agentSetup" => {
+            let Id { id } = args(a)?;
+            let cfg = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+            json!(cfg.projects.iter().find(|p| p.path == id).and_then(|p| p.setup.clone()))
+        }
+        "agentSessions" => json!(sessions.list()),
+        "agentRead" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                from: u64,
+            }
+            let A { session, from } = args(a)?;
+            let (data, start, next) = sessions.read(&session, from)?;
+            json!({ "data": b64().encode(data), "start": start, "next": next })
+        }
+        "agentWrite" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                data: String,
+                /// Typed by the user (answers a bell); false for the terminal's own replies.
+                #[serde(default = "yes")]
+                typed: bool,
+            }
+            let A { session, data, typed } = args(a)?;
+            let bytes = b64().decode(data.as_bytes()).map_err(|_| anyhow!(tr!("参数格式不对", "Malformed arguments")))?;
+            sessions.write(&session, &bytes, typed)?;
+            Value::Null
+        }
+        "agentResize" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                cols: u16,
+                rows: u16,
+            }
+            let A { session, cols, rows } = args(a)?;
+            sessions.resize(&session, cols, rows)?;
+            Value::Null
+        }
+        "agentStop" => {
+            let SessionId { session } = args(a)?;
+            sessions.stop(&session)?;
+            Value::Null
+        }
+        "agentClose" => {
+            let SessionId { session } = args(a)?;
+            sessions.close(&session)?;
             Value::Null
         }
         _ => bail!(tr!("未知命令：{cmd}", "Unknown command: {cmd}")),
