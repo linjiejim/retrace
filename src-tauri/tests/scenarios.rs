@@ -471,6 +471,53 @@ fn cleanup_lists_merged_clean_trees_and_removes_them_safely() {
 }
 
 #[test]
+fn a_merged_worktree_whose_folder_is_gone_is_cleaned_up_by_its_record() {
+    let f = fixture("gone-trees");
+    call(&f, "addPath", json!({ "path": f.main }));
+    let id = f.main.to_string_lossy().to_string();
+    let base = f.main.parent().unwrap();
+    let path_of = |name: &str| base.join(name).to_string_lossy().to_string();
+    // Merged, then its folder deleted from under git.
+    sh(&f.main, &["worktree", "add", "-q", &path_of("wt-gone"), "feat/merged"]);
+    std::fs::remove_dir_all(base.join("wt-gone")).unwrap();
+    // Not merged, folder deleted: its record still keeps the work findable.
+    sh(&f.main, &["worktree", "add", "-q", "-b", "feat/lost", &path_of("wt-lost")]);
+    commit(&base.join("wt-lost"), "lost.txt", "lost\n", "lost work");
+    std::fs::remove_dir_all(base.join("wt-lost")).unwrap();
+    // Merged, folder still there but no longer a worktree: it may hold files of its own.
+    sh(&f.main, &["worktree", "add", "-q", "-b", "feat/husk", &path_of("wt-husk"), "main"]);
+    std::fs::remove_file(base.join("wt-husk/.git")).unwrap();
+    write(&base.join("wt-husk"), "mine.txt", "keep\n");
+
+    let statuses = call(&f, "treeStatuses", json!({ "id": id }));
+    let status = |name: &str| statuses.as_array().unwrap().iter().find(|s| s["path"] == json!(path_of(name))).unwrap().clone();
+    let gone = status("wt-gone");
+    assert_eq!((gone["missing"].as_bool(), gone["trunk"]["integration"].as_str()), (Some(true), Some("ancestor")), "{gone}");
+    assert_eq!(status("wt-husk")["missing"], json!(false));
+
+    let list = call(&f, "cleanupCandidates", json!({ "id": id }));
+    let paths: Vec<&str> = list.as_array().unwrap().iter().map(|c| c["path"].as_str().unwrap()).collect();
+    assert!(paths.contains(&path_of("wt-gone").as_str()), "{list}");
+    assert!(!paths.contains(&path_of("wt-lost").as_str()), "not merged");
+    assert!(!paths.contains(&path_of("wt-husk").as_str()), "folder still there");
+    let candidate = list.as_array().unwrap().iter().find(|c| c["path"] == json!(path_of("wt-gone"))).unwrap().clone();
+    assert_eq!((candidate["missing"].as_bool(), candidate["recent"].as_bool()), (Some(true), Some(false)));
+
+    let out = call(&f, "removeWorktree", json!({ "id": id, "path": candidate["path"], "head": candidate["head"], "deleteBranch": true }));
+    assert_eq!(out["deletedBranch"], json!("feat/merged"), "{out}");
+    let trees = sh(&f.main, &["worktree", "list", "--porcelain"]);
+    assert!(!trees.contains(&path_of("wt-gone")), "{trees}");
+    assert!(trees.contains(&path_of("wt-lost")), "only its own record goes: {trees}");
+
+    for name in ["wt-lost", "wt-husk"] {
+        let head = status(name)["head"].clone();
+        assert!(dispatch(&f.state, "removeWorktree", json!({ "id": id, "path": path_of(name), "head": head, "deleteBranch": true })).is_err(), "{name}");
+    }
+    assert_eq!(std::fs::read_to_string(base.join("wt-husk/mine.txt")).unwrap(), "keep\n");
+    assert!(!sh(&f.main, &["branch", "--list", "feat/lost", "feat/husk"]).is_empty());
+}
+
+#[test]
 fn branches_without_a_worktree_are_judged_and_deleted_safely() {
     let f = fixture("branch-cleanup");
     call(&f, "addPath", json!({ "path": f.main }));
@@ -577,6 +624,83 @@ fn branches_without_a_worktree_are_judged_and_deleted_safely() {
     assert_eq!(sh(&f.main, &["config", "--bool", "branch.feat/stale.flag"]), "true");
     assert!(dispatch(&f.state, "restoreBranch", json!({ "id": id, "name": "feat/stale" })).is_err(), "restored once");
     assert!(dispatch(&f.state, "restoreBranch", json!({ "id": id, "name": "feat/new" })).is_err(), "never deleted here");
+}
+
+#[test]
+fn a_deleted_branchs_own_copy_on_origin_goes_too_when_asked() {
+    let f = fixture("origin-cleanup");
+    let origin = f.main.parent().unwrap().join("origin.git");
+    sh(f.main.parent().unwrap(), &["init", "-q", "--bare", origin.to_str().unwrap()]);
+    sh(&f.main, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    sh(&f.main, &["push", "-q", "-u", "origin", "main", "feat/merged", "feat/squash"]);
+    // Pushed without -u: no upstream, but the same commit, so still its copy.
+    sh(&f.main, &["branch", "feat/plain", "main"]);
+    sh(&f.main, &["push", "-q", "origin", "feat/plain"]);
+    // Someone else's branch of the same name on origin: neither tracked nor at the same commit.
+    sh(&f.main, &["branch", "feat/same", "main~1"]);
+    sh(&f.main, &["push", "-q", "origin", "main:refs/heads/feat/same"]);
+    // Merged here, but origin's copy has a commit the trunk lacks.
+    sh(&f.main, &["switch", "-q", "-c", "feat/ahead"]);
+    commit(&f.main, "src/ahead.rs", "a\n", "only on origin");
+    sh(&f.main, &["push", "-q", "-u", "origin", "feat/ahead"]);
+    sh(&f.main, &["reset", "-q", "--hard", "HEAD~1"]);
+    sh(&f.main, &["switch", "-q", "main"]);
+    // Moved on origin after the last fetch.
+    sh(&f.main, &["branch", "feat/moved", "main"]);
+    sh(&f.main, &["push", "-q", "-u", "origin", "feat/moved"]);
+    let older = sh(&f.main, &["rev-parse", "main~1"]);
+    sh(&origin, &["update-ref", "refs/heads/feat/moved", &older]);
+    // Left alone unless asked.
+    sh(&f.main, &["branch", "feat/unasked", "main"]);
+    sh(&f.main, &["push", "-q", "-u", "origin", "feat/unasked"]);
+
+    call(&f, "addPath", json!({ "path": f.main }));
+    let id = f.main.to_string_lossy().to_string();
+    let on_origin = |name: &str| !sh(&origin, &["branch", "--list", name]).is_empty();
+    let list = call(&f, "branchStatuses", json!({ "id": id }));
+    let flag = |name: &str| list.as_array().unwrap().iter().find(|b| b["name"] == name).map(|b| b["onOrigin"].clone());
+    assert_eq!(flag("feat/merged"), Some(json!(true)), "tracks its copy");
+    assert_eq!(flag("feat/plain"), Some(json!(true)), "same commit");
+    assert_eq!(flag("feat/same"), Some(json!(false)), "someone else's branch");
+    let delete = |name: &str, remote: bool| call(&f, "deleteBranch", json!({ "id": id, "name": name, "tip": sh(&f.main, &["rev-parse", name]), "deleteRemote": remote }));
+
+    let out = delete("feat/merged", true);
+    assert_eq!(out["deleted"], "origin/feat/merged");
+    assert!(!on_origin("feat/merged"));
+    assert!(sh(&f.main, &["for-each-ref", "refs/remotes/origin/feat/merged"]).is_empty(), "the remote-tracking branch goes too");
+    assert_eq!(delete("feat/plain", true)["deleted"], "origin/feat/plain");
+    assert!(!on_origin("feat/plain"));
+
+    let out = delete("feat/same", true);
+    assert_eq!((&out["deleted"], &out["keptReason"]), (&Value::Null, &Value::Null), "not its copy: untouched");
+    assert!(on_origin("feat/same"));
+
+    let out = delete("feat/ahead", true);
+    assert!(out["keptReason"].as_str().unwrap().contains("没有的提交"), "{out}");
+    assert!(on_origin("feat/ahead"));
+    assert!(sh(&f.main, &["branch", "--list", "feat/ahead"]).is_empty(), "the local branch is deleted all the same");
+
+    let out = delete("feat/moved", true);
+    assert!(out["keptReason"].as_str().unwrap().contains("fetch"), "{out}");
+    assert_eq!(sh(&origin, &["rev-parse", "feat/moved"]), older, "the lease kept origin's newer state");
+
+    let out = delete("feat/unasked", false);
+    assert_eq!(out["deleted"], Value::Null);
+    assert!(on_origin("feat/unasked"));
+
+    // Undo brings back the local branch only.
+    call(&f, "restoreBranch", json!({ "id": id, "name": "feat/merged" }));
+    assert!(!sh(&f.main, &["branch", "--list", "feat/merged"]).is_empty());
+    assert!(!on_origin("feat/merged"));
+
+    // Removing a worktree with its branch: its copy on origin too, but only when asked.
+    let list = call(&f, "cleanupCandidates", json!({ "id": id }));
+    let squash = list.as_array().unwrap().iter().find(|c| c["path"] == json!(f.wt_squash.to_string_lossy())).unwrap().clone();
+    assert_eq!(squash["onOrigin"], json!(true));
+    let out = call(&f, "removeWorktree", json!({ "id": id, "path": squash["path"], "head": squash["head"], "deleteBranch": true, "deleteRemote": true }));
+    assert_eq!((&out["deletedBranch"], &out["remote"]["deleted"]), (&json!("feat/squash"), &json!("origin/feat/squash")), "{out}");
+    assert!(!on_origin("feat/squash"));
+    assert!(on_origin("main"), "the trunk stays on origin");
 }
 
 #[test]
@@ -806,6 +930,16 @@ fn groups_hold_projects_and_survive_reordering() {
     assert_eq!(list[0]["id"], json!(b));
     assert_eq!(list[1]["group"], g2["id"]);
     assert!(dispatch(&f.state, "setProjectGroup", json!({ "ids": [a], "group": "nope" })).is_err());
+
+    // Pinning keeps the group; dragging out of the pinned ones unpins.
+    let pinned_of = |id: &str| call(&f, "listProjects", json!({})).as_array().unwrap().iter().find(|p| p["id"] == id).unwrap()["pinned"].clone();
+    assert_eq!(pinned_of(&a), json!(false));
+    call(&f, "setProjectPinned", json!({ "ids": [a], "pinned": true }));
+    assert_eq!((pinned_of(&a), group_of(&a)), (json!(true), g2["id"].clone()));
+    call(&f, "reorderProjects", json!({ "ids": [a, b], "moved": { "id": a, "group": null, "pinned": false } }));
+    assert_eq!((pinned_of(&a), group_of(&a)), (json!(false), Value::Null));
+    call(&f, "reorderProjects", json!({ "ids": [a, b], "moved": { "id": a, "group": null } }));
+    assert_eq!(pinned_of(&a), json!(false), "unchanged when not given");
 
     // Deleting a group keeps its projects, ungrouped.
     call(&f, "deleteGroup", json!({ "id": gid }));

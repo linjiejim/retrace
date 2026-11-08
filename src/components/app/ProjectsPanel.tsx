@@ -1,17 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { ArrowDown, ArrowUp, Check, ChevronRight, Code, Ellipsis, ExternalLink, FolderInput, FolderMinus, FolderOpen, FolderPlus, GitBranch, PanelLeftClose, Pencil, Plus, Search, SquareTerminal, Trash2, X } from "lucide-react"
+import { ArrowDown, ArrowUp, Check, ChevronRight, Code, Ellipsis, ExternalLink, FolderInput, FolderMinus, FolderOpen, FolderPlus, GitBranch, PanelLeftClose, Pencil, Pin, PinOff, Plus, Search, SquareTerminal, Trash2, X } from "lucide-react"
 import { api } from "@/lib/api"
 import { openLink, run, selectProject } from "@/lib/commands"
-import { buildRows, dropTarget, moveProject, sections, type DropTarget, type Row } from "@/lib/groups"
+import { PINNED, buildRows, dropTarget, groupGaps, moveGroup, moveProject, sections, type DropTarget, type GroupGap, type Row } from "@/lib/groups"
 import { prefs, ui, useStore } from "@/lib/store"
 import { ago, tildify } from "@/lib/format"
 import type { Group, Project } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { t, tp } from "@/lib/i18n"
+import { s as kit } from "@/lib/strings"
 import { useGroups, useProjects, useSummary } from "@/hooks/queries"
 import { useDelayedFlag } from "@/hooks/use-delayed-flag"
 import { Button, IconButton } from "@/components/ui/button"
+import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader } from "@/components/ui/dialog"
+import { Field } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import { Tooltip } from "@/components/ui/tooltip"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, dropdownMenuParts, type MenuParts } from "@/components/ui/dropdown-menu"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger, contextMenuParts } from "@/components/ui/context-menu"
@@ -45,7 +49,11 @@ export function ProjectsPanel() {
   const collapsed = useMemo(() => new Set(collapsedList), [collapsedList])
   const [filter, setFilter] = useState("")
   const [drag, setDrag] = useState<Drag | null>(null)
+  /** A group being dragged, and the gap it would land in. */
+  const [groupDrag, setGroupDrag] = useState<{ id: string; gap: GroupGap } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
+  /** The new-group dialog is open, for these projects. */
+  const [naming, setNaming] = useState<string[] | null>(null)
   const list = useRef<HTMLUListElement>(null)
   const showSkeleton = useDelayedFlag(projects.isLoading)
   const all = useMemo(() => projects.data ?? [], [projects.data])
@@ -91,22 +99,37 @@ export function ProjectsPanel() {
     next()
   }
 
-  /** A new group, named on the spot (it starts as "New group" and its name is ready to type over). */
+  /** Ask for the new group's name in a dialog; `members` move into it once it's created. */
   function newGroup(members: string[] = [], fromMenu = false) {
-    const created = api.createGroup(t("New group"), members).then(async (g) => {
-      await refresh()
-      setCollapsed(g.id, false)
-      return g
-    })
-    const start = () => void created.then((g) => setRenaming(g.id), fail((reason) => t("Couldn't create the group: {reason}", { reason })))
+    const start = () => setNaming(members)
     if (fromMenu) afterMenu.current = start
     else start()
   }
 
+  /** Throws to the dialog, which shows the reason and stays open. */
+  async function createGroup(name: string, members: string[]) {
+    const g = await api.createGroup(name, members)
+    // Moved into a group by hand: no longer pinned, or it wouldn't show there.
+    const pinned = all.filter((p) => p.pinned && members.includes(p.id)).map((p) => p.id)
+    if (pinned.length) await api.setProjectPinned(pinned, false).catch(fail((reason) => t("Couldn't unpin the project: {reason}", { reason })))
+    await refresh()
+    setCollapsed(g.id, false)
+    setNaming(null)
+  }
+
   async function moveTo(p: Project, group: string | null) {
-    qc.setQueryData<Project[]>(["projects"], (old) => old?.map((x) => (x.id === p.id ? { ...x, group } : x)))
+    qc.setQueryData<Project[]>(["projects"], (old) => old?.map((x) => (x.id === p.id ? { ...x, group, pinned: false } : x)))
     if (group) setCollapsed(group, false)
     api.setProjectGroup([p.id], group).catch(fail((reason) => t("Couldn't move the project: {reason}", { reason })))
+    if (p.pinned) api.setProjectPinned([p.id], false).catch(fail((reason) => t("Couldn't unpin the project: {reason}", { reason })))
+  }
+
+  async function setPinned(p: Project, pinned: boolean) {
+    qc.setQueryData<Project[]>(["projects"], (old) => old?.map((x) => (x.id === p.id ? { ...x, pinned } : x)))
+    if (pinned) setCollapsed(PINNED, false)
+    api
+      .setProjectPinned([p.id], pinned)
+      .catch(fail((reason) => (pinned ? t("Couldn't pin the project: {reason}", { reason }) : t("Couldn't unpin the project: {reason}", { reason }))))
   }
 
   async function rename(g: Group, name: string) {
@@ -179,16 +202,54 @@ export function ProjectsPanel() {
       if (!dragging) return selectProject(p.id)
       const { target } = where(ev)
       const order = moveProject(secs, p.id, target)
-      const group = target.group
-      const regrouped = (p.group && groupName.has(p.group) ? p.group : null) !== group
+      const home = p.group && groupName.has(p.group) ? p.group : null
+      // Dropped among the pinned ones: pinned, keeping its group; anywhere else: unpinned, in that group.
+      const pinned = target.group === PINNED
+      const group = pinned ? home : target.group
+      const regrouped = home !== group || p.pinned !== pinned
       if (!regrouped && order.every((id, i) => id === all[i]?.id)) return
       const byId = new Map(all.map((x) => [x.id, x]))
       qc.setQueryData(
         ["projects"],
-        order.map((id) => (id === p.id ? { ...byId.get(id)!, group } : byId.get(id)!)),
+        order.map((id) => (id === p.id ? { ...byId.get(id)!, group, pinned } : byId.get(id)!)),
       )
-      if (group) setCollapsed(group, false)
-      api.reorderProjects(order, regrouped ? { id: p.id, group } : undefined).catch(fail((reason) => t("Couldn't save the order: {reason}", { reason })))
+      if (target.group) setCollapsed(target.group, false)
+      api.reorderProjects(order, regrouped ? { id: p.id, group, pinned } : undefined).catch(fail((reason) => t("Couldn't save the order: {reason}", { reason })))
+    }
+    window.addEventListener("pointermove", move)
+    window.addEventListener("pointerup", up)
+  }
+
+  // Drag a group's header to reorder the groups; a press that doesn't move folds or unfolds it.
+  // The pinned projects always stay first.
+  function pressGroup(e: React.PointerEvent, g: Group, toggle: () => void) {
+    if (e.button !== 0) return
+    const startX = e.clientX
+    const startY = e.clientY
+    const gaps = filter || g.id === PINNED || groups.length < 2 ? [] : groupGaps(rows)
+    let dragging = false
+    const where = (ev: PointerEvent): GroupGap => {
+      const top = list.current?.getBoundingClientRect().top ?? 0
+      const y = (ev.clientY - top + (list.current?.scrollTop ?? 0)) / ROW
+      return gaps.reduce((best, gap) => (Math.abs(gap.row - y) < Math.abs(best.row - y) ? gap : best))
+    }
+    const move = (ev: PointerEvent) => {
+      if (!gaps.length) return
+      if (!dragging && Math.abs(ev.clientY - startY) < 4 && Math.abs(ev.clientX - startX) < 4) return
+      dragging = true
+      setGroupDrag({ id: g.id, gap: where(ev) })
+    }
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move)
+      window.removeEventListener("pointerup", up)
+      setGroupDrag(null)
+      if (!dragging) return toggle()
+      const before = groups.map((x) => x.id)
+      const order = moveGroup(before, g.id, where(ev))
+      if (order.every((id, i) => id === before[i])) return
+      const byId = new Map(groups.map((x) => [x.id, x]))
+      qc.setQueryData(["groups"], order.map((id) => byId.get(id)!))
+      api.reorderGroups(order).catch(fail((reason) => t("Couldn't save the order: {reason}", { reason })))
     }
     window.addEventListener("pointermove", move)
     window.addEventListener("pointerup", up)
@@ -255,12 +316,14 @@ export function ProjectsPanel() {
               group={r.group}
               count={r.count}
               collapsed={r.collapsed}
-              holdsSelected={r.collapsed && all.some((p) => p.id === selected && p.group === r.group.id)}
+              pinned={r.group.id === PINNED}
+              holdsSelected={r.collapsed && all.some((p) => p.id === selected && (r.group.id === PINNED ? p.pinned : !p.pinned && p.group === r.group.id))}
               dropping={drag?.onHeader === r.group.id}
+              lifted={groupDrag?.id === r.group.id}
               renaming={renaming === r.group.id}
               first={groups[0]?.id === r.group.id}
               last={groups[groups.length - 1]?.id === r.group.id}
-              onToggle={() => setCollapsed(r.group.id, !r.collapsed)}
+              onPress={(e) => pressGroup(e, r.group, () => setCollapsed(r.group.id, !r.collapsed))}
               onRename={(name) => rename(r.group, name)}
               onStartRename={() => (afterMenu.current = () => setRenaming(r.group.id))}
               onMenuClosed={menuClosed}
@@ -283,6 +346,7 @@ export function ProjectsPanel() {
               onPress={(e) => pressRow(e, r.project)}
               onRemove={() => remove(r.project)}
               onMove={(g) => moveTo(r.project, g)}
+              onPin={(pinned) => setPinned(r.project, pinned)}
               onNewGroup={() => newGroup([r.project.id], true)}
               onMenuClosed={menuClosed}
             />
@@ -295,8 +359,52 @@ export function ProjectsPanel() {
             style={{ top: drag.gap * ROW - 1, left: drag.target.group ? NESTED + 8 : 12 }}
           />
         )}
+        {groupDrag && <li aria-hidden className="pointer-events-none absolute left-3 right-3 h-0.5 rounded-full bg-primary" style={{ top: groupDrag.gap.row * ROW - 1 }} />}
       </ul>
+      {naming && <NewGroupDialog onCreate={(name) => createGroup(name, naming)} onClose={() => setNaming(null)} />}
     </section>
+  )
+}
+
+/** Names a new group before it's created: Enter or the button creates it, Esc cancels. */
+function NewGroupDialog({ onCreate, onClose }: { onCreate: (name: string) => Promise<void>; onClose: () => void }) {
+  const [name, setName] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const clean = name.trim()
+    if (!clean || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await onCreate(clean)
+    } catch (err) {
+      setError(message(err))
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
+      <DialogContent size="sm">
+        <DialogHeader title={t("New group")} />
+        <form onSubmit={submit}>
+          <DialogBody>
+            <Field label={t("Group name")} error={error}>
+              <Input autoFocus value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+            </Field>
+          </DialogBody>
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>
+              {kit().cancel}
+            </Button>
+            <Button type="submit" variant="primary" disabled={!name.trim()} loading={busy}>
+              {t("Create group")}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -304,12 +412,14 @@ function GroupRow({
   group,
   count,
   collapsed,
+  pinned,
   holdsSelected,
   dropping,
+  lifted,
   renaming,
   first,
   last,
-  onToggle,
+  onPress,
   onRename,
   onStartRename,
   onShift,
@@ -319,13 +429,18 @@ function GroupRow({
   group: Group
   count: number
   collapsed: boolean
+  /** The pinned projects' header: no name of its own, no menu, not draggable. */
+  pinned: boolean
   /** Folded with the selected project inside. */
   holdsSelected: boolean
   dropping: boolean
+  /** Being dragged. */
+  lifted: boolean
   renaming: boolean
   first: boolean
   last: boolean
-  onToggle: () => void
+  /** A press: folds or unfolds it, or starts dragging it. */
+  onPress: (e: React.PointerEvent) => void
   onRename: (name: string) => void
   onStartRename: () => void
   onShift: (dir: -1 | 1) => void
@@ -355,18 +470,25 @@ function GroupRow({
   )
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild disabled={renaming}>
+      <ContextMenuTrigger asChild disabled={renaming || pinned}>
         <li
           className={cn(
             "group flex h-7 select-none items-center gap-1 rounded-sm pl-1.5 pr-1 text-small text-muted-foreground hover:bg-accent",
             holdsSelected && "font-medium text-foreground",
             dropping && "bg-primary-subtle ring-1 ring-primary ring-inset",
+            lifted && "opacity-50",
           )}
-          onClick={renaming ? undefined : onToggle}
+          onPointerDown={renaming ? undefined : onPress}
           aria-expanded={!collapsed}
         >
           <ChevronRight className={cn("size-3.5 shrink-0 text-faint-foreground transition-transform duration-(--duration-fast)", !collapsed && "rotate-90")} />
-          {renaming ? (
+          {pinned ? (
+            <>
+              <Pin className="size-3 shrink-0 text-faint-foreground" />
+              <span className="min-w-0 flex-1 truncate font-medium">{t("Pinned")}</span>
+              <span className="shrink-0 text-caption tabular text-faint-foreground">{count}</span>
+            </>
+          ) : renaming ? (
             <RenameInput initial={group.name} onDone={onRename} />
           ) : (
             <>
@@ -376,6 +498,7 @@ function GroupRow({
                 <DropdownMenuTrigger asChild>
                   <button
                     aria-label={t("More actions for {name}", { name: group.name })}
+                    onPointerDown={(e) => e.stopPropagation()}
                     onClick={(e) => e.stopPropagation()}
                     className="hidden size-5 shrink-0 items-center justify-center rounded-xs text-faint-foreground hover:bg-pressed hover:text-foreground group-hover:inline-flex data-[state=open]:inline-flex"
                   >
@@ -415,6 +538,7 @@ function RenameInput({ initial, onDone }: { initial: string; onDone: (name: stri
       defaultValue={initial}
       aria-label={t("Group name")}
       maxLength={80}
+      onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         e.stopPropagation()
@@ -437,6 +561,7 @@ function ProjectRow({
   onPress,
   onRemove,
   onMove,
+  onPin,
   onNewGroup,
   onMenuClosed,
 }: {
@@ -450,6 +575,7 @@ function ProjectRow({
   onPress: (e: React.PointerEvent) => void
   onRemove: () => void
   onMove: (group: string | null) => void
+  onPin: (pinned: boolean) => void
   onNewGroup: () => void
   onMenuClosed: (e: Event) => void
 }) {
@@ -489,6 +615,10 @@ function ProjectRow({
         </k.Item>
       )}
       <k.Separator />
+      <k.Item onSelect={() => onPin(!project.pinned)}>
+        {project.pinned ? <PinOff /> : <Pin />}
+        {project.pinned ? t("Unpin") : t("Pin to top")}
+      </k.Item>
       <k.Sub>
         <k.SubTrigger>
           <FolderInput />
@@ -496,7 +626,8 @@ function ProjectRow({
         </k.SubTrigger>
         <k.SubContent>
           {groups.map((g) => (
-            <k.Item key={g.id} onSelect={() => g.id !== project.group && onMove(g.id)}>
+            // A pinned project shows only among the pinned ones: moving it to its own group unpins it.
+            <k.Item key={g.id} onSelect={() => (project.pinned || g.id !== project.group) && onMove(g.id)}>
               <span className="min-w-0 flex-1 truncate">{g.name}</span>
               {g.id === project.group && <Check />}
             </k.Item>
@@ -508,7 +639,7 @@ function ProjectRow({
           </k.Item>
         </k.SubContent>
       </k.Sub>
-      {inGroup && (
+      {inGroup && !project.pinned && (
         <k.Item onSelect={() => onMove(null)}>
           <FolderMinus />
           {t("Take out of the group")}
@@ -556,7 +687,9 @@ function ProjectRow({
                 <Ellipsis className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">{menu(dropdownMenuParts)}</DropdownMenuContent>
+            <DropdownMenuContent align="start" onCloseAutoFocus={onMenuClosed}>
+              {menu(dropdownMenuParts)}
+            </DropdownMenuContent>
           </DropdownMenu>
         </li>
       </ContextMenuTrigger>

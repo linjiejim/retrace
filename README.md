@@ -35,7 +35,7 @@ Every git call runs with `GIT_OPTIONAL_LOCKS=0`, so Retrace never takes the `ind
 There are exactly two writes:
 
 - `git fetch`, which only updates remote-tracking branches (turn it off in Settings);
-- removing merged worktrees and deleting merged local branches, only after you confirm (and restoring a branch you just deleted).
+- removing merged worktrees and deleting merged local branches, only after you confirm (and restoring a branch you just deleted). If you tick it, a deleted branch's own copy on origin goes too (`git push origin :<branch>`, guarded by `--force-with-lease`), only when origin still has it where the last fetch saw it and its commits are in the trunk.
 
 ## Install
 

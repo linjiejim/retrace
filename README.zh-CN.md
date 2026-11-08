@@ -35,7 +35,7 @@ agent 会同时在十几棵 worktree 里写代码。Retrace 把所有项目、wo
 写操作只有两个：
 
 - `git fetch`：只更新远程分支，可在设置里关掉；
-- 删除已合并的 worktree 和本地分支：只在你确认后执行（以及撤销时恢复刚删的分支）。
+- 删除已合并的 worktree 和本地分支：只在你确认后执行（以及撤销时恢复刚删的分支）。勾选后，删掉的分支在 origin 上的那一份也一起删（`git push origin :<分支>`，带 `--force-with-lease`），前提是 origin 上仍是上次 fetch 看到的提交、而且提交都已在主干里。
 
 ## 安装
 

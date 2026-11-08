@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { CircleAlert, CircleCheck, Clock, LoaderCircle, Pin } from "lucide-react"
 import { api } from "@/lib/api"
 import { ago, shortHash, tildify } from "@/lib/format"
-import type { BranchStatus, CleanupCandidate } from "@/lib/types"
+import type { BranchStatus, CleanupCandidate, RemoteDeletion } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { t, tp } from "@/lib/i18n"
 import { invalidateProject, useCleanupCandidates, type Tab } from "@/hooks/queries"
@@ -17,7 +17,7 @@ import { Switch } from "@/components/ui/switch"
 import { Tooltip } from "@/components/ui/tooltip"
 import { notify } from "@/components/ui/toast"
 
-type Result = { state: "running" } | { state: "removed"; note: string | null } | { state: "skipped"; reason: string }
+type Result = { state: "running" } | { state: "removed"; note: string | null; remote?: RemoteDeletion } | { state: "skipped"; reason: string }
 
 const treeItem = (path: string) => `tree:${path}`
 const branchItem = (name: string) => `branch:${name}`
@@ -48,6 +48,8 @@ export function ArchiveMenu({
   const candidates = useCleanupCandidates(projectId, open)
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [deleteBranch, setDeleteBranch] = useState(true)
+  /** Pushes a deletion to origin, which Undo can't bring back: off each time the menu opens. */
+  const [deleteRemote, setDeleteRemote] = useState(false)
   const [confirming, setConfirming] = useState(false)
   /** What the confirmation is about: frozen when it opens, so a refresh can't change it. */
   const [pending, setPending] = useState<{ trees: CleanupCandidate[]; branches: BranchStatus[] }>({ trees: [], branches: [] })
@@ -59,6 +61,12 @@ export function ArchiveMenu({
   useEffect(() => {
     if (open && projectId) qc.invalidateQueries({ queryKey: ["branches", projectId] })
   }, [open, projectId, qc])
+
+  // Off again each time the menu opens. Not on closing: the menu closes while the confirmation is
+  // open, and the confirmed removal still needs the choice.
+  useEffect(() => {
+    if (open) setDeleteRemote(false)
+  }, [open])
 
   // Each ticked item remembers the warnings it was ticked under. Ticks are set once per opening
   // (safe items only); a refresh drops items that stopped qualifying and un-ticks any item whose
@@ -106,6 +114,11 @@ export function ArchiveMenu({
   const checkedTrees = [...checked].flatMap((k) => (k.startsWith("tree:") ? [byPath.get(k.slice(5))] : [])).filter((c): c is CleanupCandidate => !!c)
   const checkedBranches = [...checked].flatMap((k) => (k.startsWith("branch:") ? [byName.get(k.slice(7))] : [])).filter((b): b is BranchStatus => !!b)
   const count = checkedTrees.length + checkedBranches.length
+  const treesOnOrigin = (candidates.data ?? []).filter((c) => c.onOrigin).length
+  const branchesOnOrigin = branches.filter((b) => b.onOrigin).length
+  /** A worktree's copy on origin only goes along with its local branch. */
+  const remoteUsable = branchesOnOrigin > 0 || (deleteBranch && treesOnOrigin > 0)
+  const remote = deleteRemote && remoteUsable
 
   const confirm = () => {
     setPending({ trees: checkedTrees, branches: checkedBranches })
@@ -134,6 +147,12 @@ export function ArchiveMenu({
     /** Every branch deleted here, with a worktree or without: Undo brings them all back. */
     const deleted: string[] = []
     const skipped: string[] = []
+    const remoteDeleted: string[] = []
+    const remoteKept: string[] = []
+    const onRemote = (r: RemoteDeletion) => {
+      if (r.deleted) remoteDeleted.push(r.deleted)
+      if (r.keptReason) remoteKept.push(r.keptReason)
+    }
     let branchesDeleted = 0
     const fail = (key: string, label: string, e: unknown) => {
       const reason = e instanceof Error ? e.message : String(e)
@@ -144,9 +163,10 @@ export function ArchiveMenu({
       const key = treeItem(c.path)
       setResults((r) => ({ ...r, [key]: { state: "running" } }))
       try {
-        const out = await api.removeWorktree(id, c.path, c.head, c.notableIgnored, deleteBranch)
+        const out = await api.removeWorktree(id, c.path, c.head, c.notableIgnored, deleteBranch, remote)
         const note = out.deletedBranch ? t("Deleted branch {name}", { name: out.deletedBranch }) : out.branchKeptReason
-        setResults((r) => ({ ...r, [key]: { state: "removed", note } }))
+        setResults((r) => ({ ...r, [key]: { state: "removed", note, remote: out.remote } }))
+        onRemote(out.remote)
         removed++
         if (out.deletedBranch) deleted.push(out.deletedBranch)
       } catch (e) {
@@ -157,8 +177,9 @@ export function ArchiveMenu({
       const key = branchItem(b.name)
       setResults((r) => ({ ...r, [key]: { state: "running" } }))
       try {
-        await api.deleteBranch(id, b.name, b.tip)
-        setResults((r) => ({ ...r, [key]: { state: "removed", note: null } }))
+        const out = await api.deleteBranch(id, b.name, b.tip, remote)
+        setResults((r) => ({ ...r, [key]: { state: "removed", note: null, remote: out } }))
+        onRemote(out)
         deleted.push(b.name)
         branchesDeleted++
       } catch (e) {
@@ -171,6 +192,8 @@ export function ArchiveMenu({
     if (skipped.length) notify.warning(t("Removed {removed}, skipped {skipped} ({first})", { removed: removed + branchesDeleted, skipped: skipped.length, first: skipped[0] }))
     else if (removed) notify.success(tp("Removed {n} worktree", "Removed {n} worktrees", removed))
     if (deleted.length) notify.undo(tp("Deleted {n} branch", "Deleted {n} branches", deleted.length), () => restore(id, deleted))
+    if (remoteDeleted.length) notify.success(tp("Also deleted {n} branch on origin", "Also deleted {n} branches on origin", remoteDeleted.length))
+    if (remoteKept.length) notify.warning(tp("Kept {n} branch on origin ({first})", "Kept {n} branches on origin ({first})", remoteKept.length, { first: remoteKept[0] }))
   }
 
   const keep = async (b: BranchStatus) => {
@@ -219,6 +242,23 @@ export function ArchiveMenu({
           ? t("Deletes these folders and their merged local branches, each checked again first (no --force). Ignored files in them are deleted too.")
           : t("Deletes these folders, each checked again first (no --force). Ignored files in them are deleted too.")
         : t("Each is checked again and deleted only if it still points at the commit shown. Its commits stay in {trunk}; you can restore it right after.", { trunk: trunkName })
+  const pendingRemote = remote ? pending.trees.filter((c) => deleteBranch && c.onOrigin).length + pending.branches.filter((b) => b.onOrigin).length : 0
+
+  /** Will its copy on origin go too: a small mark next to the item. */
+  const originMark = (onOrigin: boolean) =>
+    remote &&
+    onOrigin && (
+      <Tooltip content={t("Its copy on origin is deleted too")}>
+        <span className="shrink-0 text-caption text-faint-foreground">+ origin</span>
+      </Tooltip>
+    )
+  const remoteNote = (r: Result | undefined) =>
+    r?.state === "removed" &&
+    (r.remote?.deleted ? (
+      <div className="text-caption text-muted-foreground">{t("Deleted {remote} too", { remote: r.remote.deleted })}</div>
+    ) : r.remote?.keptReason ? (
+      <div className="text-caption text-warning">{t("Kept on origin: {reason}", { reason: r.remote.keptReason })}</div>
+    ) : null)
 
   const mark = (r: Result | undefined, box: React.ReactNode) =>
     r?.state === "running" ? (
@@ -275,9 +315,12 @@ export function ArchiveMenu({
                               {integration === "squash" ? t("Squash-merged") : t("Merged in")}
                             </span>
                             {c?.lastCommitAt && <span className="shrink-0 text-caption text-faint-foreground">{ago(c.lastCommitAt)}</span>}
+                            {!r && originMark(deleteBranch && !!c?.onOrigin)}
                           </div>
-                          <div className="truncate text-caption text-faint-foreground">{tab.tree ? tildify(tab.tree.path) : ""}</div>
+                          <div className={cn("truncate text-caption text-faint-foreground", tab.status?.missing && "line-through")}>{tab.tree ? tildify(tab.tree.path) : ""}</div>
+                          {!r && tab.status?.missing && <div className="text-caption text-muted-foreground">{t("Folder already deleted: removing it clears git's record of it")}</div>}
                           {r?.state === "removed" && r.note && <div className="text-caption text-muted-foreground">{r.note}</div>}
+                          {remoteNote(r)}
                           {r?.state === "skipped" && <div className="text-caption text-destructive">{t("Skipped: {reason}", { reason: r.reason })}</div>}
                           {!r && c && c.notableIgnored.length > 0 && (
                             <div className="text-caption text-warning">{t("Removing it also deletes ignored {files}", { files: c.notableIgnored.slice(0, 4).join(", ") + (c.notableIgnored.length > 4 ? " …" : "") })}</div>
@@ -334,12 +377,14 @@ export function ArchiveMenu({
                               </span>
                             )}
                             {b.lastCommitAt && <span className="shrink-0 text-caption text-faint-foreground">{ago(b.lastCommitAt)}</span>}
+                            {!r && originMark(b.onOrigin)}
                           </div>
                           <div className="truncate text-caption text-faint-foreground">
                             <span className="font-mono">{shortHash(b.tip)}</span>
                             {b.upstreamGone && ` · ${t("Remote branch deleted")}`}
                           </div>
                           {r?.state === "removed" && <div className="text-caption text-muted-foreground">{t("Deleted branch {name}", { name: b.name })}</div>}
+                          {remoteNote(r)}
                           {r?.state === "skipped" && <div className="text-caption text-destructive">{t("Skipped: {reason}", { reason: r.reason })}</div>}
                           {!r && b.recent && (
                             <div className="inline-flex items-center gap-1 text-caption text-warning">
@@ -361,16 +406,26 @@ export function ArchiveMenu({
             )}
           </div>
           <div className="flex items-center gap-3 border-t px-3 py-2.5">
-            {archived.length > 0 ? (
-              <label className="flex flex-1 items-center gap-2 text-small text-muted-foreground">
-                <Switch checked={deleteBranch} onCheckedChange={setDeleteBranch} disabled={running} />
-                <Tooltip content={t("Each branch goes only if it still points at the worktree's commit; branches you keep and long-lived ones like develop stay")}>
-                  <span>{t("Also delete the worktrees' branches")}</span>
-                </Tooltip>
-              </label>
-            ) : (
-              <span className="flex-1" />
-            )}
+            <div className="flex flex-1 flex-col gap-2">
+              {archived.length > 0 && (
+                <label className="flex items-center gap-2 text-small text-muted-foreground">
+                  <Switch checked={deleteBranch} onCheckedChange={setDeleteBranch} disabled={running} />
+                  <Tooltip content={t("Each branch goes only if it still points at the worktree's commit; branches you keep and long-lived ones like develop stay")}>
+                    <span>{t("Also delete the worktrees' branches")}</span>
+                  </Tooltip>
+                </label>
+              )}
+              {treesOnOrigin + branchesOnOrigin > 0 && (
+                <label className="flex items-center gap-2 text-small text-muted-foreground">
+                  <Switch checked={remote} onCheckedChange={setDeleteRemote} disabled={running || !remoteUsable} />
+                  <Tooltip
+                    content={t("Only a deleted branch's own copy, while origin still has it where the last fetch saw it and its commits are in {trunk}. Undo can't bring it back.", { trunk: trunkName })}
+                  >
+                    <span>{t("Also delete the branches on origin")}</span>
+                  </Tooltip>
+                </label>
+              )}
+            </div>
             {candidates.isFetching && !candidates.data ? (
               <LoaderCircle className="size-4 animate-spin text-faint-foreground" />
             ) : (
@@ -387,7 +442,18 @@ export function ArchiveMenu({
         onOpenChange={setConfirming}
         tone="danger"
         title={title}
-        description={description}
+        description={
+          pendingRemote ? (
+            <>
+              {description}
+              <span className="mt-2 block text-warning">
+                {tp("Also deletes {n} branch on origin with git push; Undo can't bring it back.", "Also deletes {n} branches on origin with git push; Undo can't bring them back.", pendingRemote)}
+              </span>
+            </>
+          ) : (
+            description
+          )
+        }
         confirmLabel={nTrees && nBranches ? t("Remove") : nTrees ? t("Remove worktrees") : t("Delete branches")}
         onConfirm={removeChecked}
       />

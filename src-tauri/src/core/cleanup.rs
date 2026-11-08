@@ -7,6 +7,13 @@
 //! are reported so the UI leaves those unticked. A branch is deleted only while it still points at
 //! the commit that was checked (`update-ref -d <ref> <old>`), which also covers squash merges that
 //! `git branch -d` refuses; long-lived and kept branches are never deleted.
+//!
+//! A tree whose folder was deleted from under git counts by the HEAD git recorded for it; removing
+//! it drops only that record.
+//!
+//! When asked, a deleted branch's copy on origin goes too (`git push origin :<branch>`, the one
+//! push): only its own copy, only while origin still has it where the last fetch saw it, and only
+//! if that commit is in the trunk as well.
 
 use crate::tr;
 use super::model::*;
@@ -25,6 +32,9 @@ const RECENT: Duration = Duration::from_secs(15 * 60);
 /// Branches that stay around after being merged, by design.
 const PROTECTED: [&str; 8] = ["main", "master", "develop", "development", "dev", "staging", "production", "gh-pages"];
 const PROTECTED_PREFIXES: [&str; 3] = ["release/", "releases/", "release-"];
+/// The remote whose copies of deleted branches may be deleted too.
+const ORIGIN: &str = "origin";
+const PUSH_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub fn is_protected(name: &str) -> bool {
     PROTECTED.contains(&name) || PROTECTED_PREFIXES.iter().any(|p| name.starts_with(p))
@@ -108,9 +118,15 @@ fn last_commit_time(dir: &Path, head: &str) -> Option<i64> {
 
 struct Verdict {
     integration: Integration,
+    /// The folder is already gone (git lists the tree as prunable): only git's record is left.
+    gone: bool,
 }
 
 /// The checks shared by listing and removing. `strict` re-counts untracked files one by one.
+/// A tree whose folder was deleted from under git qualifies too, by the HEAD git recorded for it:
+/// nothing uncommitted is left to lose, and `git worktree remove` then drops just that record.
+/// A folder that's still there but no longer a worktree (its `.git` gone) never qualifies: git
+/// refuses to remove it, and it may hold files of its own.
 fn eligible(dir: &Path, tree: &Worktree, trunk: &Trunk, cache: &IntegrationCache, strict: bool) -> Result<Verdict> {
     let path = Path::new(&tree.path);
     if tree.is_main || tree.bare {
@@ -119,32 +135,37 @@ fn eligible(dir: &Path, tree: &Worktree, trunk: &Trunk, cache: &IntegrationCache
     if tree.locked {
         bail!(tr!("worktree 已锁定", "The worktree is locked"));
     }
-    if tree.prunable || !path.is_dir() {
-        bail!(tr!("worktree 目录已经不存在", "The worktree folder no longer exists"));
+    let gone = tree.prunable && !path.exists();
+    if !gone && (tree.prunable || !path.is_dir()) {
+        bail!(tr!("目录还在，但已经不是 worktree", "The folder is there but no longer a worktree"));
     }
     if tree.branch.as_deref().is_some_and(|b| is_trunk_branch(trunk, b)) {
         bail!(tr!("检出的是集成分支", "It has the integration branch checked out"));
     }
     let head = tree.head.as_deref().ok_or_else(|| anyhow::anyhow!(tr!("还没有提交", "No commits yet")))?;
-    let counts = if strict {
-        repo::parse_status(&git::run_heavy(path, &["status", "--porcelain=v2", "-z", "--untracked-files=all"])?)
-    } else {
-        repo::worktree_counts(path)?
-    };
-    if counts.files > 0 {
-        bail!(tr!("有 {} 个文件未提交", "{} files are uncommitted", counts.files));
-    }
-    if let Some(op) = repo::operation(path) {
-        bail!(tr!("有进行中的 {op}", "A {op} is in progress"));
+    if !gone {
+        let counts = if strict {
+            repo::parse_status(&git::run_heavy(path, &["status", "--porcelain=v2", "-z", "--untracked-files=all"])?)
+        } else {
+            repo::worktree_counts(path)?
+        };
+        if counts.files > 0 {
+            bail!(tr!("有 {} 个文件未提交", "{} files are uncommitted", counts.files));
+        }
+        if let Some(op) = repo::operation(path) {
+            bail!(tr!("有进行中的 {op}", "A {op} is in progress"));
+        }
     }
     let cmp = repo::compare_with_trunk(dir, trunk, head, cache)?;
     if cmp.integration == Integration::None {
         bail!(tr!("还没有合并到 {}", "Not merged into {} yet", trunk.name));
     }
-    Ok(Verdict { integration: cmp.integration })
+    Ok(Verdict { integration: cmp.integration, gone })
 }
 
 pub fn candidates(dir: &Path, trunk: &Trunk, trees: &[Worktree], cache: &IntegrationCache) -> Vec<CleanupCandidate> {
+    let refs = repo::refs(dir).unwrap_or_default();
+    let refs = &refs;
     std::thread::scope(|s| {
         let handles: Vec<_> = trees
             .iter()
@@ -152,16 +173,18 @@ pub fn candidates(dir: &Path, trunk: &Trunk, trees: &[Worktree], cache: &Integra
             .map(|t| {
                 s.spawn(move || {
                     let verdict = eligible(dir, t, trunk, cache, false).ok()?;
-                    let notable = notable_ignored(Path::new(&t.path));
+                    let notable = if verdict.gone { vec![] } else { notable_ignored(Path::new(&t.path)) };
                     let head = t.head.clone()?;
                     Some(CleanupCandidate {
                         path: t.path.clone(),
                         branch: t.branch.clone(),
                         last_commit_at: last_commit_time(dir, &head),
+                        on_origin: t.branch.as_deref().is_some_and(|b| origin_copy(refs, b, &head).is_some()),
                         head,
                         integration: verdict.integration,
                         notable_ignored: notable,
-                        recent: recently_active(Path::new(&t.path)),
+                        recent: !verdict.gone && recently_active(Path::new(&t.path)),
+                        missing: verdict.gone,
                     })
                 })
             })
@@ -170,7 +193,62 @@ pub fn candidates(dir: &Path, trunk: &Trunk, trees: &[Worktree], cache: &Integra
     })
 }
 
-/// Re-verify, then `git worktree remove` (never `--force`) and optionally delete its branch.
+// ---------- the copy on origin ----------
+
+/// The tip of the branch's own copy on origin, as of the last fetch: `origin/<name>`, when the
+/// branch tracks it or points at the same commit. A same-named branch someone else pushed, which
+/// this branch neither tracks nor matches, is not its copy.
+pub fn origin_copy(refs: &[repo::RefEntry], name: &str, local_tip: &str) -> Option<String> {
+    let remote_full = format!("refs/remotes/{ORIGIN}/{name}");
+    let copy = refs.iter().find(|e| e.full == remote_full && e.symref.is_none())?;
+    let local_full = format!("refs/heads/{name}");
+    let tracks = refs.iter().any(|e| e.full == local_full && e.upstream.as_deref() == Some(remote_full.as_str()));
+    (tracks || copy.target == local_tip).then(|| copy.target.clone())
+}
+
+/// Delete the branch's copy on origin, after its local branch is gone. Only while origin still has
+/// it at `copy_tip` (`--force-with-lease`), and only if that commit is in the trunk too. A problem
+/// keeps the copy, with the reason (shown after "kept on origin:"); it never undoes the local
+/// deletion. Pre-push hooks are skipped:
+/// a deletion carries no code to check.
+fn delete_on_origin(dir: &Path, trunk: &Trunk, name: &str, local_tip: &str, copy_tip: &str, cache: &IntegrationCache) -> RemoteDeletion {
+    let label = format!("{ORIGIN}/{name}");
+    let kept = |reason: String| RemoteDeletion { deleted: None, kept_reason: Some(reason) };
+    if is_trunk_branch(trunk, name) || is_protected(name) {
+        return kept(tr!("这是长期分支", "It's a long-lived branch"));
+    }
+    // The local tip was just checked against the trunk; a different commit on origin wasn't.
+    if copy_tip != local_tip {
+        match repo::compare_with_trunk(dir, trunk, copy_tip, cache) {
+            Ok(cmp) if cmp.integration != Integration::None => {}
+            Ok(_) => return kept(tr!("{label} 上有 {} 没有的提交", "{label} has commits {} doesn't", trunk.name)),
+            Err(e) => return kept(format!("{e:#}")),
+        }
+    }
+    let lease = format!("--force-with-lease=refs/heads/{name}:{copy_tip}");
+    let refspec = format!(":refs/heads/{name}");
+    match git::run_with_timeout_output(dir, &["push", "--porcelain", "--no-verify", &lease, ORIGIN, &refspec], PUSH_TIMEOUT) {
+        Ok(out) if out.ok => RemoteDeletion { deleted: Some(label), kept_reason: None },
+        Ok(out) => kept(push_refused(&out, &label)),
+        Err(e) => kept(format!("{e:#}")),
+    }
+}
+
+/// Why a push was refused: its porcelain line (`!\t<refspec>\t[rejected] (stale info)`), else
+/// git's last error (no access, no network).
+fn push_refused(out: &git::Finished, label: &str) -> String {
+    let refused = out.stdout.lines().find_map(|l| l.strip_prefix("!\t")).and_then(|l| l.split('\t').nth(1)).map(str::trim);
+    match refused {
+        Some(r) if r.contains("stale info") => {
+            tr!("{label} 在上次 fetch 之后变了或已被删掉", "{label} moved or was deleted since the last fetch")
+        }
+        Some(r) => tr!("origin 拒绝删除 {label}：{r}", "origin refused to delete {label}: {r}"),
+        None => tr!("没能删除 {label}：{}", "Couldn't delete {label}: {}", git::last_error_line(&out.stderr)),
+    }
+}
+
+/// Re-verify, then `git worktree remove` (never `--force`) and optionally delete its branch, and
+/// with it (`delete_remote`) the branch's copy on origin.
 /// `acknowledged_ignored`: the irreplaceable ignored files the user saw when confirming; any new one
 /// stops the removal, since `git worktree remove` deletes ignored files without asking.
 #[allow(clippy::too_many_arguments)]
@@ -181,6 +259,7 @@ pub fn remove(
     expect_head: &str,
     acknowledged_ignored: &[String],
     delete_branch: bool,
+    delete_remote: bool,
     kept: &[String],
     cache: &IntegrationCache,
 ) -> Result<RemoveOutcome> {
@@ -190,21 +269,28 @@ pub fn remove(
         bail!(tr!("HEAD 在确认之后变了，已跳过", "HEAD moved after you confirmed; skipped"));
     }
     let path = Path::new(tree_path);
-    eligible(dir, tree, trunk, cache, true)?;
-    let unseen: Vec<String> = notable_ignored(path).into_iter().filter(|n| !acknowledged_ignored.contains(n)).collect();
-    if !unseen.is_empty() {
-        bail!(tr!("确认之后出现了被忽略的 {}，已跳过；重新打开列表确认后再删", "Ignored {} appeared after you confirmed; skipped. Reopen the list and confirm again", unseen.join(", ")));
+    let verdict = eligible(dir, tree, trunk, cache, true)?;
+    // A gone folder has no files to scan and no HEAD to move: git's record is all that's left.
+    if !verdict.gone {
+        let unseen: Vec<String> = notable_ignored(path).into_iter().filter(|n| !acknowledged_ignored.contains(n)).collect();
+        if !unseen.is_empty() {
+            bail!(tr!("确认之后出现了被忽略的 {}，已跳过；重新打开列表确认后再删", "Ignored {} appeared after you confirmed; skipped. Reopen the list and confirm again", unseen.join(", ")));
+        }
+        // The scans above can take a while: a commit made meanwhile was never checked against the trunk.
+        let live = git::text(path, &["rev-parse", "HEAD"])?;
+        if live.trim() != expect_head {
+            bail!(tr!("HEAD 在检查期间变了，已跳过", "HEAD moved during the check; skipped"));
+        }
     }
-    // The scans above can take a while: a commit made meanwhile was never checked against the trunk.
-    let live = git::text(path, &["rev-parse", "HEAD"])?;
-    if live.trim() != expect_head {
-        bail!(tr!("HEAD 在检查期间变了，已跳过", "HEAD moved during the check; skipped"));
-    }
+    // For a gone folder this drops only its record (unlike `git worktree prune`, which drops every
+    // stale one, including trees whose detached HEAD nothing else keeps).
     git::run(dir, &["worktree", "remove", tree_path])?;
 
-    let mut outcome = RemoveOutcome { branch_deleted: false, deleted_branch: None, branch_kept_reason: None, deleted: None };
+    let mut outcome = RemoveOutcome { branch_deleted: false, deleted_branch: None, branch_kept_reason: None, deleted: None, remote: RemoteDeletion::default() };
     if let (true, Some(branch)) = (delete_branch, tree.branch.as_deref()) {
         // The tree is already gone: from here on a failure keeps the branch, it doesn't fail the removal.
+        // Its copy on origin is read while the branch (and so what it tracks) still exists.
+        let copy = if delete_remote { repo::refs(dir).ok().and_then(|refs| origin_copy(&refs, branch, expect_head)) } else { None };
         let in_use = repo::worktrees(dir).map(|t| branches_in_use(&t).contains(branch));
         let result = if is_trunk_branch(trunk, branch) {
             Err(tr!("这是集成分支，没有删除", "Kept: it's the integration branch"))
@@ -220,6 +306,9 @@ pub fn remove(
         };
         match result {
             Ok(deleted) => {
+                if let Some(copy_tip) = copy {
+                    outcome.remote = delete_on_origin(dir, trunk, branch, expect_head, &copy_tip, cache);
+                }
                 outcome.branch_deleted = true;
                 outcome.deleted_branch = Some(deleted.name.clone());
                 outcome.deleted = Some(deleted);
@@ -289,6 +378,7 @@ pub fn branch_statuses(dir: &Path, trunk: &Trunk, refs: &[repo::RefEntry], trees
                             recent: moved_at.or(last_commit_at).is_some_and(|t| now - t < RECENT.as_secs() as i64),
                             protected: is_protected(name),
                             kept: kept.iter().any(|k| k == name),
+                            on_origin: origin_copy(refs, name, &e.target).is_some(),
                         })
                     })
                 })
@@ -329,8 +419,17 @@ fn delete_ref_if_at(dir: &Path, name: &str, tip: &str) -> Result<DeletedBranch> 
 }
 
 /// Delete a local branch already in the trunk, after checking everything again. Whether something
-/// uses the branch is checked last, right before the compare-and-delete.
-pub fn delete_branch(dir: &Path, trunk: &Trunk, name: &str, expect_tip: &str, kept: &[String], cache: &IntegrationCache) -> Result<DeletedBranch> {
+/// uses the branch is checked last, right before the compare-and-delete. Then, with
+/// `delete_remote`, its copy on origin.
+pub fn delete_branch(
+    dir: &Path,
+    trunk: &Trunk,
+    name: &str,
+    expect_tip: &str,
+    delete_remote: bool,
+    kept: &[String],
+    cache: &IntegrationCache,
+) -> Result<(DeletedBranch, RemoteDeletion)> {
     let full = format!("refs/heads/{name}");
     let refs = repo::refs(dir)?;
     let entry = refs
@@ -355,7 +454,10 @@ pub fn delete_branch(dir: &Path, trunk: &Trunk, name: &str, expect_tip: &str, ke
     if branches_in_use(&repo::worktrees(dir)?).contains(name) {
         bail!(tr!("有 worktree 在用这个分支（检出、rebase 或 bisect 中）", "A worktree is using it (checked out, rebasing or bisecting)"));
     }
-    delete_ref_if_at(dir, name, expect_tip)
+    let copy = if delete_remote { origin_copy(&refs, name, expect_tip) } else { None };
+    let deleted = delete_ref_if_at(dir, name, expect_tip)?;
+    let remote = copy.map(|tip| delete_on_origin(dir, trunk, name, expect_tip, &tip, cache)).unwrap_or_default();
+    Ok((deleted, remote))
 }
 
 /// Undo for a deletion: the branch comes back at its tip, only if the name is still free; then its
