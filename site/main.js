@@ -63,7 +63,7 @@ const T = {
   "g.settings": ["Settings", "设置"],
   "keys.title": ["Keyboard first. <span>Try it.</span>", "键盘优先，<span>试试看。</span>"],
   "keys.lede": ["Press a key below — or on your keyboard.", "点下面的键，或者直接按键盘。"],
-  "dl.title": ["Retrace <span class=\"version\">v0.5.2</span>", "Retrace <span class=\"version\">v0.5.2</span>"],
+  "dl.title": ["Retrace <span class=\"version\">v0.5.3</span>", "Retrace <span class=\"version\">v0.5.3</span>"],
   "dl.lede": ["Free and open source. macOS 13 or later.", "免费开源，macOS 13 及以上。"],
   "dl.latest": ["Download the latest release", "下载最新版本"],
   "dl.note": [
