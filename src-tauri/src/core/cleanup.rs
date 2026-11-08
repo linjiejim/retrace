@@ -170,17 +170,28 @@ fn eligible(dir: &Path, tree: &Worktree, trunk: &Trunk, cache: &IntegrationCache
 fn admin_dir(dir: &Path, tree_path: &str) -> Option<PathBuf> {
     let common = git::text(dir, &["rev-parse", "--path-format=absolute", "--git-common-dir"]).ok()?;
     let want = Path::new(tree_path).join(".git");
-    std::fs::read_dir(Path::new(common.trim()).join("worktrees"))
+    let found: Vec<PathBuf> = std::fs::read_dir(Path::new(common.trim()).join("worktrees"))
         .ok()?
         .flatten()
         .map(|e| e.path())
-        .find(|admin| std::fs::read_to_string(admin.join("gitdir")).is_ok_and(|g| same_place(&recorded(admin, &g), &want)))
+        .filter(|admin| std::fs::read_to_string(admin.join("gitdir")).is_ok_and(|g| same_place(&recorded(admin, &g), &want)))
+        .collect();
+    // Two records naming one tree: can't tell whose index to check, so neither.
+    match <[PathBuf; 1]>::try_from(found) {
+        Ok([admin]) => Some(admin),
+        Err(_) => None,
+    }
 }
 
-/// A `gitdir` record: absolute, or (`git worktree add --relative-paths`) relative to its admin dir.
+/// A `gitdir` record: absolute, or (`git worktree add --relative-paths`) relative to its admin dir,
+/// taken from where the admin dir really is (it may be reached through a symlink).
 fn recorded(admin: &Path, gitdir: &str) -> PathBuf {
     let g = Path::new(gitdir.trim());
-    if g.is_absolute() { g.to_path_buf() } else { admin.join(g) }
+    if g.is_absolute() {
+        g.to_path_buf()
+    } else {
+        std::fs::canonicalize(admin).unwrap_or_else(|_| admin.to_path_buf()).join(g)
+    }
 }
 
 /// Two paths name the same place: `.` and `..` folded, symlinks resolved as far as the path
@@ -303,6 +314,14 @@ fn fetch_maps_by_name(specs: &str) -> bool {
             return false;
         }
         let Some((_, dst)) = spec.split_once(':') else { continue };
+        // Expanded the way git does: `remotes/origin/x` means `refs/remotes/origin/x`.
+        let dst = if dst.starts_with("refs/") {
+            dst.to_string()
+        } else if ["heads/", "tags/", "remotes/"].iter().any(|p| dst.starts_with(p)) {
+            format!("refs/{dst}")
+        } else {
+            format!("refs/heads/{dst}")
+        };
         let overlaps = match dst.split_once('*') {
             Some((prefix, _)) => prefix.starts_with(&under) || under.starts_with(prefix),
             None => dst.starts_with(&under),
@@ -601,6 +620,8 @@ mod tests {
         assert!(!fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n+refs/heads/other:refs/remotes/origin/feat\n"));
         assert!(!fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n+refs/heads/archive/*:refs/remotes/*\n"), "wildcard over origin/");
         assert!(!fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n^refs/heads/feat\n"), "negative refspec");
+        assert!(!fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n+refs/tags/review:remotes/origin/feat\n"), "shorthand destination");
+        assert!(fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n+refs/heads/x:mirror/x\n"), "a local branch, not under origin/");
     }
 
     #[test]
@@ -612,6 +633,14 @@ mod tests {
         assert!(same_place(&recorded(&admin, "../../../../wt/.git\n"), &tree), "relative, folder gone");
         assert!(same_place(&recorded(&admin, &tree.to_string_lossy()), &tree), "absolute");
         assert!(!same_place(&recorded(&admin, "../../../../other/.git"), &tree));
+        // Reached through a symlink: `..` climbs from where the admin dir really is.
+        #[cfg(unix)]
+        {
+            let link = base.join("link-to-worktrees");
+            std::os::unix::fs::symlink(base.join("repo/.git/worktrees"), &link).unwrap();
+            assert!(same_place(&recorded(&link.join("wt"), "../../../../wt/.git"), &tree));
+            assert!(!same_place(&recorded(&link.join("wt"), "../../../../wt/.git"), &base.parent().unwrap().join("wt/.git")));
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 }
