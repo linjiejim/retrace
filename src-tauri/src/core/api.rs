@@ -58,13 +58,18 @@ fn check_target(dir: &Path, target: &Target) -> Result<()> {
     Ok(())
 }
 
+/// One save at a time, each writing the state as of its turn: two at once would share the temp
+/// file, and an older snapshot could land last.
+static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn save(state: &State) -> Result<()> {
+    let _turn = SAVING.lock().unwrap_or_else(|e| e.into_inner());
     let cfg = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.clone();
     config::save(&state.config_path, &cfg)
 }
 
 fn project_of(entry: &ProjectEntry) -> Project {
-    Project { id: entry.path.clone(), name: repo::display_name(Path::new(&entry.path)), trunk_override: entry.trunk.clone(), group: entry.group.clone() }
+    Project { id: entry.path.clone(), name: repo::display_name(Path::new(&entry.path)), trunk_override: entry.trunk.clone(), group: entry.group.clone(), pinned: entry.pinned }
 }
 
 fn group_of(entry: &GroupEntry) -> Group {
@@ -257,8 +262,26 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                         bail!(tr!("没有这个分组", "No such group"));
                     }
                 }
+                // Moved by hand: no longer pinned, or it wouldn't show in its group.
                 for p in cfg.projects.iter_mut().filter(|p| ids.contains(&p.path)) {
                     p.group = group.clone();
+                    p.pinned = false;
+                }
+            }
+            save(state)?;
+            Value::Null
+        }
+        "setProjectPinned" => {
+            #[derive(Deserialize)]
+            struct A {
+                ids: Vec<String>,
+                pinned: bool,
+            }
+            let A { ids, pinned } = args(a)?;
+            {
+                let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+                for p in cfg.projects.iter_mut().filter(|p| ids.contains(&p.path)) {
+                    p.pinned = pinned;
                 }
             }
             save(state)?;
@@ -464,11 +487,14 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             struct Moved {
                 id: String,
                 group: Option<String>,
+                /// Dragged into or out of the pinned projects; unchanged when absent.
+                #[serde(default)]
+                pinned: Option<bool>,
             }
             #[derive(Deserialize)]
             struct A {
                 ids: Vec<String>,
-                /// A project dragged into (or out of) a group along with the new order.
+                /// A project dragged into (or out of) a group or the pinned ones, along with the new order.
                 moved: Option<Moved>,
             }
             let A { ids, moved } = args(a)?;
@@ -476,10 +502,13 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
                 let rank = |p: &str| ids.iter().position(|i| i == p).unwrap_or(usize::MAX);
                 cfg.projects.sort_by_key(|p| rank(&p.path));
-                if let Some(Moved { id, group }) = moved {
+                if let Some(Moved { id, group, pinned }) = moved {
                     let group = group.filter(|g| cfg.groups.iter().any(|x| &x.id == g));
                     if let Some(p) = cfg.projects.iter_mut().find(|p| p.path == id) {
                         p.group = group;
+                        if let Some(pinned) = pinned {
+                            p.pinned = pinned;
+                        }
                     }
                 }
             }
@@ -502,7 +531,11 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let dir = project_dir(state, &id)?;
             let (trunk, trees) = trunk_and_trees(state, &id, &dir)?;
             match trunk {
-                Some(trunk) => json!(cleanup::candidates(&dir, &trunk, &trees, &state.integration)),
+                Some(trunk) => {
+                    let mut candidates = cleanup::candidates(&dir, &trunk, &trees, &state.integration);
+                    candidates.retain(|c| !state.agents.tree_in_use(&c.path));
+                    json!(candidates)
+                }
                 None => json!(Vec::<CleanupCandidate>::new()),
             }
         }
@@ -516,12 +549,16 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 #[serde(default)]
                 acknowledged_ignored: Vec<String>,
                 delete_branch: bool,
+                #[serde(default)]
+                delete_remote: bool,
             }
-            let A { id, path, head, acknowledged_ignored, delete_branch } = args(a)?;
+            let A { id, path, head, acknowledged_ignored, delete_branch, delete_remote } = args(a)?;
             let dir = project_dir(state, &id)?;
             let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
             let trunk = trunk.ok_or_else(|| anyhow!(tr!("没有找到集成分支", "No integration branch found")))?;
-            let outcome = cleanup::remove(&dir, &trunk, &path, &head, &acknowledged_ignored, delete_branch, &kept_branches(state, &id)?, &state.integration)?;
+            let outcome = state.agents.with_idle_tree(&path, || {
+                cleanup::remove(&dir, &trunk, &path, &head, &acknowledged_ignored, delete_branch, delete_remote, &kept_branches(state, &id)?, &state.integration)
+            })?;
             if let Some(deleted) = outcome.deleted.clone() {
                 remember_deleted(state, &id, deleted);
             }
@@ -540,18 +577,21 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
         }
         "deleteBranch" => {
             #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
             struct A {
                 id: String,
                 name: String,
                 tip: String,
+                #[serde(default)]
+                delete_remote: bool,
             }
-            let A { id, name, tip } = args(a)?;
+            let A { id, name, tip, delete_remote } = args(a)?;
             let dir = project_dir(state, &id)?;
             let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
             let trunk = trunk.ok_or_else(|| anyhow!(tr!("没有找到集成分支", "No integration branch found")))?;
-            let deleted = cleanup::delete_branch(&dir, &trunk, &name, &tip, &kept_branches(state, &id)?, &state.integration)?;
+            let (deleted, remote) = cleanup::delete_branch(&dir, &trunk, &name, &tip, delete_remote, &kept_branches(state, &id)?, &state.integration)?;
             remember_deleted(state, &id, deleted);
-            Value::Null
+            json!(remote)
         }
         "restoreBranch" => {
             #[derive(Deserialize)]
@@ -710,6 +750,26 @@ fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
             };
             let launch = agent::launch(kind, &a.task, setup.as_deref(), Path::new(&tree), &dir, env, (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))?;
             json!(sessions.spawn(launch, agent::Meta { project: a.id, tree, branch, agent: kind.id.into(), task: a.task.trim().to_string() })?)
+        }
+        "agentResume" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                cols: Option<u16>,
+                rows: Option<u16>,
+            }
+            let a: A = args(a)?;
+            json!(sessions.resume(&a.session, |saved| {
+                let dir = project_dir(state, &saved.project)?;
+                if !Path::new(&saved.tree).is_dir() {
+                    bail!(tr!("会话的 worktree 目录不存在：{}", "The session's worktree folder no longer exists: {}", saved.tree));
+                }
+                let known = repo::worktrees(&dir)?.into_iter().any(|t| t.path == saved.tree && !t.bare);
+                if !known {
+                    bail!(tr!("不是这个项目的 worktree：{}", "Not a worktree of this project: {}", saved.tree));
+                }
+                agent::resume_launch(agent::kind(&saved.agent)?, Path::new(&saved.tree), &dir, shell_env::agent_env(), (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))
+            })?)
         }
         "agentSetup" => {
             let Id { id } = args(a)?;

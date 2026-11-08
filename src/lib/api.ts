@@ -10,6 +10,7 @@ import type {
   CleanupCandidate,
   PatchText,
   RemoveOutcome,
+  RemoteDeletion,
   CommitDetail,
   FileChange,
   FileContent,
@@ -63,6 +64,7 @@ export const api = {
   deleteGroup: (id: string) => call<null>("deleteGroup", { id }),
   reorderGroups: (ids: string[]) => call<null>("reorderGroups", { ids }),
   setProjectGroup: (ids: string[], group: string | null) => call<null>("setProjectGroup", { ids, group }),
+  setProjectPinned: (ids: string[], pinned: boolean) => call<null>("setProjectPinned", { ids, pinned }),
   setTrunk: (id: string, branch: string | null) => call<null>("setTrunk", { id, branch }),
   overview: (id: string) => call<Overview>("overview", { id }),
   treeStatuses: (id: string) => call<TreeStatus[]>("treeStatuses", { id }),
@@ -80,16 +82,17 @@ export const api = {
     /** Only this file's history. */
     path?: string | null
   }) => call<HistoryPage>("history", a),
-  /** `moved`: a project dragged into or out of a group, saved with the new order. */
-  reorderProjects: (ids: string[], moved?: { id: string; group: string | null }) => call<null>("reorderProjects", { ids, moved }),
+  /** `moved`: a project dragged into or out of a group or the pinned ones, saved with the new order. */
+  reorderProjects: (ids: string[], moved?: { id: string; group: string | null; pinned?: boolean }) => call<null>("reorderProjects", { ids, moved }),
   patch: (id: string, target: Target) => call<PatchText>("patch", { id, target }),
   cleanupCandidates: (id: string) => call<CleanupCandidate[]>("cleanupCandidates", { id }),
   /** `acknowledgedIgnored`: irreplaceable ignored files shown when confirming; a new one stops the removal. */
-  removeWorktree: (id: string, path: string, head: string, acknowledgedIgnored: string[], deleteBranch: boolean) =>
-    call<RemoveOutcome>("removeWorktree", { id, path, head, acknowledgedIgnored, deleteBranch }),
+  /** `deleteRemote`: also delete the deleted branch's copy on origin. */
+  removeWorktree: (id: string, path: string, head: string, acknowledgedIgnored: string[], deleteBranch: boolean, deleteRemote: boolean) =>
+    call<RemoveOutcome>("removeWorktree", { id, path, head, acknowledgedIgnored, deleteBranch, deleteRemote }),
   branchStatuses: (id: string) => call<BranchStatus[]>("branchStatuses", { id }),
   /** Deleted only while the branch still points at `tip`, after every check runs again. */
-  deleteBranch: (id: string, name: string, tip: string) => call<null>("deleteBranch", { id, name, tip }),
+  deleteBranch: (id: string, name: string, tip: string, deleteRemote: boolean) => call<RemoteDeletion>("deleteBranch", { id, name, tip, deleteRemote }),
   /** Undo: brings back a branch deleted in this session, at the same commit. */
   restoreBranch: (id: string, name: string) => call<{ settingsFailed: string[] }>("restoreBranch", { id, name }),
   keepBranch: (id: string, name: string, keep: boolean) => call<null>("keepBranch", { id, name, keep }),
@@ -119,6 +122,7 @@ export const api = {
   /** `data`: base64 bytes for the terminal's input; `typed`: the user's (not the terminal answering a query). */
   agentWrite: (session: string, data: string, typed: boolean) => call<null>("agentWrite", { session, data, typed }),
   agentResize: (session: string, cols: number, rows: number) => call<null>("agentResize", { session, cols, rows }),
+  agentResume: (session: string) => call<AgentSession>("agentResume", { session }),
   agentStop: (session: string) => call<null>("agentStop", { session }),
   agentClose: (session: string) => call<null>("agentClose", { session }),
 }

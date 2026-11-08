@@ -13,6 +13,9 @@
  *   --font-sans / --font-display       typefaces
  *   presets/*.css                      a full neutral tint + accent swap
  *
+ * Categorical colours (--cat-*) are data, not a second accent: a colour the user
+ * picked for a tag or project, or a chart series. See lib/categorical.ts.
+ *
  * Import after tailwindcss:  @import "tailwindcss"; @import "./jim-theme.css";
  */
 
@@ -63,6 +66,28 @@
   --success-subtle: color-mix(in oklab, var(--success) 9%, var(--background));
   --warning-subtle: color-mix(in oklab, var(--warning) 11%, var(--background));
   --info-subtle: color-mix(in oklab, var(--info) 9%, var(--background));
+
+
+  /* categorical: user-chosen colours (tags, project colours, chart series). fg for text, dots
+     and bars; -subtle for the fill behind a tag. Never UI chrome, never the only signal. */
+  --cat-gray: #5f6168;
+  --cat-red: #c8302f;
+  --cat-orange: #ad4600;
+  --cat-amber: #915a00;
+  --cat-green: #1d7a4f;
+  --cat-teal: #00796a;
+  --cat-blue: #1f6cc0;
+  --cat-purple: #7a45ae;
+  --cat-pink: #b42f7e;
+  --cat-gray-subtle: color-mix(in oklab, var(--cat-gray) 10%, var(--background));
+  --cat-red-subtle: color-mix(in oklab, var(--cat-red) 10%, var(--background));
+  --cat-orange-subtle: color-mix(in oklab, var(--cat-orange) 10%, var(--background));
+  --cat-amber-subtle: color-mix(in oklab, var(--cat-amber) 10%, var(--background));
+  --cat-green-subtle: color-mix(in oklab, var(--cat-green) 10%, var(--background));
+  --cat-teal-subtle: color-mix(in oklab, var(--cat-teal) 10%, var(--background));
+  --cat-blue-subtle: color-mix(in oklab, var(--cat-blue) 10%, var(--background));
+  --cat-purple-subtle: color-mix(in oklab, var(--cat-purple) 10%, var(--background));
+  --cat-pink-subtle: color-mix(in oklab, var(--cat-pink) 10%, var(--background));
 
   /* elevation: flat by default, shadows only for floating layers */
   --shadow-popover: 0 0 0 1px rgb(0 0 0 / 0.06), 0 2px 4px rgb(0 0 0 / 0.04), 0 8px 24px rgb(0 0 0 / 0.08);
@@ -125,6 +150,27 @@
   --success-subtle: color-mix(in oklab, var(--success) 14%, var(--background));
   --warning-subtle: color-mix(in oklab, var(--warning) 14%, var(--background));
   --info-subtle: color-mix(in oklab, var(--info) 14%, var(--background));
+
+
+  /* categorical: lighter fg, fills mixed a little stronger */
+  --cat-gray: #b4b6bc;
+  --cat-red: #ff9590;
+  --cat-orange: #ffa25c;
+  --cat-amber: #ffcb47;
+  --cat-green: #5ed59a;
+  --cat-teal: #3cd3ba;
+  --cat-blue: #7db9ff;
+  --cat-purple: #c9a2f5;
+  --cat-pink: #ff8fcb;
+  --cat-gray-subtle: color-mix(in oklab, var(--cat-gray) 16%, var(--background));
+  --cat-red-subtle: color-mix(in oklab, var(--cat-red) 16%, var(--background));
+  --cat-orange-subtle: color-mix(in oklab, var(--cat-orange) 16%, var(--background));
+  --cat-amber-subtle: color-mix(in oklab, var(--cat-amber) 16%, var(--background));
+  --cat-green-subtle: color-mix(in oklab, var(--cat-green) 16%, var(--background));
+  --cat-teal-subtle: color-mix(in oklab, var(--cat-teal) 16%, var(--background));
+  --cat-blue-subtle: color-mix(in oklab, var(--cat-blue) 16%, var(--background));
+  --cat-purple-subtle: color-mix(in oklab, var(--cat-purple) 16%, var(--background));
+  --cat-pink-subtle: color-mix(in oklab, var(--cat-pink) 16%, var(--background));
 
   /* dark: elevation reads from surface lightness + a 1px light ring */
   --shadow-popover: 0 0 0 1px rgb(255 255 255 / 0.08), 0 8px 24px rgb(0 0 0 / 0.4);
@@ -194,6 +240,24 @@
   --color-warning-subtle: var(--warning-subtle);
   --color-info: var(--info);
   --color-info-subtle: var(--info-subtle);
+  --color-cat-gray: var(--cat-gray);
+  --color-cat-gray-subtle: var(--cat-gray-subtle);
+  --color-cat-red: var(--cat-red);
+  --color-cat-red-subtle: var(--cat-red-subtle);
+  --color-cat-orange: var(--cat-orange);
+  --color-cat-orange-subtle: var(--cat-orange-subtle);
+  --color-cat-amber: var(--cat-amber);
+  --color-cat-amber-subtle: var(--cat-amber-subtle);
+  --color-cat-green: var(--cat-green);
+  --color-cat-green-subtle: var(--cat-green-subtle);
+  --color-cat-teal: var(--cat-teal);
+  --color-cat-teal-subtle: var(--cat-teal-subtle);
+  --color-cat-blue: var(--cat-blue);
+  --color-cat-blue-subtle: var(--cat-blue-subtle);
+  --color-cat-purple: var(--cat-purple);
+  --color-cat-purple-subtle: var(--cat-purple-subtle);
+  --color-cat-pink: var(--cat-pink);
+  --color-cat-pink-subtle: var(--cat-pink-subtle);
 
   --radius-xs: calc(var(--radius) * 0.5); /* checkbox, tag */
   --radius-sm: calc(var(--radius) * 0.75); /* badge, menu item */

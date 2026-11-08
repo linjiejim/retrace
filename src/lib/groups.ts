@@ -2,7 +2,13 @@
 
 import type { AgentSession, Group, Project } from "./types"
 
-/** A run of projects: one group's, or (group null) the ungrouped ones, in list order. */
+/**
+ * The pinned projects show first, as a group of their own with this id (real group ids start with
+ * "g"). A pinned project keeps its own group for when it's unpinned, and shows only here.
+ */
+export const PINNED = "@pinned"
+
+/** A run of projects: one group's (or the pinned ones), or (group null) the ungrouped ones, in list order. */
 export interface Section {
   group: string | null
   ids: string[]
@@ -34,14 +40,52 @@ export function projectRows(project: Project, group: string | null, sessions: Re
   return [{ kind: "project", project, group }, ...(sessions.get(project.id) ?? []).map((session) => ({ kind: "session" as const, session, group }))]
 }
 
-/** Groups in their order, then the ungrouped projects. A project naming a missing group is ungrouped. */
+/**
+ * The pinned projects (when there are any), the groups in their order, then the ungrouped projects.
+ * A project naming a missing group is ungrouped.
+ */
 export function sections(projects: Project[], groups: Group[]): Section[] {
   const known = new Set(groups.map((g) => g.id))
-  const groupOf = (p: Project) => (p.group && known.has(p.group) ? p.group : null)
+  const groupOf = (p: Project) => (p.pinned ? PINNED : p.group && known.has(p.group) ? p.group : null)
+  const ids = (group: string | null) => projects.filter((p) => groupOf(p) === group).map((p) => p.id)
+  const pinned = ids(PINNED)
   return [
-    ...groups.map((g) => ({ group: g.id as string | null, ids: projects.filter((p) => groupOf(p) === g.id).map((p) => p.id) })),
-    { group: null, ids: projects.filter((p) => groupOf(p) === null).map((p) => p.id) },
+    ...(pinned.length ? [{ group: PINNED as string | null, ids: pinned }] : []),
+    ...groups.map((g) => ({ group: g.id as string | null, ids: ids(g.id) })),
+    { group: null, ids: ids(null) },
   ]
+}
+
+/** Where a dragged group lands: before this group, or (null) after the last one. */
+export interface GroupGap {
+  before: string | null
+  /** The row the gap is above, for drawing it. */
+  row: number
+}
+
+/** The gaps between groups (not the pinned ones) in `rows`: above each group, and after the last. */
+export function groupGaps(rows: Row[]): GroupGap[] {
+  const gaps: GroupGap[] = []
+  let last: string | null = null
+  let end = -1
+  rows.forEach((r, i) => {
+    if (r.kind === "group" && r.group.id !== PINNED) {
+      gaps.push({ before: r.group.id, row: i })
+      last = r.group.id
+      end = i + 1
+    } else if (last !== null && r.kind !== "group" && r.group === last) end = i + 1
+  })
+  if (end >= 0) gaps.push({ before: null, row: end })
+  return gaps
+}
+
+/** The group order after moving `id` to `gap`. */
+export function moveGroup(order: string[], id: string, gap: GroupGap): string[] {
+  if (gap.before === id) return order
+  const rest = order.filter((g) => g !== id)
+  const at = gap.before ? rest.indexOf(gap.before) : -1
+  rest.splice(at < 0 ? rest.length : at, 0, id)
+  return rest
 }
 
 export function buildRows(projects: Project[], groups: Group[], collapsed: ReadonlySet<string>, sessions: ReadonlyMap<string, AgentSession[]> = NO_SESSIONS): Row[] {
@@ -49,7 +93,7 @@ export function buildRows(projects: Project[], groups: Group[], collapsed: Reado
   const rows: Row[] = []
   for (const s of sections(projects, groups)) {
     if (s.group !== null) {
-      const group = groups.find((g) => g.id === s.group)!
+      const group = s.group === PINNED ? { id: PINNED, name: "" } : groups.find((g) => g.id === s.group)!
       const folded = collapsed.has(group.id)
       rows.push({ kind: "group", group, count: s.ids.length, collapsed: folded })
       if (folded) continue

@@ -20,11 +20,11 @@ export function selectProject(id: string) {
   ui.set({ projectId: id, selection: null, file: null, preview: null, historyFile: null, query: "", focusMode: false, diffOpen: false })
 }
 
-/** A graph row was clicked: select it and show its diff; clicking the selected row shows or hides the diff. */
+/** A graph row was clicked: open its diff, or deselect it when its diff is already open. */
 export function pickRow(sel: Selection) {
   const s = ui.get()
-  if (selectionKey(s.selection) === selectionKey(sel)) {
-    return ui.set({ diffOpen: !s.diffOpen, focusMode: s.diffOpen ? false : s.focusMode, focusArea: "graph" })
+  if (selectionKey(s.selection) === selectionKey(sel) && s.diffOpen) {
+    return ui.set({ selection: null, file: null, diffOpen: false, focusMode: false, focusArea: "graph" })
   }
   ui.set({ selection: sel, diffOpen: true, focusArea: "graph" })
 }
@@ -153,7 +153,7 @@ export const commands = {
   toggleDiff: () => (ui.get().diffOpen ? closeDiff() : ui.set({ diffOpen: true })),
   toggleFocus: () => {
     const s = ui.get()
-    if (s.selection) ui.set({ focusMode: !s.focusMode, diffOpen: true })
+    if (s.projectId) ui.set({ focusMode: !s.focusMode, diffOpen: true })
   },
   toggleSplit: () => prefs.set((p) => ({ diffStyle: p.diffStyle === "split" ? "unified" : "split" })),
   toggleWrap: () => prefs.set((p) => ({ wrap: !p.wrap })),

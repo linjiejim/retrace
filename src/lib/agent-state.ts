@@ -10,7 +10,7 @@ export type AgentState = "working" | "waiting" | "done" | "stopped" | "failed"
 export const QUIET_MS = 4000
 
 export function agentState(s: AgentSession, now: number): AgentState {
-  if (!s.running) return s.exitCode === 0 ? "done" : s.stopped ? "stopped" : "failed"
+  if (!s.running) return s.stopped ? "stopped" : s.exitCode === 0 ? "done" : "failed"
   const rang = s.bellAt !== null && (s.inputAt === null || s.bellAt > s.inputAt)
   if (rang) return "waiting"
   return now - s.lastOutputAt < QUIET_MS ? "working" : "waiting"
@@ -102,4 +102,9 @@ export function newPart(offset: number, length: number, next: number): { skip: n
   if (offset > next) return "gap"
   if (offset + length <= next) return null
   return { skip: next - offset }
+}
+
+/** Providers whose CLI exposes an interactive history picker. */
+export function canResume(s: AgentSession): boolean {
+  return !s.running && (s.agent === "codex" || s.agent === "claude")
 }

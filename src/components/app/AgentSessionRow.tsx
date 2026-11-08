@@ -1,7 +1,7 @@
-import { CircleAlert, CircleCheck, CircleDot, CircleStop, Code, Ellipsis, FolderOpen, Square, SquareTerminal, X } from "lucide-react"
+import { RotateCcw, CircleAlert, CircleCheck, CircleDot, CircleStop, Code, Ellipsis, FolderOpen, Square, SquareTerminal, X } from "lucide-react"
 import { useQueryClient } from "@tanstack/react-query"
 import { api } from "@/lib/api"
-import { agentState, sessionLabel, short, STATE_LABEL, type AgentState } from "@/lib/agent-state"
+import { agentState, canResume, sessionLabel, short, STATE_LABEL, type AgentState } from "@/lib/agent-state"
 import { openSession } from "@/lib/commands"
 import { t } from "@/lib/i18n"
 import { ui, useStore } from "@/lib/store"
@@ -66,7 +66,16 @@ export function useSessionActions(s: AgentSession, label: string) {
       onConfirm: forget,
     })
   }
-  return { stop, close, element }
+  const resume = async () => {
+    try {
+      const resumed = await api.agentResume(s.id)
+      await refresh()
+      openSession(resumed)
+    } catch (e) {
+      notify.error(t("Couldn't resume the session: {reason}", { reason: message(e) }))
+    }
+  }
+  return { stop, close, resume, element }
 }
 
 export function AgentSessionRow({ session: s, kinds, now, indent }: { session: AgentSession; kinds: AgentKind[] | undefined; now: number; indent: number }) {
@@ -74,7 +83,7 @@ export function AgentSessionRow({ session: s, kinds, now, indent }: { session: A
   const label = sessionLabel(s, kinds, fallbackLabel)
   const agentName = kinds?.find((k) => k.id === s.agent)?.name ?? s.agent
   const selected = useStore(ui, (u) => u.agentOpen && u.agentSession === s.id)
-  const { stop, close, element } = useSessionActions(s, label)
+  const { stop, close, resume, element } = useSessionActions(s, label)
   const open = (how: "finder" | "terminal" | "editor") => api.open(s.project, s.tree, how).catch((e) => notify.error(message(e)))
   const tip = [s.task.trim() || label, `${t(STATE_LABEL[state])}${s.exitCode !== null && s.exitCode !== 0 && !s.stopped ? ` (${t("exit code {code}", { code: s.exitCode })})` : ""}`, [agentName, s.branch].filter(Boolean).join(" · ")]
     .filter(Boolean)
@@ -95,6 +104,12 @@ export function AgentSessionRow({ session: s, kinds, now, indent }: { session: A
         {t("Open in Editor")}
       </Item>
       <Separator />
+      {canResume(s) && (
+        <Item onSelect={() => void resume()}>
+          <RotateCcw />
+          {t("Resume Session…")}
+        </Item>
+      )}
       {s.running && (
         <Item onSelect={stop}>
           <Square />

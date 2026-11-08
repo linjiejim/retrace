@@ -3,6 +3,8 @@
 
 import { api, inTauri } from "./api"
 import { createStore } from "./store"
+import { t } from "./i18n"
+import { notify } from "@/components/ui/toast"
 
 export type Leave = "quit" | "restart"
 
@@ -10,19 +12,20 @@ export type Leave = "quit" | "restart"
 export const leaving = createStore<{ ask: Leave | null; running: number }>({ ask: null, running: 0 })
 
 export async function runningAgents(): Promise<number> {
-  try {
-    return (await api.agentSessions()).filter((s) => s.running).length
-  } catch {
-    return 0
-  }
+  return (await api.agentSessions()).filter((s) => s.running).length
 }
 
 /** Quit or restart now, or ask first when agents are running. */
 export async function leave(kind: Leave, confirmed = false) {
   if (!inTauri) return
   if (!confirmed) {
-    const running = await runningAgents()
-    if (running > 0) return leaving.set({ ask: kind, running })
+    try {
+      const running = await runningAgents()
+      if (running > 0) return leaving.set({ ask: kind, running })
+    } catch {
+      notify.error(t("Couldn't check running sessions. Try quitting again."))
+      return
+    }
   }
   const process = await import("@tauri-apps/plugin-process")
   if (kind === "restart") await process.relaunch()
@@ -34,9 +37,13 @@ export async function guardWindowClose(): Promise<() => void> {
   if (!inTauri) return () => {}
   const { getCurrentWindow } = await import("@tauri-apps/api/window")
   return getCurrentWindow().onCloseRequested(async (e) => {
-    const running = await runningAgents()
-    if (running === 0) return
     e.preventDefault()
-    leaving.set({ ask: "quit", running })
+    try {
+      const running = await runningAgents()
+      if (running === 0) await getCurrentWindow().destroy()
+      else leaving.set({ ask: "quit", running })
+    } catch {
+      notify.error(t("Couldn't check running sessions. Try quitting again."))
+    }
   })
 }

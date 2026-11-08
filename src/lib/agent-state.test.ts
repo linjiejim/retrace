@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { agentState, defaultBranch, fromBase64, isTerminalReport, newPart, pasted, QUIET_MS, sessionLabel, slugify, toBase64, worktreePath } from "./agent-state"
+import { canResume, agentState, defaultBranch, fromBase64, isTerminalReport, newPart, pasted, QUIET_MS, sessionLabel, slugify, toBase64, worktreePath } from "./agent-state"
 import type { AgentSession } from "./types"
 
 const base: AgentSession = {
@@ -103,4 +103,12 @@ describe("terminal bytes", () => {
     expect(newPart(0, 10, 10)).toBeNull()
     expect(newPart(12, 5, 10)).toBe("gap")
   })
+})
+
+it("offers a history picker only for stopped supported providers", () => {
+  expect(canResume({ ...base, agent: "codex", running: false })).toBe(true)
+  expect(canResume({ ...base, agent: "claude", running: false })).toBe(true)
+  expect(canResume({ ...base, agent: "codex" })).toBe(false)
+  expect(canResume({ ...base, running: false })).toBe(false)
+  expect(agentState({ ...base, running: false, exitCode: 0, stopped: true }, 0)).toBe("stopped")
 })

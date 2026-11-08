@@ -308,7 +308,11 @@ fn git_dir_of(tree: &Path) -> Option<PathBuf> {
 }
 
 pub fn operation(tree: &Path) -> Option<&'static str> {
-    let dir = git_dir_of(tree)?;
+    operation_in(&git_dir_of(tree)?)
+}
+
+/// The operation in progress, by the files in a worktree's own git dir.
+pub fn operation_in(dir: &Path) -> Option<&'static str> {
     [
         ("MERGE_HEAD", "merge"),
         ("rebase-merge", "rebase"),
@@ -472,12 +476,22 @@ pub fn tree_status(dir: &Path, tree: &Worktree, trunk: Option<&Trunk>, cache: &I
         operation: None,
         trunk: None,
         error: None,
+        missing: false,
     };
     if tree.bare {
         return status;
     }
     if tree.prunable || !path.is_dir() {
+        status.missing = !path.exists();
+        if !status.missing {
+            status.error = Some(tr!("目录还在，但已经不是 worktree（里面的 .git 不见了）", "The folder is there but no longer a worktree (its .git is gone)"));
+            return status;
+        }
         status.error = Some(tr!("这棵 worktree 的目录已经不存在", "This worktree's folder no longer exists"));
+        // Its recorded HEAD decides whether the record can be cleaned up.
+        if let (Some(trunk), Some(head)) = (trunk, tree.head.as_deref()) {
+            status.trunk = compare_with_trunk(dir, trunk, head, cache).ok();
+        }
         return status;
     }
     match worktree_counts(path) {

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
-import { buildRows, dropTarget, moveProject, sections, sessionsByProject, snapGap, type Row } from "./groups"
+import { PINNED, groupGaps, moveGroup, buildRows, dropTarget, moveProject, sections, sessionsByProject, snapGap, type Row } from "./groups"
 import type { AgentSession, Group, Project } from "./types"
 
-const p = (id: string, group: string | null = null): Project => ({ id, name: id, trunkOverride: null, group })
+const p = (id: string, group: string | null = null, pinned = false): Project => ({ id, name: id, trunkOverride: null, group, pinned })
 const groups: Group[] = [
   { id: "g1", name: "Work" },
   { id: "g2", name: "Side" },
@@ -45,6 +45,48 @@ describe("groups", () => {
     // rows: [g1] b d [g2] c a e — between c and a the pointer decides
     expect(dropTarget(open, all, 5, false)).toEqual({ group: null, before: "a" })
     expect(dropTarget(open, all, 5, true)).toEqual({ group: "g2", before: null })
+  })
+
+  it("lists pinned projects first, out of their own groups", () => {
+    const withPins = [...projects, p("f", "g1", true), p("g", null, true)]
+    expect(sections(withPins, groups)).toEqual([
+      { group: PINNED, ids: ["f", "g"] },
+      { group: "g1", ids: ["b", "d"] },
+      { group: "g2", ids: ["c"] },
+      { group: null, ids: ["a", "e"] },
+    ])
+    const rows = buildRows(withPins, groups, new Set(["g2"]))
+    expect(rows.map((r) => (r.kind === "group" ? `[${r.group.id}:${r.count}]` : r.kind === "empty" ? `(${r.group})` : r.kind === "session" ? r.session.id : r.project.id))).toEqual([
+      `[${PINNED}:2]`,
+      "f",
+      "g",
+      "[g1:2]",
+      "b",
+      "d",
+      "[g2:1]",
+      "a",
+      "e",
+    ])
+    // Dragged between the pinned ones: it lands there.
+    expect(dropTarget(rows, sections(withPins, groups), 2, false)).toEqual({ group: PINNED, before: "g" })
+  })
+
+  it("finds the gaps between groups and moves a group", () => {
+    const withPins = [...projects, p("f", "g1", true)]
+    const rows = buildRows(withPins, [...groups, { id: "g3", name: "New" }], new Set(["g2"]))
+    // rows: [pinned] f [g1] b d [g2] [g3] (g3) a e
+    expect(groupGaps(rows)).toEqual([
+      { before: "g1", row: 2 },
+      { before: "g2", row: 5 },
+      { before: "g3", row: 6 },
+      { before: null, row: 8 },
+    ])
+    expect(groupGaps(buildRows([p("a")], [], new Set()))).toEqual([])
+    const order = ["g1", "g2", "g3"]
+    expect(moveGroup(order, "g1", { before: null, row: 8 })).toEqual(["g2", "g3", "g1"])
+    expect(moveGroup(order, "g3", { before: "g1", row: 2 })).toEqual(["g3", "g1", "g2"])
+    expect(moveGroup(order, "g2", { before: "g2", row: 5 })).toEqual(order)
+    expect(moveGroup(order, "g2", { before: "g3", row: 6 })).toEqual(order)
   })
 
   it("moves a project into, within and out of groups", () => {
@@ -95,5 +137,18 @@ describe("agent sessions in the projects list", () => {
     // Below a's session: still after a.
     expect(dropTarget(rows, all, 9, false)).toEqual({ group: null, before: "e" })
     expect(dropTarget(rows, all, 10, false)).toEqual({ group: null, before: null })
+  })
+})
+
+
+describe("sessions combined with pinned projects and group dragging", () => {
+  it("keeps sessions with pinned projects and includes sessions in group boundaries", () => {
+    const projects = [p("a", "g1", true), p("b", "g1"), p("c", "g2")]
+    const sessions = sessionsByProject([session("sa", "a", 1), session("sb", "b", 2), session("sc", "c", 3)])
+    const rows = buildRows(projects, groups, new Set(), sessions)
+    expect(rows.map(r => r.kind)).toEqual(["group", "project", "session", "group", "project", "session", "group", "project", "session"])
+    expect(groupGaps(rows)).toEqual([{ before: "g1", row: 3 }, { before: "g2", row: 6 }, { before: null, row: 9 }])
+    expect(dropTarget(rows, sections(projects, groups), 2, true)).toEqual({ group: PINNED, before: null })
+    expect(buildRows(projects, groups, new Set([PINNED]), sessions).filter(r => r.kind === "session").map(r => r.session.id)).toEqual(["sb", "sc"])
   })
 })

@@ -50,7 +50,7 @@ export function NewAgentDialog() {
     setWhere("new")
     setBranch(defaultBranch("", new Date()))
     setBranchEdited(false)
-    setSetup("")
+    setSetup(savedSetup.data ?? "")
     setSetupEdited(false)
     setError(null)
     setPending(false)

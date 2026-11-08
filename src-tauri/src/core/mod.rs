@@ -33,11 +33,13 @@ impl State {
     pub fn load() -> Arc<Self> {
         let config_path = config::path();
         let config = config::load(&config_path);
-        Arc::new(Self { config: RwLock::new(config), config_path, integration: Mutex::new(Default::default()), history: Default::default(), deleted_branches: Default::default(), agents: Default::default(), agents_allowed: AtomicBool::new(true) })
+        let agents = Arc::new(agent::Sessions::with_path(config_path.with_file_name("agent-sessions.json")));
+        Arc::new(Self { config: RwLock::new(config), config_path, integration: Mutex::new(Default::default()), history: Default::default(), deleted_branches: Default::default(), agents, agents_allowed: AtomicBool::new(true) })
     }
 
     pub fn with_config(config_path: PathBuf) -> Arc<Self> {
         let config = config::load(&config_path);
-        Arc::new(Self { config: RwLock::new(config), config_path, integration: Mutex::new(Default::default()), history: Default::default(), deleted_branches: Default::default(), agents: Default::default(), agents_allowed: AtomicBool::new(true) })
+        let agents = Arc::new(agent::Sessions::with_path(config_path.with_file_name("agent-sessions.json")));
+        Arc::new(Self { config: RwLock::new(config), config_path, integration: Mutex::new(Default::default()), history: Default::default(), deleted_branches: Default::default(), agents, agents_allowed: AtomicBool::new(true) })
     }
 }

@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Read;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
@@ -11,6 +12,7 @@ use std::time::{Duration, Instant};
 pub type Env = BTreeMap<String, String>;
 
 const MARKER: &str = "__RETRACE_ENV_BEGIN__";
+const END_MARKER: &str = "__RETRACE_ENV_END__";
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Left by the terminal or agent that started Retrace (in development), never by the user's
@@ -55,7 +57,11 @@ pub fn prefetch() {
 }
 
 fn login_env(shell: &str) -> Option<Env> {
-    let script = format!("printf '\\n{MARKER}\\n'; /usr/bin/env -0");
+    login_env_with_timeout(shell, TIMEOUT)
+}
+
+fn login_env_with_timeout(shell: &str, timeout: Duration) -> Option<Env> {
+    let script = format!("printf '\\n{MARKER}\\n'; /usr/bin/env -0; printf '\\n{END_MARKER}\\n'");
     let mut child = Command::new(shell)
         .args(["-l", "-i", "-c", &script])
         .stdin(Stdio::null())
@@ -65,26 +71,53 @@ fn login_env(shell: &str) -> Option<Env> {
         .spawn()
         .ok()?;
     let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf);
-        buf
-    });
+    // A profile can leave background processes holding stdout open after the shell exits.
+    // Nonblocking reads keep both the shell and its output inside the same deadline, without
+    // leaving a reader thread behind. The end marker lets a complete snapshot finish without EOF.
+    let fd = stdout.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
+    let end_marker = format!("\n{END_MARKER}\n");
+    let mut out = Vec::new();
+    let mut buf = [0u8; 8192];
+    let mut exited = false;
+    let mut eof = false;
     let started = Instant::now();
     loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if started.elapsed() < TIMEOUT => std::thread::sleep(Duration::from_millis(20)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
+        if started.elapsed() >= timeout {
+            break;
+        }
+        match stdout.read(&mut buf) {
+            Ok(n) if n > 0 => out.extend_from_slice(&buf[..n]),
+            Ok(_) => eof = true,
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted) => {}
+            Err(_) => break,
+        }
+        if !exited {
+            match child.try_wait() {
+                Ok(Some(_)) => exited = true,
+                Ok(None) => {}
+                Err(_) => break,
             }
         }
+        if exited {
+            if let Some(end) = out.windows(end_marker.len()).position(|w| w == end_marker.as_bytes()) {
+                let env = parse(&out[..end])?;
+                return env.contains_key("PATH").then_some(env);
+            }
+            if eof {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
-    let out = reader.join().ok()?;
-    let env = parse(&out)?;
-    env.contains_key("PATH").then_some(env)
+    let _ = child.kill();
+    let _ = child.wait();
+    None
 }
 
 /// `env -0` output after the marker line; whatever the profile printed before it is skipped.
@@ -135,6 +168,55 @@ pub fn which(env: &Env, name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct BackgroundShell(PathBuf);
+
+    impl BackgroundShell {
+        fn new(complete: bool) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let dir = std::env::temp_dir().join(format!("retrace-login-env-{}-{unique}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            // Emit a deterministic snapshot with shell builtins: this fixture tests inherited
+            // stdout, not the user's profiles or the startup time of external commands.
+            let end = if complete { format!("\\n{END_MARKER}\\n") } else { String::new() };
+            let run = format!("printf '\\n{MARKER}\\nPATH=/bin\\000{end}'");
+            let script = format!("#!/bin/sh\n/bin/sleep 10 &\nprintf '%s' \"$!\" > '{}'\n{run}\n", dir.join("child").display());
+            std::fs::write(dir.join("shell"), script).unwrap();
+            std::fs::set_permissions(dir.join("shell"), std::fs::Permissions::from_mode(0o755)).unwrap();
+            Self(dir)
+        }
+
+        fn shell(&self) -> String {
+            self.0.join("shell").to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for BackgroundShell {
+        fn drop(&mut self) {
+            if let Some(pid) = std::fs::read_to_string(self.0.join("child")).ok().and_then(|s| s.parse::<i32>().ok()) {
+                unsafe { libc::kill(pid, libc::SIGKILL); }
+            }
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn completed_environment_does_not_wait_for_background_stdout_to_close() {
+        let shell = BackgroundShell::new(true);
+        let started = Instant::now();
+        let env = login_env_with_timeout(&shell.shell(), Duration::from_secs(1));
+        assert!(env.is_some_and(|env| env.contains_key("PATH")));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn deadline_also_bounds_incomplete_output_after_the_shell_exits() {
+        let shell = BackgroundShell::new(false);
+        let started = Instant::now();
+        assert!(login_env_with_timeout(&shell.shell(), Duration::from_millis(100)).is_none());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn parses_after_the_marker_and_ignores_profile_noise() {

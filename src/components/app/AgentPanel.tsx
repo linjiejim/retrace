@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { GitBranch, MessageSquare, SendHorizontal, Square, X } from "lucide-react"
+import { GitBranch, MessageSquare, RotateCcw, SendHorizontal, Square, X } from "lucide-react"
 import { onAgentChanged } from "@/lib/api"
-import { agentState, sessionLabel } from "@/lib/agent-state"
+import { agentState, canResume, sessionLabel } from "@/lib/agent-state"
 import { t } from "@/lib/i18n"
 import { prefs, ui, useStore } from "@/lib/store"
 import { attachTerminal, ensureTerminal, keepTerminals, sendMessage } from "@/lib/terminals"
@@ -23,7 +23,7 @@ export function AgentTerminals() {
   const sessions = useAgentSessions().data
   useEffect(() => {
     const ids = new Set((sessions ?? []).map((s) => s.id))
-    ids.forEach((id) => ensureTerminal(id))
+    sessions?.filter((s) => s.running || s.exitCode !== null).forEach((s) => ensureTerminal(s.id))
     keepTerminals(ids)
     const shown = ui.get().agentSession
     if (shown && !ids.has(shown) && sessions) ui.set({ agentSession: null })
@@ -177,15 +177,18 @@ export function AgentDrawer() {
       {s ? (
         <>
           <div className="min-h-0 flex-1 px-2 pt-1.5">
-            <TerminalHost id={s.id} />
+            {s.stopped && s.exitCode === null ? (
+              <StateView size="sm" kind="empty" title={t("Session saved")} description={canResume(s) ? t("Resume opens the agent's history picker in this worktree. Choose the conversation to continue.") : t("Open this worktree in a terminal to recover the conversation with your agent.")} />
+            ) : <TerminalHost id={s.id} />}
           </div>
-          {!s.running && (
+          {!s.running && s.exitCode !== null && (
             <p className="shrink-0 border-t px-3 py-2 text-caption text-faint-foreground">
-              {s.exitCode === 0
-                ? t("{agent} has finished.", { agent: agentName })
-                : s.stopped
-                  ? t("You stopped {agent}.", { agent: agentName })
+              {s.stopped
+                ? t("You stopped {agent}.", { agent: agentName })
+                : s.exitCode === 0
+                  ? t("{agent} has finished.", { agent: agentName })
                   : t("{agent} stopped (exit code {code}).", { agent: agentName, code: s.exitCode ?? "?" })}
+              {canResume(s) && <span className="ml-1">{t("Resume opens the agent's history picker in this worktree. Choose the conversation to continue.")}</span>}
             </p>
           )}
           {showInput && s.running && <MessageBox key={s.id} id={s.id} agent={agentName} disabled={!s.running} />}
@@ -198,9 +201,14 @@ export function AgentDrawer() {
 }
 
 function SessionButtons({ session: s, label }: { session: AgentSession; label: string }) {
-  const { stop, element } = useSessionActions(s, label)
+  const { stop, resume, element } = useSessionActions(s, label)
   return (
     <>
+      {canResume(s) && (
+        <IconButton label={t("Resume Session…")} size="icon-sm" onClick={() => void resume()}>
+          <RotateCcw />
+        </IconButton>
+      )}
       {s.running && (
         <IconButton label={t("Stop Agent")} size="icon-sm" onClick={stop}>
           <Square />

@@ -9,13 +9,13 @@ use super::shell_env::{self, Env};
 use crate::tr;
 use anyhow::{anyhow, bail, Context, Result};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // ---------- the agents we know ----------
 
@@ -40,12 +40,29 @@ impl Kind {
     /// Arguments that start the UI with `task` already submitted (none for an empty task).
     pub fn args(&self, task: &str) -> Vec<String> {
         let task = task.trim();
+        // Own this session's runtime; quitting its TUI must not leave a task in a shared daemon.
+        if self.id == "codex" {
+            let mut args = vec!["--no-daemon".into()];
+            if !task.is_empty() {
+                args.extend(["--".into(), task.into()]);
+            }
+            return args;
+        }
         if task.is_empty() {
             return vec![];
         }
         match self.id {
             "opencode" => vec!["--prompt".into(), task.into()],
             _ => vec![task.into()],
+        }
+    }
+
+    /// Let the agent show its native history picker in the session's existing worktree.
+    pub fn resume_args(&self) -> Result<Vec<String>> {
+        match self.id {
+            "codex" => Ok(vec!["--no-daemon".into(), "resume".into()]),
+            "claude" => Ok(vec!["--resume".into()]),
+            _ => bail!(tr!("暂不支持恢复 {} 会话，请在这个 worktree 中打开它的历史记录", "Resuming {} sessions isn't supported yet; open its history in this worktree", self.name)),
         }
     }
 }
@@ -100,6 +117,13 @@ pub fn launch(kind: &Kind, task: &str, setup: Option<&str>, tree: &Path, main_tr
         None => (bin, agent_args),
     };
     Ok(Launch { program, args, cwd: tree.to_path_buf(), env, cols: size.0.clamp(20, 500), rows: size.1.clamp(5, 300) })
+}
+
+pub fn resume_launch(kind: &Kind, tree: &Path, main_tree: &Path, env: &Env, size: (u16, u16)) -> Result<Launch> {
+    let args = kind.resume_args()?;
+    let mut launch = launch(kind, "", None, tree, main_tree, env, size)?;
+    launch.args = args;
+    Ok(launch)
 }
 
 // ---------- new worktree ----------
@@ -236,7 +260,7 @@ impl Scanner {
 // ---------- sessions ----------
 
 /// What the UI lists. Times are milliseconds since the epoch.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub id: String,
@@ -308,9 +332,9 @@ impl Buffer {
 struct Session {
     info: Mutex<SessionInfo>,
     buffer: Mutex<Buffer>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    writer: Mutex<Option<Box<dyn Write + Send>>>,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
-    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    killer: Mutex<Option<Box<dyn ChildKiller + Send + Sync>>>,
     pid: Option<u32>,
 }
 
@@ -319,30 +343,34 @@ impl Session {
         self.info.lock().map(|i| i.running).unwrap_or(false)
     }
 
-    /// Hang up the whole process group (the agent and whatever it started); kill it if it is
-    /// still there a few seconds later.
-    fn hang_up(self: &Arc<Self>) {
-        if let Ok(mut i) = self.info.lock() {
-            i.stopped = true;
+    /// Serialize signals with reaping: while `running` is true under this lock, the waiter
+    /// hasn't released the child's pid for reuse by another process.
+    fn signal(&self, signal: i32, stopped: bool) {
+        let Ok(mut info) = self.info.lock() else { return };
+        if !info.running {
+            return;
         }
+        info.stopped |= stopped;
         let Some(pid) = self.pid.map(|p| p as i32).filter(|p| *p > 1) else {
-            let _ = self.killer.lock().map(|mut k| k.kill());
+            let _ = self.killer.lock().map(|mut k| k.as_mut().map(|k| k.kill()));
             return;
         };
         unsafe {
-            libc::killpg(pid, libc::SIGHUP);
+            libc::killpg(pid, signal);
         }
+    }
+
+    /// Hang up the whole process group (the agent and whatever it started); kill it if it is
+    /// still there a few seconds later.
+    fn hang_up(self: &Arc<Self>) {
+        self.signal(libc::SIGHUP, true);
         // An agent that ignores the hangup is killed with its group. While it runs (or is an
         // unreaped zombie) its pid, and so the group id, can't belong to anyone else. Children
-        // left behind when the agent does exit are handled by the wait thread (`end_group`).
+        // left behind when the agent does exit are handled by the wait thread.
         let me = self.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(3));
-            if me.running() {
-                unsafe {
-                    libc::killpg(pid, libc::SIGKILL);
-                }
-            }
+            me.signal(libc::SIGKILL, false);
         });
     }
 }
@@ -362,6 +390,13 @@ fn wait_exit_unreaped(pid: i32) {
 #[derive(Default)]
 pub struct Sessions {
     list: Mutex<Vec<Arc<Session>>>,
+    /// Closed terminals stay tracked until their processes exit, so quitting can still stop them.
+    closing: Mutex<Vec<Arc<Session>>>,
+    /// Structural changes (especially replacing a restored session) happen one at a time.
+    mutation: Mutex<()>,
+    shutting_down: AtomicBool,
+    persistence: Mutex<()>,
+    path: Option<PathBuf>,
     notify: RwLock<Option<Notify>>,
     next: AtomicU64,
 }
@@ -371,6 +406,62 @@ pub fn now_ms() -> i64 {
 }
 
 impl Sessions {
+    /// Restore metadata only. A saved pid or byte stream is never trusted or replayed.
+    pub fn with_path(path: PathBuf) -> Self {
+        let saved: Vec<SessionInfo> = std::fs::read(&path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+        let mut list = Vec::new();
+        let mut ids = std::collections::HashSet::new();
+        for mut info in saved {
+            if info.id.is_empty() || !ids.insert(info.id.clone()) {
+                continue;
+            }
+            info.running = false;
+            info.stopped = true;
+            info.exit_code = None;
+            list.push(Arc::new(Session {
+                info: Mutex::new(info),
+                buffer: Mutex::new(Buffer { data: VecDeque::new(), start: 0 }),
+                writer: Mutex::new(None),
+                master: Mutex::new(None),
+                killer: Mutex::new(None),
+                pid: None,
+            }));
+        }
+        Self { list: Mutex::new(list), path: Some(path), ..Default::default() }
+    }
+
+    /// Serialize snapshots as well as file writes: concurrent exit/spawn/close saves must not
+    /// replace a newer snapshot with an older one. Only SessionInfo goes on disk.
+    fn persist(&self) -> Result<()> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let Some(path) = &self.path else { return Ok(()) };
+        let _save = self.persistence.lock().map_err(|_| anyhow!("session persistence"))?;
+        let bytes = serde_json::to_vec_pretty(&self.list())?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        static NEXT_SAVE: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT_SAVE.fetch_add(1, Ordering::Relaxed);
+        let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
+        let result = (|| -> Result<()> {
+            let mut file = std::fs::OpenOptions::new().create_new(true).write(true).mode(0o600).open(&tmp)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            std::fs::rename(&tmp, path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        result.with_context(|| tr!("无法保存 agent 会话", "Can't save agent sessions"))
+    }
+
+    fn persist_after_exit(&self) {
+        if let Err(error) = self.persist() {
+            eprintln!("{error:#}");
+        }
+    }
+
     /// Where output and state changes go (the app's event bus); without it, callers poll.
     pub fn set_notify(&self, notify: Notify) {
         if let Ok(mut n) = self.notify.write() {
@@ -394,6 +485,47 @@ impl Sessions {
     }
 
     pub fn spawn(self: &Arc<Self>, launch: Launch, meta: Meta) -> Result<SessionInfo> {
+        let _mutation = self.mutation.lock().map_err(|_| anyhow!("sessions"))?;
+        self.ensure_active()?;
+        let info = self.spawn_unlocked(launch, meta)?;
+        if let Err(error) = self.persist() {
+            let _ = self.close_unlocked(&info.id);
+            return Err(error);
+        }
+        Ok(info)
+    }
+
+    /// The old record remains available if validation or spawning fails; the mutation lock
+    /// prevents two requests from resuming the same record at once.
+    pub fn resume(self: &Arc<Self>, id: &str, prepare: impl FnOnce(&SessionInfo) -> Result<Launch>) -> Result<SessionInfo> {
+        let _mutation = self.mutation.lock().map_err(|_| anyhow!("sessions"))?;
+        self.ensure_active()?;
+        let old = self.get(id)?;
+        let original = old.info.lock().map_err(|_| anyhow!("session"))?.clone();
+        if original.running {
+            bail!(tr!("会话还在运行，先停止它再恢复", "The session is still running; stop it before resuming"));
+        }
+        let launch = prepare(&original)?;
+        let info = self.spawn_unlocked(launch, Meta { project: original.project, tree: original.tree, branch: original.branch, agent: original.agent, task: original.task })?;
+        if let Ok(mut list) = self.list.lock() {
+            list.retain(|s| !Arc::ptr_eq(s, &old));
+        }
+        if let Err(error) = self.persist() {
+            self.list.lock().map_err(|_| anyhow!("sessions"))?.push(old);
+            let _ = self.close_unlocked(&info.id);
+            return Err(error);
+        }
+        Ok(info)
+    }
+
+    fn ensure_active(&self) -> Result<()> {
+        if self.shutting_down.load(Ordering::Relaxed) {
+            bail!(tr!("Retrace 正在退出，无法启动 agent", "Retrace is quitting; can't start an agent"));
+        }
+        Ok(())
+    }
+
+    fn spawn_unlocked(self: &Arc<Self>, launch: Launch, meta: Meta) -> Result<SessionInfo> {
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize { rows: launch.rows, cols: launch.cols, pixel_width: 0, pixel_height: 0 })
@@ -413,9 +545,15 @@ impl Sessions {
         let reader = pair.master.try_clone_reader().map_err(|e| anyhow!("{e}"))?;
         let writer = pair.master.take_writer().map_err(|e| anyhow!("{e}"))?;
         let now = now_ms();
-        let n = self.next.fetch_add(1, Ordering::Relaxed);
+        let id = loop {
+            let n = self.next.fetch_add(1, Ordering::Relaxed);
+            let id = format!("s{now:x}{n}");
+            if self.list.lock().map_err(|_| anyhow!("sessions"))?.iter().all(|s| s.info.lock().is_ok_and(|i| i.id != id)) {
+                break id;
+            }
+        };
         let info = SessionInfo {
-            id: format!("s{now:x}{n}"),
+            id,
             project: meta.project,
             tree: meta.tree,
             branch: meta.branch,
@@ -433,8 +571,8 @@ impl Sessions {
         let session = Arc::new(Session {
             info: Mutex::new(info.clone()),
             buffer: Mutex::new(Buffer { data: VecDeque::new(), start: 0 }),
-            writer: Mutex::new(writer),
-            killer: Mutex::new(child.clone_killer()),
+            writer: Mutex::new(Some(writer)),
+            killer: Mutex::new(Some(child.clone_killer())),
             pid: child.process_id(),
             master: Mutex::new(Some(pair.master)),
         });
@@ -447,27 +585,32 @@ impl Sessions {
         std::thread::spawn(move || {
             if let Some(pid) = pid {
                 wait_exit_unreaped(pid);
-                // Stopped by the user: whatever the agent left in its group goes too, while the
-                // unreaped agent still holds the group id.
-                if s.info.lock().is_ok_and(|i| i.stopped) {
-                    unsafe {
-                        libc::killpg(pid, libc::SIGKILL);
-                    }
-                }
             }
-            let code = match child.wait() {
-                Ok(status) if status.success() => 0,
-                Ok(status) => status.exit_code().max(1) as i32,
-                Err(_) => -1,
-            };
+            // Keep signals excluded until the reaped pid is marked no longer running.
             let id = match s.info.lock() {
                 Ok(mut i) => {
+                    // Stopped by the user: whatever the agent left in its group goes too, while
+                    // the unreaped agent still holds the group id.
+                    if let Some(pid) = pid.filter(|_| i.stopped) {
+                        unsafe {
+                            libc::killpg(pid, libc::SIGKILL);
+                        }
+                    }
+                    let code = match child.wait() {
+                        Ok(status) if status.success() => 0,
+                        Ok(status) => status.exit_code().max(1) as i32,
+                        Err(_) => -1,
+                    };
                     i.running = false;
                     i.exit_code = Some(code);
                     i.id.clone()
                 }
                 Err(_) => return,
             };
+            if let Ok(mut closing) = me.closing.lock() {
+                closing.retain(|x| !Arc::ptr_eq(x, &s));
+            }
+            me.persist_after_exit();
             me.emit(Event::Changed { session: id });
         });
         self.emit(Event::Changed { session: info.id.clone() });
@@ -544,6 +687,7 @@ impl Sessions {
         }
         {
             let mut w = s.writer.lock().map_err(|_| anyhow!("writer"))?;
+            let w = w.as_mut().ok_or_else(|| anyhow!(tr!("会话已经结束", "The session has ended")))?;
             w.write_all(bytes)?;
             w.flush()?;
         }
@@ -574,9 +718,20 @@ impl Sessions {
 
     /// Stop it if needed and forget it: the terminal closes, the worktree stays.
     pub fn close(&self, id: &str) -> Result<()> {
+        let _mutation = self.mutation.lock().map_err(|_| anyhow!("sessions"))?;
+        self.close_unlocked(id)
+    }
+
+    fn close_unlocked(&self, id: &str) -> Result<()> {
         let s = self.get(id)?;
         if s.running() {
             s.hang_up();
+        }
+        // Track it before removing its row: shutdown must also include a closing process.
+        if let Ok(mut closing) = self.closing.lock() {
+            if s.running() {
+                closing.push(s.clone());
+            }
         }
         if let Ok(mut m) = s.master.lock() {
             m.take();
@@ -585,23 +740,59 @@ impl Sessions {
             list.retain(|x| !Arc::ptr_eq(x, &s));
         }
         self.emit(Event::Changed { session: id.to_string() });
-        Ok(())
+        self.persist()
     }
 
     pub fn running_count(&self) -> usize {
         self.list.lock().map(|l| l.iter().filter(|s| s.running()).count()).unwrap_or(0)
     }
 
-    /// The app is quitting: hang up every agent.
-    pub fn stop_all(&self) {
-        let list = self.list.lock().map(|l| l.clone()).unwrap_or_default();
-        for s in list.iter().filter(|s| s.running()) {
-            if let Some(pid) = s.pid.map(|p| p as i32).filter(|p| *p > 1) {
-                unsafe {
-                    libc::killpg(pid, libc::SIGHUP);
-                }
+    /// A clean worktree can still belong to a running agent, including one whose terminal was
+    /// just closed and whose process has not exited yet.
+    pub fn tree_in_use(&self, path: &str) -> bool {
+        for entries in [&self.list, &self.closing] {
+            let Ok(entries) = entries.lock() else { return true };
+            if entries.iter().any(|s| s.info.lock().map(|i| i.running && i.tree == path).unwrap_or(true)) {
+                return true;
             }
         }
+        false
+    }
+
+    /// Keep the check and destructive operation atomic with respect to starting/resuming a
+    /// session. Listing candidates is advisory; deletion always takes this guard again.
+    pub fn with_idle_tree<T>(&self, path: &str, remove: impl FnOnce() -> Result<T>) -> Result<T> {
+        let _mutation = self.mutation.lock().map_err(|_| anyhow!("sessions"))?;
+        if self.tree_in_use(path) {
+            bail!(tr!("agent 正在使用这个 worktree，先停止会话再删除：{path}", "An agent is using this worktree; stop its session before removing it: {path}"));
+        }
+        remove()
+    }
+
+    /// The app is quitting. Finish cleanup here: threads spawned by `hang_up` cannot be relied
+    /// on once the app exits. All sessions share one grace period, regardless of their count.
+    pub fn stop_all(&self) {
+        let Ok(_mutation) = self.mutation.lock() else { return };
+        self.shutting_down.store(true, Ordering::Relaxed);
+        let mut list = self.list.lock().map(|l| l.clone()).unwrap_or_default();
+        if let Ok(closing) = self.closing.lock() {
+            list.extend(closing.iter().cloned());
+        }
+        for s in &list {
+            s.signal(libc::SIGHUP, true);
+        }
+        let grace = Instant::now() + Duration::from_secs(3);
+        while list.iter().any(|s| s.running()) && Instant::now() < grace {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        for s in &list {
+            s.signal(libc::SIGKILL, false);
+        }
+        let reaping = Instant::now() + Duration::from_secs(1);
+        while list.iter().any(|s| s.running()) && Instant::now() < reaping {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.persist_after_exit();
     }
 }
 
@@ -658,7 +849,8 @@ mod tests {
         let k = kind("opencode").unwrap();
         assert_eq!(k.args("  fix `rm -rf` \"quotes\"; $(x) "), vec!["--prompt".to_string(), "fix `rm -rf` \"quotes\"; $(x)".to_string()]);
         assert!(k.args("  ").is_empty());
-        assert_eq!(kind("codex").unwrap().args("go"), vec!["go".to_string()]);
+        assert_eq!(kind("codex").unwrap().args("go"), vec!["--no-daemon".to_string(), "--".to_string(), "go".to_string()]);
+        assert_eq!(kind("codex").unwrap().args(""), vec!["--no-daemon".to_string()]);
         assert!(kind("vim").is_err());
     }
 

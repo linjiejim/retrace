@@ -7,6 +7,13 @@
 //! are reported so the UI leaves those unticked. A branch is deleted only while it still points at
 //! the commit that was checked (`update-ref -d <ref> <old>`), which also covers squash merges that
 //! `git branch -d` refuses; long-lived and kept branches are never deleted.
+//!
+//! A tree whose folder was deleted from under git counts by the HEAD git recorded for it; removing
+//! it drops only that record.
+//!
+//! When asked, a deleted branch's copy on origin goes too (`git push origin :<branch>`, the one
+//! push): only its own copy, only while origin still has it where the last fetch saw it, and only
+//! if that commit is in the trunk as well.
 
 use crate::tr;
 use super::model::*;
@@ -25,6 +32,9 @@ const RECENT: Duration = Duration::from_secs(15 * 60);
 /// Branches that stay around after being merged, by design.
 const PROTECTED: [&str; 8] = ["main", "master", "develop", "development", "dev", "staging", "production", "gh-pages"];
 const PROTECTED_PREFIXES: [&str; 3] = ["release/", "releases/", "release-"];
+/// The remote whose copies of deleted branches may be deleted too.
+const ORIGIN: &str = "origin";
+const PUSH_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub fn is_protected(name: &str) -> bool {
     PROTECTED.contains(&name) || PROTECTED_PREFIXES.iter().any(|p| name.starts_with(p))
@@ -108,9 +118,15 @@ fn last_commit_time(dir: &Path, head: &str) -> Option<i64> {
 
 struct Verdict {
     integration: Integration,
+    /// The folder is already gone (git lists the tree as prunable): only git's record is left.
+    gone: bool,
 }
 
 /// The checks shared by listing and removing. `strict` re-counts untracked files one by one.
+/// A tree whose folder was deleted from under git qualifies too, by the HEAD git recorded for it:
+/// nothing uncommitted is left to lose, and `git worktree remove` then drops just that record.
+/// A folder that's still there but no longer a worktree (its `.git` gone) never qualifies: git
+/// refuses to remove it, and it may hold files of its own.
 fn eligible(dir: &Path, tree: &Worktree, trunk: &Trunk, cache: &IntegrationCache, strict: bool) -> Result<Verdict> {
     let path = Path::new(&tree.path);
     if tree.is_main || tree.bare {
@@ -119,32 +135,116 @@ fn eligible(dir: &Path, tree: &Worktree, trunk: &Trunk, cache: &IntegrationCache
     if tree.locked {
         bail!(tr!("worktree 已锁定", "The worktree is locked"));
     }
-    if tree.prunable || !path.is_dir() {
-        bail!(tr!("worktree 目录已经不存在", "The worktree folder no longer exists"));
+    let gone = tree.prunable && !path.exists();
+    if !gone && (tree.prunable || !path.is_dir()) {
+        bail!(tr!("目录还在，但已经不是 worktree", "The folder is there but no longer a worktree"));
     }
     if tree.branch.as_deref().is_some_and(|b| is_trunk_branch(trunk, b)) {
         bail!(tr!("检出的是集成分支", "It has the integration branch checked out"));
     }
     let head = tree.head.as_deref().ok_or_else(|| anyhow::anyhow!(tr!("还没有提交", "No commits yet")))?;
-    let counts = if strict {
-        repo::parse_status(&git::run_heavy(path, &["status", "--porcelain=v2", "-z", "--untracked-files=all"])?)
+    if !gone {
+        let counts = if strict {
+            repo::parse_status(&git::run_heavy(path, &["status", "--porcelain=v2", "-z", "--untracked-files=all"])?)
+        } else {
+            repo::worktree_counts(path)?
+        };
+        if counts.files > 0 {
+            bail!(tr!("有 {} 个文件未提交", "{} files are uncommitted", counts.files));
+        }
+        if let Some(op) = repo::operation(path) {
+            bail!(tr!("有进行中的 {op}", "A {op} is in progress"));
+        }
     } else {
-        repo::worktree_counts(path)?
-    };
-    if counts.files > 0 {
-        bail!(tr!("有 {} 个文件未提交", "{} files are uncommitted", counts.files));
-    }
-    if let Some(op) = repo::operation(path) {
-        bail!(tr!("有进行中的 {op}", "A {op} is in progress"));
+        gone_record_is_clean(dir, &tree.path, head)?;
     }
     let cmp = repo::compare_with_trunk(dir, trunk, head, cache)?;
     if cmp.integration == Integration::None {
         bail!(tr!("还没有合并到 {}", "Not merged into {} yet", trunk.name));
     }
-    Ok(Verdict { integration: cmp.integration })
+    Ok(Verdict { integration: cmp.integration, gone })
+}
+
+/// The folder git keeps for a linked worktree (`<common dir>/worktrees/<id>`), found by the path it
+/// records for the tree.
+fn admin_dir(dir: &Path, tree_path: &str) -> Option<PathBuf> {
+    let common = git::text(dir, &["rev-parse", "--path-format=absolute", "--git-common-dir"]).ok()?;
+    let want = Path::new(tree_path).join(".git");
+    let found: Vec<PathBuf> = std::fs::read_dir(Path::new(common.trim()).join("worktrees"))
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|admin| std::fs::read_to_string(admin.join("gitdir")).is_ok_and(|g| same_place(&recorded(admin, &g), &want)))
+        .collect();
+    // Two records naming one tree: can't tell whose index to check, so neither.
+    match <[PathBuf; 1]>::try_from(found) {
+        Ok([admin]) => Some(admin),
+        Err(_) => None,
+    }
+}
+
+/// A `gitdir` record: absolute, or (`git worktree add --relative-paths`) relative to its admin dir,
+/// taken from where the admin dir really is (it may be reached through a symlink).
+fn recorded(admin: &Path, gitdir: &str) -> PathBuf {
+    let g = Path::new(gitdir.trim());
+    if g.is_absolute() {
+        g.to_path_buf()
+    } else {
+        std::fs::canonicalize(admin).unwrap_or_else(|_| admin.to_path_buf()).join(g)
+    }
+}
+
+/// Two paths name the same place: `.` and `..` folded, symlinks resolved as far as the path
+/// still exists (the tree's own folder is gone).
+fn same_place(a: &Path, b: &Path) -> bool {
+    fn settled(p: &Path) -> PathBuf {
+        let mut lexical = PathBuf::new();
+        for c in p.components() {
+            match c {
+                std::path::Component::ParentDir => {
+                    lexical.pop();
+                }
+                std::path::Component::CurDir => {}
+                c => lexical.push(c),
+            }
+        }
+        let mut head = lexical.as_path();
+        let mut tail = Vec::new();
+        while !head.exists() {
+            match (head.parent(), head.file_name()) {
+                (Some(parent), Some(name)) => {
+                    tail.push(name.to_os_string());
+                    head = parent;
+                }
+                _ => return lexical,
+            }
+        }
+        let mut out = std::fs::canonicalize(head).unwrap_or_else(|_| head.to_path_buf());
+        out.extend(tail.iter().rev());
+        out
+    }
+    settled(a) == settled(b)
+}
+
+/// A tree whose folder is gone still has its index and operation state in git's record of it:
+/// staged work there would be lost with the record, and `git worktree remove` doesn't check it.
+fn gone_record_is_clean(dir: &Path, tree_path: &str, head: &str) -> Result<()> {
+    let admin = admin_dir(dir, tree_path).ok_or_else(|| anyhow::anyhow!(tr!("找不到 git 对这棵 worktree 的记录", "Can't find git's record of this worktree")))?;
+    if let Some(op) = repo::operation_in(&admin) {
+        bail!(tr!("有进行中的 {op}", "A {op} is in progress"));
+    }
+    let admin = admin.to_string_lossy();
+    match git::code(dir, &["--git-dir", &admin, "diff-index", "--cached", "--quiet", head, "--"]) {
+        Ok((0, _)) => Ok(()),
+        Ok((1, _)) => bail!(tr!("目录已经删了，但暂存区里还有没提交的改动", "The folder is gone, but its index still holds staged changes")),
+        _ => bail!(tr!("没能检查它的暂存区", "Couldn't check its index")),
+    }
 }
 
 pub fn candidates(dir: &Path, trunk: &Trunk, trees: &[Worktree], cache: &IntegrationCache) -> Vec<CleanupCandidate> {
+    let refs = repo::refs(dir).unwrap_or_default();
+    let refs = &refs;
+    let by_name = origin_maps_by_name(dir);
     std::thread::scope(|s| {
         let handles: Vec<_> = trees
             .iter()
@@ -152,16 +252,18 @@ pub fn candidates(dir: &Path, trunk: &Trunk, trees: &[Worktree], cache: &Integra
             .map(|t| {
                 s.spawn(move || {
                     let verdict = eligible(dir, t, trunk, cache, false).ok()?;
-                    let notable = notable_ignored(Path::new(&t.path));
+                    let notable = if verdict.gone { vec![] } else { notable_ignored(Path::new(&t.path)) };
                     let head = t.head.clone()?;
                     Some(CleanupCandidate {
                         path: t.path.clone(),
                         branch: t.branch.clone(),
                         last_commit_at: last_commit_time(dir, &head),
+                        on_origin: t.branch.as_deref().is_some_and(|b| origin_copy(refs, by_name, b, &head).is_some()),
                         head,
                         integration: verdict.integration,
                         notable_ignored: notable,
-                        recent: recently_active(Path::new(&t.path)),
+                        recent: !verdict.gone && recently_active(Path::new(&t.path)),
+                        missing: verdict.gone,
                     })
                 })
             })
@@ -170,7 +272,110 @@ pub fn candidates(dir: &Path, trunk: &Trunk, trees: &[Worktree], cache: &Integra
     })
 }
 
-/// Re-verify, then `git worktree remove` (never `--force`) and optionally delete its branch.
+// ---------- the copy on origin ----------
+
+/// The tip of the branch's own copy on origin, as of the last fetch: `origin/<name>`, when the
+/// branch tracks it or points at the same commit. A same-named branch someone else pushed, which
+/// this branch neither tracks nor matches, is not its copy.
+/// `by_name` (see `origin_maps_by_name`): `origin/<name>` is origin's `<name>`, so it's the branch
+/// the push deletes; otherwise there is no copy to delete.
+pub fn origin_copy(refs: &[repo::RefEntry], by_name: bool, name: &str, local_tip: &str) -> Option<String> {
+    if !by_name {
+        return None;
+    }
+    let remote_full = format!("refs/remotes/{ORIGIN}/{name}");
+    let copy = refs.iter().find(|e| e.full == remote_full && e.symref.is_none())?;
+    let local_full = format!("refs/heads/{name}");
+    let tracks = refs.iter().any(|e| e.full == local_full && e.upstream.as_deref() == Some(remote_full.as_str()));
+    (tracks || copy.target == local_tip).then(|| copy.target.clone())
+}
+
+/// Whether origin's remote-tracking branches mirror its branches name for name (the standard
+/// `refs/heads/*:refs/remotes/origin/*`, and nothing else mapped under `refs/remotes/origin/`).
+/// With a custom mapping `origin/<name>` may be another branch on origin, so nothing there is deleted.
+pub fn origin_maps_by_name(dir: &Path) -> bool {
+    let Ok((0, out)) = git::code(dir, &["config", "--get-all", &format!("remote.{ORIGIN}.fetch")]) else { return false };
+    fetch_maps_by_name(&String::from_utf8_lossy(&out))
+}
+
+/// `origin_maps_by_name` over the `remote.origin.fetch` lines. Any other refspec that could write
+/// under `refs/remotes/origin/` (a wildcard like `refs/remotes/*` included), or a negative one
+/// that leaves some branches out, and it doesn't.
+fn fetch_maps_by_name(specs: &str) -> bool {
+    let standard = format!("refs/heads/*:refs/remotes/{ORIGIN}/*");
+    let under = format!("refs/remotes/{ORIGIN}/");
+    let mut found = false;
+    for spec in specs.lines().map(|l| l.trim().trim_start_matches('+')).filter(|l| !l.is_empty()) {
+        if spec == standard {
+            found = true;
+            continue;
+        }
+        if spec.starts_with('^') {
+            return false;
+        }
+        let Some((_, dst)) = spec.split_once(':') else { continue };
+        // Expanded the way git does: `remotes/origin/x` means `refs/remotes/origin/x`.
+        let dst = if dst.starts_with("refs/") {
+            dst.to_string()
+        } else if ["heads/", "tags/", "remotes/"].iter().any(|p| dst.starts_with(p)) {
+            format!("refs/{dst}")
+        } else {
+            format!("refs/heads/{dst}")
+        };
+        let overlaps = match dst.split_once('*') {
+            Some((prefix, _)) => prefix.starts_with(&under) || under.starts_with(prefix),
+            None => dst.starts_with(&under),
+        };
+        if overlaps {
+            return false;
+        }
+    }
+    found
+}
+
+/// Delete the branch's copy on origin, after its local branch is gone. Only while origin still has
+/// it at `copy_tip` (`--force-with-lease`), and only if that commit is in the trunk too. A problem
+/// keeps the copy, with the reason (shown after "kept on origin:"); it never undoes the local
+/// deletion. Pre-push hooks are skipped:
+/// a deletion carries no code to check.
+fn delete_on_origin(dir: &Path, trunk: &Trunk, name: &str, local_tip: &str, copy_tip: &str, cache: &IntegrationCache) -> RemoteDeletion {
+    let label = format!("{ORIGIN}/{name}");
+    let kept = |reason: String| RemoteDeletion { deleted: None, kept_reason: Some(reason) };
+    if is_trunk_branch(trunk, name) || is_protected(name) {
+        return kept(tr!("这是长期分支", "It's a long-lived branch"));
+    }
+    // The local tip was just checked against the trunk; a different commit on origin wasn't.
+    if copy_tip != local_tip {
+        match repo::compare_with_trunk(dir, trunk, copy_tip, cache) {
+            Ok(cmp) if cmp.integration != Integration::None => {}
+            Ok(_) => return kept(tr!("{label} 上有 {} 没有的提交", "{label} has commits {} doesn't", trunk.name)),
+            Err(e) => return kept(format!("{e:#}")),
+        }
+    }
+    let lease = format!("--force-with-lease=refs/heads/{name}:{copy_tip}");
+    let refspec = format!(":refs/heads/{name}");
+    match git::run_with_timeout_output(dir, &["push", "--porcelain", "--no-verify", &lease, ORIGIN, &refspec], PUSH_TIMEOUT) {
+        Ok(out) if out.ok => RemoteDeletion { deleted: Some(label), kept_reason: None },
+        Ok(out) => kept(push_refused(&out, &label)),
+        Err(e) => kept(format!("{e:#}")),
+    }
+}
+
+/// Why a push was refused: its porcelain line (`!\t<refspec>\t[rejected] (stale info)`), else
+/// git's last error (no access, no network).
+fn push_refused(out: &git::Finished, label: &str) -> String {
+    let refused = out.stdout.lines().find_map(|l| l.strip_prefix("!\t")).and_then(|l| l.split('\t').nth(1)).map(str::trim);
+    match refused {
+        Some(r) if r.contains("stale info") => {
+            tr!("{label} 在上次 fetch 之后变了或已被删掉", "{label} moved or was deleted since the last fetch")
+        }
+        Some(r) => tr!("origin 拒绝删除 {label}：{r}", "origin refused to delete {label}: {r}"),
+        None => tr!("没能删除 {label}：{}", "Couldn't delete {label}: {}", git::last_error_line(&out.stderr)),
+    }
+}
+
+/// Re-verify, then `git worktree remove` (never `--force`) and optionally delete its branch, and
+/// with it (`delete_remote`) the branch's copy on origin.
 /// `acknowledged_ignored`: the irreplaceable ignored files the user saw when confirming; any new one
 /// stops the removal, since `git worktree remove` deletes ignored files without asking.
 #[allow(clippy::too_many_arguments)]
@@ -181,6 +386,7 @@ pub fn remove(
     expect_head: &str,
     acknowledged_ignored: &[String],
     delete_branch: bool,
+    delete_remote: bool,
     kept: &[String],
     cache: &IntegrationCache,
 ) -> Result<RemoveOutcome> {
@@ -190,21 +396,33 @@ pub fn remove(
         bail!(tr!("HEAD 在确认之后变了，已跳过", "HEAD moved after you confirmed; skipped"));
     }
     let path = Path::new(tree_path);
-    eligible(dir, tree, trunk, cache, true)?;
-    let unseen: Vec<String> = notable_ignored(path).into_iter().filter(|n| !acknowledged_ignored.contains(n)).collect();
-    if !unseen.is_empty() {
-        bail!(tr!("确认之后出现了被忽略的 {}，已跳过；重新打开列表确认后再删", "Ignored {} appeared after you confirmed; skipped. Reopen the list and confirm again", unseen.join(", ")));
+    let verdict = eligible(dir, tree, trunk, cache, true)?;
+    // A gone folder has no files to scan and no HEAD to move: git's record is all that's left.
+    if !verdict.gone {
+        let unseen: Vec<String> = notable_ignored(path).into_iter().filter(|n| !acknowledged_ignored.contains(n)).collect();
+        if !unseen.is_empty() {
+            bail!(tr!("确认之后出现了被忽略的 {}，已跳过；重新打开列表确认后再删", "Ignored {} appeared after you confirmed; skipped. Reopen the list and confirm again", unseen.join(", ")));
+        }
+        // The scans above can take a while: a commit made meanwhile was never checked against the trunk.
+        let live = git::text(path, &["rev-parse", "HEAD"])?;
+        if live.trim() != expect_head {
+            bail!(tr!("HEAD 在检查期间变了，已跳过", "HEAD moved during the check; skipped"));
+        }
     }
-    // The scans above can take a while: a commit made meanwhile was never checked against the trunk.
-    let live = git::text(path, &["rev-parse", "HEAD"])?;
-    if live.trim() != expect_head {
-        bail!(tr!("HEAD 在检查期间变了，已跳过", "HEAD moved during the check; skipped"));
-    }
+    // For a gone folder this drops only its record (unlike `git worktree prune`, which drops every
+    // stale one, including trees whose detached HEAD nothing else keeps).
     git::run(dir, &["worktree", "remove", tree_path])?;
 
-    let mut outcome = RemoveOutcome { branch_deleted: false, deleted_branch: None, branch_kept_reason: None, deleted: None };
+    let mut outcome = RemoveOutcome { branch_deleted: false, deleted_branch: None, branch_kept_reason: None, deleted: None, remote: RemoteDeletion::default() };
     if let (true, Some(branch)) = (delete_branch, tree.branch.as_deref()) {
         // The tree is already gone: from here on a failure keeps the branch, it doesn't fail the removal.
+        // Its copy on origin is read while the branch (and so what it tracks) still exists.
+        // A failure to read it is reported as the reason the copy was kept, never silently dropped.
+        let copy: std::result::Result<Option<String>, String> = if delete_remote {
+            repo::refs(dir).map(|refs| origin_copy(&refs, origin_maps_by_name(dir), branch, expect_head)).map_err(|e| format!("{e:#}"))
+        } else {
+            Ok(None)
+        };
         let in_use = repo::worktrees(dir).map(|t| branches_in_use(&t).contains(branch));
         let result = if is_trunk_branch(trunk, branch) {
             Err(tr!("这是集成分支，没有删除", "Kept: it's the integration branch"))
@@ -220,6 +438,11 @@ pub fn remove(
         };
         match result {
             Ok(deleted) => {
+                match copy {
+                    Ok(Some(copy_tip)) => outcome.remote = delete_on_origin(dir, trunk, branch, expect_head, &copy_tip, cache),
+                    Ok(None) => {}
+                    Err(reason) => outcome.remote = RemoteDeletion { deleted: None, kept_reason: Some(reason) },
+                }
                 outcome.branch_deleted = true;
                 outcome.deleted_branch = Some(deleted.name.clone());
                 outcome.deleted = Some(deleted);
@@ -267,6 +490,7 @@ pub fn branch_statuses(dir: &Path, trunk: &Trunk, refs: &[repo::RefEntry], trees
     let committed = &committed;
     let common_dir = git::text(dir, &["rev-parse", "--path-format=absolute", "--git-common-dir"]).ok().map(|d| PathBuf::from(d.trim()));
     let common_dir = common_dir.as_deref().filter(|d| d.is_absolute());
+    let by_name = origin_maps_by_name(dir);
     let now = unix_now();
     let mut out = Vec::with_capacity(locals.len());
     for chunk in locals.chunks(8) {
@@ -289,6 +513,7 @@ pub fn branch_statuses(dir: &Path, trunk: &Trunk, refs: &[repo::RefEntry], trees
                             recent: moved_at.or(last_commit_at).is_some_and(|t| now - t < RECENT.as_secs() as i64),
                             protected: is_protected(name),
                             kept: kept.iter().any(|k| k == name),
+                            on_origin: origin_copy(refs, by_name, name, &e.target).is_some(),
                         })
                     })
                 })
@@ -329,8 +554,17 @@ fn delete_ref_if_at(dir: &Path, name: &str, tip: &str) -> Result<DeletedBranch> 
 }
 
 /// Delete a local branch already in the trunk, after checking everything again. Whether something
-/// uses the branch is checked last, right before the compare-and-delete.
-pub fn delete_branch(dir: &Path, trunk: &Trunk, name: &str, expect_tip: &str, kept: &[String], cache: &IntegrationCache) -> Result<DeletedBranch> {
+/// uses the branch is checked last, right before the compare-and-delete. Then, with
+/// `delete_remote`, its copy on origin.
+pub fn delete_branch(
+    dir: &Path,
+    trunk: &Trunk,
+    name: &str,
+    expect_tip: &str,
+    delete_remote: bool,
+    kept: &[String],
+    cache: &IntegrationCache,
+) -> Result<(DeletedBranch, RemoteDeletion)> {
     let full = format!("refs/heads/{name}");
     let refs = repo::refs(dir)?;
     let entry = refs
@@ -355,7 +589,10 @@ pub fn delete_branch(dir: &Path, trunk: &Trunk, name: &str, expect_tip: &str, ke
     if branches_in_use(&repo::worktrees(dir)?).contains(name) {
         bail!(tr!("有 worktree 在用这个分支（检出、rebase 或 bisect 中）", "A worktree is using it (checked out, rebasing or bisecting)"));
     }
-    delete_ref_if_at(dir, name, expect_tip)
+    let copy = if delete_remote { origin_copy(&refs, origin_maps_by_name(dir), name, expect_tip) } else { None };
+    let deleted = delete_ref_if_at(dir, name, expect_tip)?;
+    let remote = copy.map(|tip| delete_on_origin(dir, trunk, name, expect_tip, &tip, cache)).unwrap_or_default();
+    Ok((deleted, remote))
 }
 
 /// Undo for a deletion: the branch comes back at its tip, only if the name is still free; then its
@@ -368,4 +605,42 @@ pub fn restore_branch(dir: &Path, deleted: &DeletedBranch) -> Result<Vec<String>
         .filter(|(key, value)| git::run(dir, &["config", "--local", "--add", key, value.as_deref().unwrap_or("true")]).is_err())
         .map(|(key, _)| key.clone())
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_name_for_name_mapping_counts_as_origins_copy() {
+        assert!(fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n"));
+        assert!(fetch_maps_by_name("refs/heads/*:refs/remotes/origin/*\n+refs/pull/*/head:refs/pr/*\n"));
+        assert!(!fetch_maps_by_name(""), "no fetch config");
+        assert!(!fetch_maps_by_name("+refs/heads/main:refs/remotes/origin/main\n"), "single-branch clone");
+        assert!(!fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n+refs/heads/other:refs/remotes/origin/feat\n"));
+        assert!(!fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n+refs/heads/archive/*:refs/remotes/*\n"), "wildcard over origin/");
+        assert!(!fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n^refs/heads/feat\n"), "negative refspec");
+        assert!(!fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n+refs/tags/review:remotes/origin/feat\n"), "shorthand destination");
+        assert!(fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n+refs/heads/x:mirror/x\n"), "a local branch, not under origin/");
+    }
+
+    #[test]
+    fn a_relative_gitdir_record_names_the_tree_it_points_at() {
+        let base = std::env::temp_dir().join(format!("retrace-same-place-{}", std::process::id()));
+        let admin = base.join("repo/.git/worktrees/wt");
+        std::fs::create_dir_all(&admin).unwrap();
+        let tree = base.join("wt/.git");
+        assert!(same_place(&recorded(&admin, "../../../../wt/.git\n"), &tree), "relative, folder gone");
+        assert!(same_place(&recorded(&admin, &tree.to_string_lossy()), &tree), "absolute");
+        assert!(!same_place(&recorded(&admin, "../../../../other/.git"), &tree));
+        // Reached through a symlink: `..` climbs from where the admin dir really is.
+        #[cfg(unix)]
+        {
+            let link = base.join("link-to-worktrees");
+            std::os::unix::fs::symlink(base.join("repo/.git/worktrees"), &link).unwrap();
+            assert!(same_place(&recorded(&link.join("wt"), "../../../../wt/.git"), &tree));
+            assert!(!same_place(&recorded(&link.join("wt"), "../../../../wt/.git"), &base.parent().unwrap().join("wt/.git")));
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

@@ -11,6 +11,8 @@ pub struct Project {
     pub name: String,
     pub trunk_override: Option<String>,
     pub group: Option<String>,
+    /// Listed first, above the groups.
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -135,6 +137,8 @@ pub struct TreeStatus {
     pub operation: Option<&'static str>,
     pub trunk: Option<TrunkCompare>,
     pub error: Option<String>,
+    /// Its folder is gone: git only keeps a record of it, with the HEAD it had (compared in `trunk`).
+    pub missing: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -223,6 +227,10 @@ pub struct CleanupCandidate {
     pub notable_ignored: Vec<String>,
     /// HEAD, index or reflog changed in the last 15 minutes.
     pub recent: bool,
+    /// Its branch has a copy on origin, as of the last fetch (see `cleanup::origin_copy`).
+    pub on_origin: bool,
+    /// Its folder is already gone: removing it drops git's record of it, nothing on disk.
+    pub missing: bool,
 }
 
 /// A local branch no worktree has checked out, judged against the trunk.
@@ -245,6 +253,8 @@ pub struct BranchStatus {
     pub protected: bool,
     /// The user chose to keep it.
     pub kept: bool,
+    /// It has a copy on origin, as of the last fetch (see `cleanup::origin_copy`).
+    pub on_origin: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -257,6 +267,19 @@ pub struct RemoveOutcome {
     /// What Undo needs to bring the deleted branch back; stays in the backend.
     #[serde(skip)]
     pub deleted: Option<DeletedBranch>,
+    /// What happened to the branch's copy on origin, when asked to delete it too.
+    pub remote: RemoteDeletion,
+}
+
+/// The branch's copy on origin, deleted along with the local branch or kept. Both empty: there was
+/// none, or deleting it wasn't asked for.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDeletion {
+    /// `origin/<name>`, now deleted on origin.
+    pub deleted: Option<String>,
+    /// Why the copy on origin was kept.
+    pub kept_reason: Option<String>,
 }
 
 /// A branch this app deleted: its tip and its `branch.<name>.*` settings, for Undo.

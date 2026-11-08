@@ -58,8 +58,8 @@ export function ChangesPanel() {
           value={mode}
           onValueChange={(v) => prefs.set({ changesMode: v })}
           options={[
-            { value: "changes", label: t("Changes") },
             { value: "files", label: t("Files") },
+            { value: "changes", label: t("Changes") },
           ]}
         />
         <span data-tauri-drag-region className="h-full flex-1" />
