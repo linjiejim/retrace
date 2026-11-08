@@ -174,7 +174,45 @@ fn admin_dir(dir: &Path, tree_path: &str) -> Option<PathBuf> {
         .ok()?
         .flatten()
         .map(|e| e.path())
-        .find(|admin| std::fs::read_to_string(admin.join("gitdir")).is_ok_and(|g| Path::new(g.trim()) == want))
+        .find(|admin| std::fs::read_to_string(admin.join("gitdir")).is_ok_and(|g| same_place(&recorded(admin, &g), &want)))
+}
+
+/// A `gitdir` record: absolute, or (`git worktree add --relative-paths`) relative to its admin dir.
+fn recorded(admin: &Path, gitdir: &str) -> PathBuf {
+    let g = Path::new(gitdir.trim());
+    if g.is_absolute() { g.to_path_buf() } else { admin.join(g) }
+}
+
+/// Two paths name the same place: `.` and `..` folded, symlinks resolved as far as the path
+/// still exists (the tree's own folder is gone).
+fn same_place(a: &Path, b: &Path) -> bool {
+    fn settled(p: &Path) -> PathBuf {
+        let mut lexical = PathBuf::new();
+        for c in p.components() {
+            match c {
+                std::path::Component::ParentDir => {
+                    lexical.pop();
+                }
+                std::path::Component::CurDir => {}
+                c => lexical.push(c),
+            }
+        }
+        let mut head = lexical.as_path();
+        let mut tail = Vec::new();
+        while !head.exists() {
+            match (head.parent(), head.file_name()) {
+                (Some(parent), Some(name)) => {
+                    tail.push(name.to_os_string());
+                    head = parent;
+                }
+                _ => return lexical,
+            }
+        }
+        let mut out = std::fs::canonicalize(head).unwrap_or_else(|_| head.to_path_buf());
+        out.extend(tail.iter().rev());
+        out
+    }
+    settled(a) == settled(b)
 }
 
 /// A tree whose folder is gone still has its index and operation state in git's record of it:
@@ -246,13 +284,30 @@ pub fn origin_copy(refs: &[repo::RefEntry], by_name: bool, name: &str, local_tip
 /// With a custom mapping `origin/<name>` may be another branch on origin, so nothing there is deleted.
 pub fn origin_maps_by_name(dir: &Path) -> bool {
     let Ok((0, out)) = git::code(dir, &["config", "--get-all", &format!("remote.{ORIGIN}.fetch")]) else { return false };
+    fetch_maps_by_name(&String::from_utf8_lossy(&out))
+}
+
+/// `origin_maps_by_name` over the `remote.origin.fetch` lines. Any other refspec that could write
+/// under `refs/remotes/origin/` (a wildcard like `refs/remotes/*` included), or a negative one
+/// that leaves some branches out, and it doesn't.
+fn fetch_maps_by_name(specs: &str) -> bool {
     let standard = format!("refs/heads/*:refs/remotes/{ORIGIN}/*");
     let under = format!("refs/remotes/{ORIGIN}/");
     let mut found = false;
-    for spec in String::from_utf8_lossy(&out).lines().map(|l| l.trim().trim_start_matches('+')) {
+    for spec in specs.lines().map(|l| l.trim().trim_start_matches('+')).filter(|l| !l.is_empty()) {
         if spec == standard {
             found = true;
-        } else if !spec.starts_with('^') && spec.split_once(':').is_some_and(|(_, dst)| dst.starts_with(&under)) {
+            continue;
+        }
+        if spec.starts_with('^') {
+            return false;
+        }
+        let Some((_, dst)) = spec.split_once(':') else { continue };
+        let overlaps = match dst.split_once('*') {
+            Some((prefix, _)) => prefix.starts_with(&under) || under.starts_with(prefix),
+            None => dst.starts_with(&under),
+        };
+        if overlaps {
             return false;
         }
     }
@@ -531,4 +586,32 @@ pub fn restore_branch(dir: &Path, deleted: &DeletedBranch) -> Result<Vec<String>
         .filter(|(key, value)| git::run(dir, &["config", "--local", "--add", key, value.as_deref().unwrap_or("true")]).is_err())
         .map(|(key, _)| key.clone())
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_name_for_name_mapping_counts_as_origins_copy() {
+        assert!(fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n"));
+        assert!(fetch_maps_by_name("refs/heads/*:refs/remotes/origin/*\n+refs/pull/*/head:refs/pr/*\n"));
+        assert!(!fetch_maps_by_name(""), "no fetch config");
+        assert!(!fetch_maps_by_name("+refs/heads/main:refs/remotes/origin/main\n"), "single-branch clone");
+        assert!(!fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n+refs/heads/other:refs/remotes/origin/feat\n"));
+        assert!(!fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n+refs/heads/archive/*:refs/remotes/*\n"), "wildcard over origin/");
+        assert!(!fetch_maps_by_name("+refs/heads/*:refs/remotes/origin/*\n^refs/heads/feat\n"), "negative refspec");
+    }
+
+    #[test]
+    fn a_relative_gitdir_record_names_the_tree_it_points_at() {
+        let base = std::env::temp_dir().join(format!("retrace-same-place-{}", std::process::id()));
+        let admin = base.join("repo/.git/worktrees/wt");
+        std::fs::create_dir_all(&admin).unwrap();
+        let tree = base.join("wt/.git");
+        assert!(same_place(&recorded(&admin, "../../../../wt/.git\n"), &tree), "relative, folder gone");
+        assert!(same_place(&recorded(&admin, &tree.to_string_lossy()), &tree), "absolute");
+        assert!(!same_place(&recorded(&admin, "../../../../other/.git"), &tree));
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
