@@ -1,3 +1,12 @@
+"use client"
+
+/**
+ * Appearance preference: system | light | dark.
+ * Store the preference itself, never the resolved value, so "system" keeps
+ * following the OS. Pages never read the OS appearance on their own.
+ *
+ * Avoid a flash on load by inlining APPEARANCE_BOOT_SCRIPT in <head>.
+ */
 import { useCallback, useSyncExternalStore } from "react"
 
 export type Appearance = "system" | "light" | "dark"

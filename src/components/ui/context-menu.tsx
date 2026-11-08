@@ -2,57 +2,91 @@
 
 import * as React from "react"
 import { ContextMenu as MenuPrimitive } from "radix-ui"
-import { ChevronRight } from "lucide-react"
+import { Check, ChevronRight } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { DropdownMenuShortcut, menuClass, type MenuParts } from "@/components/ui/dropdown-menu"
 
 /*
- * Right-click menus. Same look and rules as DropdownMenu: a row's right-click
- * menu offers what its "more" button offers, in the same order.
+ * Right-click menus, for desktop tools and dense lists. Same look and rules
+ * as DropdownMenu. Right-click is a shortcut, never the only way in: the row's
+ * ⋯ menu offers the same items in the same order (write them once against
+ * `MenuParts`), because touch gets it only by long-press and keyboards by ⋯.
  */
 export const ContextMenu = MenuPrimitive.Root
 export const ContextMenuTrigger = MenuPrimitive.Trigger
+export const ContextMenuGroup = MenuPrimitive.Group
+export const ContextMenuRadioGroup = MenuPrimitive.RadioGroup
 export const ContextMenuSub = MenuPrimitive.Sub
-
-const contentClass = cn(
-  "z-50 min-w-44 max-w-72 overflow-hidden rounded-lg bg-popover p-1 shadow-popover outline-none",
-  "data-[state=open]:animate-drop-in data-[state=closed]:animate-drop-out",
-)
+export const ContextMenuShortcut = DropdownMenuShortcut
 
 export function ContextMenuContent({ className, ...props }: React.ComponentProps<typeof MenuPrimitive.Content>) {
   return (
     <MenuPrimitive.Portal>
-      <MenuPrimitive.Content collisionPadding={8} className={cn(contentClass, className)} {...props} />
+      <MenuPrimitive.Content collisionPadding={8} className={cn(menuClass.content, className)} {...props} />
     </MenuPrimitive.Portal>
   )
 }
 
-const itemClass = cn(
-  "relative flex min-h-(--control-md) cursor-default select-none items-center gap-2 rounded-sm px-2 py-1 text-body outline-none",
-  "data-highlighted:bg-accent data-disabled:pointer-events-none data-disabled:text-faint-foreground",
-  "[&_svg]:size-4 [&_svg]:text-muted-foreground",
-)
+export function ContextMenuItem({
+  className,
+  tone,
+  ...props
+}: React.ComponentProps<typeof MenuPrimitive.Item> & { tone?: "danger" }) {
+  return <MenuPrimitive.Item className={cn(menuClass.item, tone === "danger" && menuClass.danger, className)} {...props} />
+}
 
-export function ContextMenuItem({ className, tone, ...props }: React.ComponentProps<typeof MenuPrimitive.Item> & { tone?: "danger" }) {
-  return <MenuPrimitive.Item className={cn(itemClass, tone === "danger" && "text-destructive [&_svg]:text-destructive", className)} {...props} />
+export function ContextMenuRadioItem({ className, children, ...props }: React.ComponentProps<typeof MenuPrimitive.RadioItem>) {
+  return (
+    <MenuPrimitive.RadioItem className={cn(menuClass.item, "pr-8", className)} {...props}>
+      {children}
+      <MenuPrimitive.ItemIndicator className="absolute right-2 inline-flex">
+        <Check className="text-foreground!" />
+      </MenuPrimitive.ItemIndicator>
+    </MenuPrimitive.RadioItem>
+  )
+}
+
+export function ContextMenuLabel({ className, ...props }: React.ComponentProps<typeof MenuPrimitive.Label>) {
+  return <MenuPrimitive.Label className={cn(menuClass.label, className)} {...props} />
+}
+
+export function ContextMenuSeparator({ className, ...props }: React.ComponentProps<typeof MenuPrimitive.Separator>) {
+  return <MenuPrimitive.Separator className={cn(menuClass.separator, className)} {...props} />
 }
 
 export function ContextMenuSubTrigger({ className, children, ...props }: React.ComponentProps<typeof MenuPrimitive.SubTrigger>) {
   return (
-    <MenuPrimitive.SubTrigger className={cn(itemClass, "data-[state=open]:bg-accent", className)} {...props}>
+    <MenuPrimitive.SubTrigger className={cn(menuClass.item, menuClass.subTrigger, className)} {...props}>
       {children}
       <ChevronRight className="ml-auto" />
     </MenuPrimitive.SubTrigger>
   )
 }
 
-export function ContextMenuSubContent({ className, ...props }: React.ComponentProps<typeof MenuPrimitive.SubContent>) {
+export function ContextMenuSubContent({ className, sideOffset = 4, alignOffset = -4, ...props }: React.ComponentProps<typeof MenuPrimitive.SubContent>) {
   return (
     <MenuPrimitive.Portal>
-      <MenuPrimitive.SubContent collisionPadding={8} className={cn(contentClass, className)} {...props} />
+      <MenuPrimitive.SubContent
+        sideOffset={sideOffset}
+        alignOffset={alignOffset}
+        collisionPadding={8}
+        className={cn(menuClass.content, className)}
+        {...props}
+      />
     </MenuPrimitive.Portal>
   )
 }
 
-export function ContextMenuSeparator({ className, ...props }: React.ComponentProps<typeof MenuPrimitive.Separator>) {
-  return <MenuPrimitive.Separator className={cn("-mx-1 my-1 h-px bg-border", className)} {...props} />
+/** Same shape as `dropdownMenuParts`: pass either to a function that writes a row's items. */
+export const contextMenuParts: MenuParts = {
+  Group: ContextMenuGroup,
+  Label: ContextMenuLabel,
+  Item: ContextMenuItem,
+  RadioGroup: ContextMenuRadioGroup,
+  RadioItem: ContextMenuRadioItem,
+  Separator: ContextMenuSeparator,
+  Shortcut: ContextMenuShortcut,
+  Sub: ContextMenuSub,
+  SubTrigger: ContextMenuSubTrigger,
+  SubContent: ContextMenuSubContent,
 }

@@ -1,3 +1,5 @@
+"use client"
+
 import * as React from "react"
 import { Dialog as DialogPrimitive } from "radix-ui"
 import { X } from "lucide-react"
@@ -15,6 +17,11 @@ import { DiscardDialog } from "@/components/ui/confirm-dialog"
  *
  * Sizes: sm 400 (short prompt), md 480 (form, default), lg 640 (two-column
  * or rich content), xl workspace min(90vw, 1200).
+ *
+ * `fixed`: md and lg get a fixed height (md 560, lg 640, both ≤ 85dvh) and only
+ * DialogBody scrolls, so the box never resizes while its content changes —
+ * use it when a dialog switches tabs, filters a list or steps through a form.
+ * sm stays content-height; xl is always fixed. On phones the sheet is 92dvh.
  */
 export function Dialog({
   dirty,
@@ -45,17 +52,29 @@ const sizes = {
   xl: "sm:max-w-[min(90vw,1200px)] sm:h-[85dvh]",
 }
 
+const fixedHeights: Partial<Record<keyof typeof sizes, string>> = {
+  md: "sm:h-[min(560px,85dvh)] max-sm:h-[92dvh]",
+  lg: "sm:h-[min(640px,85dvh)] max-sm:h-[92dvh]",
+}
+
 export function DialogContent({
   size = "md",
+  fixed = false,
   className,
   children,
   hideClose,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content> & { size?: keyof typeof sizes; hideClose?: boolean }) {
+}: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  size?: keyof typeof sizes
+  /** md / lg: fixed height, the body scrolls, the box never resizes with its content. */
+  fixed?: boolean
+  hideClose?: boolean
+}) {
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay data-slot="scrim" className="fixed inset-0 z-50 bg-scrim data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out" />
       <DialogPrimitive.Content
+        data-fixed={(fixed && size in fixedHeights) || undefined}
         className={cn(
           "fixed z-50 flex max-h-[85dvh] flex-col bg-popover shadow-overlay outline-none",
           // desktop: centered card
@@ -65,6 +84,7 @@ export function DialogContent({
           "max-sm:inset-x-0 max-sm:bottom-0 max-sm:max-h-[92dvh] max-sm:rounded-t-2xl",
           "max-sm:data-[state=open]:animate-slide-in-up max-sm:data-[state=closed]:animate-slide-out-down",
           sizes[size],
+          fixed && fixedHeights[size],
           className,
         )}
         {...props}
