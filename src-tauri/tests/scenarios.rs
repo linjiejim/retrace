@@ -484,6 +484,11 @@ fn a_merged_worktree_whose_folder_is_gone_is_cleaned_up_by_its_record() {
     sh(&f.main, &["worktree", "add", "-q", "-b", "feat/lost", &path_of("wt-lost")]);
     commit(&base.join("wt-lost"), "lost.txt", "lost\n", "lost work");
     std::fs::remove_dir_all(base.join("wt-lost")).unwrap();
+    // Merged, but something was staged before its folder was deleted: the index in git's record holds it.
+    sh(&f.main, &["worktree", "add", "-q", "-b", "feat/staged", &path_of("wt-staged"), "main"]);
+    write(&base.join("wt-staged"), "staged.txt", "staged\n");
+    sh(&base.join("wt-staged"), &["add", "staged.txt"]);
+    std::fs::remove_dir_all(base.join("wt-staged")).unwrap();
     // Merged, folder still there but no longer a worktree: it may hold files of its own.
     sh(&f.main, &["worktree", "add", "-q", "-b", "feat/husk", &path_of("wt-husk"), "main"]);
     std::fs::remove_file(base.join("wt-husk/.git")).unwrap();
@@ -500,6 +505,7 @@ fn a_merged_worktree_whose_folder_is_gone_is_cleaned_up_by_its_record() {
     assert!(paths.contains(&path_of("wt-gone").as_str()), "{list}");
     assert!(!paths.contains(&path_of("wt-lost").as_str()), "not merged");
     assert!(!paths.contains(&path_of("wt-husk").as_str()), "folder still there");
+    assert!(!paths.contains(&path_of("wt-staged").as_str()), "staged work in its record");
     let candidate = list.as_array().unwrap().iter().find(|c| c["path"] == json!(path_of("wt-gone"))).unwrap().clone();
     assert_eq!((candidate["missing"].as_bool(), candidate["recent"].as_bool()), (Some(true), Some(false)));
 
@@ -509,7 +515,7 @@ fn a_merged_worktree_whose_folder_is_gone_is_cleaned_up_by_its_record() {
     assert!(!trees.contains(&path_of("wt-gone")), "{trees}");
     assert!(trees.contains(&path_of("wt-lost")), "only its own record goes: {trees}");
 
-    for name in ["wt-lost", "wt-husk"] {
+    for name in ["wt-lost", "wt-husk", "wt-staged"] {
         let head = status(name)["head"].clone();
         assert!(dispatch(&f.state, "removeWorktree", json!({ "id": id, "path": path_of(name), "head": head, "deleteBranch": true })).is_err(), "{name}");
     }
@@ -701,6 +707,17 @@ fn a_deleted_branchs_own_copy_on_origin_goes_too_when_asked() {
     assert_eq!((&out["deletedBranch"], &out["remote"]["deleted"]), (&json!("feat/squash"), &json!("origin/feat/squash")), "{out}");
     assert!(!on_origin("feat/squash"));
     assert!(on_origin("main"), "the trunk stays on origin");
+
+    // A custom mapping: origin/<name> may be another branch on origin, so nothing counts as its copy.
+    sh(&f.main, &["branch", "feat/mapped", "main"]);
+    sh(&f.main, &["push", "-q", "-u", "origin", "feat/mapped"]);
+    sh(&f.main, &["config", "--add", "remote.origin.fetch", "+refs/heads/other:refs/remotes/origin/feat/mapped"]);
+    let list = call(&f, "branchStatuses", json!({ "id": id }));
+    let mapped = list.as_array().unwrap().iter().find(|b| b["name"] == "feat/mapped").unwrap();
+    assert_eq!(mapped["onOrigin"], json!(false), "{mapped}");
+    let out = delete("feat/mapped", true);
+    assert_eq!((&out["deleted"], &out["keptReason"]), (&Value::Null, &Value::Null));
+    assert!(on_origin("feat/mapped"));
 }
 
 #[test]
@@ -936,6 +953,10 @@ fn groups_hold_projects_and_survive_reordering() {
     assert_eq!(pinned_of(&a), json!(false));
     call(&f, "setProjectPinned", json!({ "ids": [a], "pinned": true }));
     assert_eq!((pinned_of(&a), group_of(&a)), (json!(true), g2["id"].clone()));
+    // Moved into a group by hand: unpinned in the same save.
+    call(&f, "setProjectGroup", json!({ "ids": [a], "group": g2["id"] }));
+    assert_eq!(pinned_of(&a), json!(false));
+    call(&f, "setProjectPinned", json!({ "ids": [a], "pinned": true }));
     call(&f, "reorderProjects", json!({ "ids": [a, b], "moved": { "id": a, "group": null, "pinned": false } }));
     assert_eq!((pinned_of(&a), group_of(&a)), (json!(false), Value::Null));
     call(&f, "reorderProjects", json!({ "ids": [a, b], "moved": { "id": a, "group": null } }));

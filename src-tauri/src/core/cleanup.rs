@@ -155,6 +155,8 @@ fn eligible(dir: &Path, tree: &Worktree, trunk: &Trunk, cache: &IntegrationCache
         if let Some(op) = repo::operation(path) {
             bail!(tr!("有进行中的 {op}", "A {op} is in progress"));
         }
+    } else {
+        gone_record_is_clean(dir, &tree.path, head)?;
     }
     let cmp = repo::compare_with_trunk(dir, trunk, head, cache)?;
     if cmp.integration == Integration::None {
@@ -163,9 +165,37 @@ fn eligible(dir: &Path, tree: &Worktree, trunk: &Trunk, cache: &IntegrationCache
     Ok(Verdict { integration: cmp.integration, gone })
 }
 
+/// The folder git keeps for a linked worktree (`<common dir>/worktrees/<id>`), found by the path it
+/// records for the tree.
+fn admin_dir(dir: &Path, tree_path: &str) -> Option<PathBuf> {
+    let common = git::text(dir, &["rev-parse", "--path-format=absolute", "--git-common-dir"]).ok()?;
+    let want = Path::new(tree_path).join(".git");
+    std::fs::read_dir(Path::new(common.trim()).join("worktrees"))
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .find(|admin| std::fs::read_to_string(admin.join("gitdir")).is_ok_and(|g| Path::new(g.trim()) == want))
+}
+
+/// A tree whose folder is gone still has its index and operation state in git's record of it:
+/// staged work there would be lost with the record, and `git worktree remove` doesn't check it.
+fn gone_record_is_clean(dir: &Path, tree_path: &str, head: &str) -> Result<()> {
+    let admin = admin_dir(dir, tree_path).ok_or_else(|| anyhow::anyhow!(tr!("找不到 git 对这棵 worktree 的记录", "Can't find git's record of this worktree")))?;
+    if let Some(op) = repo::operation_in(&admin) {
+        bail!(tr!("有进行中的 {op}", "A {op} is in progress"));
+    }
+    let admin = admin.to_string_lossy();
+    match git::code(dir, &["--git-dir", &admin, "diff-index", "--cached", "--quiet", head, "--"]) {
+        Ok((0, _)) => Ok(()),
+        Ok((1, _)) => bail!(tr!("目录已经删了，但暂存区里还有没提交的改动", "The folder is gone, but its index still holds staged changes")),
+        _ => bail!(tr!("没能检查它的暂存区", "Couldn't check its index")),
+    }
+}
+
 pub fn candidates(dir: &Path, trunk: &Trunk, trees: &[Worktree], cache: &IntegrationCache) -> Vec<CleanupCandidate> {
     let refs = repo::refs(dir).unwrap_or_default();
     let refs = &refs;
+    let by_name = origin_maps_by_name(dir);
     std::thread::scope(|s| {
         let handles: Vec<_> = trees
             .iter()
@@ -179,7 +209,7 @@ pub fn candidates(dir: &Path, trunk: &Trunk, trees: &[Worktree], cache: &Integra
                         path: t.path.clone(),
                         branch: t.branch.clone(),
                         last_commit_at: last_commit_time(dir, &head),
-                        on_origin: t.branch.as_deref().is_some_and(|b| origin_copy(refs, b, &head).is_some()),
+                        on_origin: t.branch.as_deref().is_some_and(|b| origin_copy(refs, by_name, b, &head).is_some()),
                         head,
                         integration: verdict.integration,
                         notable_ignored: notable,
@@ -198,12 +228,35 @@ pub fn candidates(dir: &Path, trunk: &Trunk, trees: &[Worktree], cache: &Integra
 /// The tip of the branch's own copy on origin, as of the last fetch: `origin/<name>`, when the
 /// branch tracks it or points at the same commit. A same-named branch someone else pushed, which
 /// this branch neither tracks nor matches, is not its copy.
-pub fn origin_copy(refs: &[repo::RefEntry], name: &str, local_tip: &str) -> Option<String> {
+/// `by_name` (see `origin_maps_by_name`): `origin/<name>` is origin's `<name>`, so it's the branch
+/// the push deletes; otherwise there is no copy to delete.
+pub fn origin_copy(refs: &[repo::RefEntry], by_name: bool, name: &str, local_tip: &str) -> Option<String> {
+    if !by_name {
+        return None;
+    }
     let remote_full = format!("refs/remotes/{ORIGIN}/{name}");
     let copy = refs.iter().find(|e| e.full == remote_full && e.symref.is_none())?;
     let local_full = format!("refs/heads/{name}");
     let tracks = refs.iter().any(|e| e.full == local_full && e.upstream.as_deref() == Some(remote_full.as_str()));
     (tracks || copy.target == local_tip).then(|| copy.target.clone())
+}
+
+/// Whether origin's remote-tracking branches mirror its branches name for name (the standard
+/// `refs/heads/*:refs/remotes/origin/*`, and nothing else mapped under `refs/remotes/origin/`).
+/// With a custom mapping `origin/<name>` may be another branch on origin, so nothing there is deleted.
+pub fn origin_maps_by_name(dir: &Path) -> bool {
+    let Ok((0, out)) = git::code(dir, &["config", "--get-all", &format!("remote.{ORIGIN}.fetch")]) else { return false };
+    let standard = format!("refs/heads/*:refs/remotes/{ORIGIN}/*");
+    let under = format!("refs/remotes/{ORIGIN}/");
+    let mut found = false;
+    for spec in String::from_utf8_lossy(&out).lines().map(|l| l.trim().trim_start_matches('+')) {
+        if spec == standard {
+            found = true;
+        } else if !spec.starts_with('^') && spec.split_once(':').is_some_and(|(_, dst)| dst.starts_with(&under)) {
+            return false;
+        }
+    }
+    found
 }
 
 /// Delete the branch's copy on origin, after its local branch is gone. Only while origin still has
@@ -290,7 +343,12 @@ pub fn remove(
     if let (true, Some(branch)) = (delete_branch, tree.branch.as_deref()) {
         // The tree is already gone: from here on a failure keeps the branch, it doesn't fail the removal.
         // Its copy on origin is read while the branch (and so what it tracks) still exists.
-        let copy = if delete_remote { repo::refs(dir).ok().and_then(|refs| origin_copy(&refs, branch, expect_head)) } else { None };
+        // A failure to read it is reported as the reason the copy was kept, never silently dropped.
+        let copy: std::result::Result<Option<String>, String> = if delete_remote {
+            repo::refs(dir).map(|refs| origin_copy(&refs, origin_maps_by_name(dir), branch, expect_head)).map_err(|e| format!("{e:#}"))
+        } else {
+            Ok(None)
+        };
         let in_use = repo::worktrees(dir).map(|t| branches_in_use(&t).contains(branch));
         let result = if is_trunk_branch(trunk, branch) {
             Err(tr!("这是集成分支，没有删除", "Kept: it's the integration branch"))
@@ -306,8 +364,10 @@ pub fn remove(
         };
         match result {
             Ok(deleted) => {
-                if let Some(copy_tip) = copy {
-                    outcome.remote = delete_on_origin(dir, trunk, branch, expect_head, &copy_tip, cache);
+                match copy {
+                    Ok(Some(copy_tip)) => outcome.remote = delete_on_origin(dir, trunk, branch, expect_head, &copy_tip, cache),
+                    Ok(None) => {}
+                    Err(reason) => outcome.remote = RemoteDeletion { deleted: None, kept_reason: Some(reason) },
                 }
                 outcome.branch_deleted = true;
                 outcome.deleted_branch = Some(deleted.name.clone());
@@ -356,6 +416,7 @@ pub fn branch_statuses(dir: &Path, trunk: &Trunk, refs: &[repo::RefEntry], trees
     let committed = &committed;
     let common_dir = git::text(dir, &["rev-parse", "--path-format=absolute", "--git-common-dir"]).ok().map(|d| PathBuf::from(d.trim()));
     let common_dir = common_dir.as_deref().filter(|d| d.is_absolute());
+    let by_name = origin_maps_by_name(dir);
     let now = unix_now();
     let mut out = Vec::with_capacity(locals.len());
     for chunk in locals.chunks(8) {
@@ -378,7 +439,7 @@ pub fn branch_statuses(dir: &Path, trunk: &Trunk, refs: &[repo::RefEntry], trees
                             recent: moved_at.or(last_commit_at).is_some_and(|t| now - t < RECENT.as_secs() as i64),
                             protected: is_protected(name),
                             kept: kept.iter().any(|k| k == name),
-                            on_origin: origin_copy(refs, name, &e.target).is_some(),
+                            on_origin: origin_copy(refs, by_name, name, &e.target).is_some(),
                         })
                     })
                 })
@@ -454,7 +515,7 @@ pub fn delete_branch(
     if branches_in_use(&repo::worktrees(dir)?).contains(name) {
         bail!(tr!("有 worktree 在用这个分支（检出、rebase 或 bisect 中）", "A worktree is using it (checked out, rebasing or bisecting)"));
     }
-    let copy = if delete_remote { origin_copy(&refs, name, expect_tip) } else { None };
+    let copy = if delete_remote { origin_copy(&refs, origin_maps_by_name(dir), name, expect_tip) } else { None };
     let deleted = delete_ref_if_at(dir, name, expect_tip)?;
     let remote = copy.map(|tip| delete_on_origin(dir, trunk, name, expect_tip, &tip, cache)).unwrap_or_default();
     Ok((deleted, remote))

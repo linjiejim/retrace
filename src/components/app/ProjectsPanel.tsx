@@ -120,8 +120,8 @@ export function ProjectsPanel() {
   async function moveTo(p: Project, group: string | null) {
     qc.setQueryData<Project[]>(["projects"], (old) => old?.map((x) => (x.id === p.id ? { ...x, group, pinned: false } : x)))
     if (group) setCollapsed(group, false)
+    // Unpins it too, in the same save.
     api.setProjectGroup([p.id], group).catch(fail((reason) => t("Couldn't move the project: {reason}", { reason })))
-    if (p.pinned) api.setProjectPinned([p.id], false).catch(fail((reason) => t("Couldn't unpin the project: {reason}", { reason })))
   }
 
   async function setPinned(p: Project, pinned: boolean) {

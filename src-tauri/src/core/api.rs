@@ -58,7 +58,12 @@ fn check_target(dir: &Path, target: &Target) -> Result<()> {
     Ok(())
 }
 
+/// One save at a time, each writing the state as of its turn: two at once would share the temp
+/// file, and an older snapshot could land last.
+static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn save(state: &State) -> Result<()> {
+    let _turn = SAVING.lock().unwrap_or_else(|e| e.into_inner());
     let cfg = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?.clone();
     config::save(&state.config_path, &cfg)
 }
@@ -257,8 +262,10 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                         bail!(tr!("没有这个分组", "No such group"));
                     }
                 }
+                // Moved by hand: no longer pinned, or it wouldn't show in its group.
                 for p in cfg.projects.iter_mut().filter(|p| ids.contains(&p.path)) {
                     p.group = group.clone();
+                    p.pinned = false;
                 }
             }
             save(state)?;

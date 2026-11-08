@@ -308,7 +308,11 @@ fn git_dir_of(tree: &Path) -> Option<PathBuf> {
 }
 
 pub fn operation(tree: &Path) -> Option<&'static str> {
-    let dir = git_dir_of(tree)?;
+    operation_in(&git_dir_of(tree)?)
+}
+
+/// The operation in progress, by the files in a worktree's own git dir.
+pub fn operation_in(dir: &Path) -> Option<&'static str> {
     [
         ("MERGE_HEAD", "merge"),
         ("rebase-merge", "rebase"),
