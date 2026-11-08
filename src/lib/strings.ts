@@ -1,3 +1,8 @@
+/**
+ * Default UI copy for the kit. Projects with i18n call configureStrings()
+ * once at boot with their translations; components read through s().
+ * Keep copy short: verbs on buttons, no "确定" / "提交".
+ */
 const zh = {
   close: "关闭",
   cancel: "取消",
@@ -38,6 +43,26 @@ const zh = {
   openMenu: "打开菜单",
   collapseSidebar: "收起侧边栏",
   expandSidebar: "展开侧边栏",
+  back: "返回",
+  resizePanel: "调整宽度",
+  filters: "筛选",
+  andMore: (n: number) => ` 等 ${n} 项`,
+  commandPlaceholder: "搜索或输入命令",
+  commandEmpty: "没有匹配的结果",
+  commandNavigate: "选择",
+  commandRun: "打开",
+  uploadTitle: "上传",
+  uploadProgress: (done: number, total: number) => `上传中 · ${done}/${total}`,
+  uploadSummary: (added: number, exists: number, failed: number) =>
+    [added && `已添加 ${added} 个`, exists && `已存在 ${exists} 个`, failed && `失败 ${failed} 个`].filter(Boolean).join("，"),
+  uploadWaiting: "等待",
+  uploadUploading: "上传中",
+  uploadPercent: (p: number) => `上传中 ${p}%`,
+  uploadAdded: "已添加",
+  uploadExists: "已存在",
+  uploadFailed: "失败",
+  collapse: "收起",
+  expand: "展开",
 }
 
 export type Strings = typeof zh

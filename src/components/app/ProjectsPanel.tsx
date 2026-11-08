@@ -13,17 +13,8 @@ import { useGroups, useProjects, useSummary } from "@/hooks/queries"
 import { useDelayedFlag } from "@/hooks/use-delayed-flag"
 import { Button, IconButton } from "@/components/ui/button"
 import { Tooltip } from "@/components/ui/tooltip"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@/components/ui/context-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, dropdownMenuParts, type MenuParts } from "@/components/ui/dropdown-menu"
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger, contextMenuParts } from "@/components/ui/context-menu"
 import { StateView } from "@/components/ui/state"
 import { Skeleton } from "@/components/ui/skeleton"
 import { notify } from "@/components/ui/toast"
@@ -35,17 +26,6 @@ const NESTED = 24
 const NO_GROUPS: Group[] = []
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
-
-/** The same menu as a "more" dropdown or as a right-click menu. */
-interface MenuKit {
-  Item: React.ComponentType<{ onSelect?: (e: Event) => void; tone?: "danger"; disabled?: boolean; children: React.ReactNode }>
-  Separator: React.ComponentType
-  Sub: React.ComponentType<{ children: React.ReactNode }>
-  SubTrigger: React.ComponentType<{ children: React.ReactNode }>
-  SubContent: React.ComponentType<{ children: React.ReactNode }>
-}
-const dropdownKit: MenuKit = { Item: DropdownMenuItem, Separator: DropdownMenuSeparator, Sub: DropdownMenuSub, SubTrigger: DropdownMenuSubTrigger, SubContent: DropdownMenuSubContent }
-const contextKit: MenuKit = { Item: ContextMenuItem, Separator: ContextMenuSeparator, Sub: ContextMenuSub, SubTrigger: ContextMenuSubTrigger, SubContent: ContextMenuSubContent }
 
 interface Drag {
   id: string
@@ -352,7 +332,7 @@ function GroupRow({
   onDelete: () => void
   onMenuClosed: (e: Event) => void
 }) {
-  const menu = (k: MenuKit) => (
+  const menu = (k: MenuParts) => (
     <>
       <k.Item onSelect={onStartRename}>
         <Pencil />
@@ -403,14 +383,14 @@ function GroupRow({
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" onCloseAutoFocus={onMenuClosed}>
-                  {menu(dropdownKit)}
+                  {menu(dropdownMenuParts)}
                 </DropdownMenuContent>
               </DropdownMenu>
             </>
           )}
         </li>
       </ContextMenuTrigger>
-      <ContextMenuContent onCloseAutoFocus={onMenuClosed}>{menu(contextKit)}</ContextMenuContent>
+      <ContextMenuContent onCloseAutoFocus={onMenuClosed}>{menu(contextMenuParts)}</ContextMenuContent>
     </ContextMenu>
   )
 }
@@ -488,7 +468,7 @@ function ProjectRow({
   const open = (how: "finder" | "terminal" | "editor") => api.open(project.id, project.id, how).catch((e) => notify.error(message(e)))
   const inGroup = groups.some((g) => g.id === project.group)
 
-  const menu = (k: MenuKit) => (
+  const menu = (k: MenuParts) => (
     <>
       <k.Item onSelect={() => open("finder")}>
         <FolderOpen />
@@ -576,11 +556,11 @@ function ProjectRow({
                 <Ellipsis className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">{menu(dropdownKit)}</DropdownMenuContent>
+            <DropdownMenuContent align="start">{menu(dropdownMenuParts)}</DropdownMenuContent>
           </DropdownMenu>
         </li>
       </ContextMenuTrigger>
-      <ContextMenuContent onCloseAutoFocus={onMenuClosed}>{menu(contextKit)}</ContextMenuContent>
+      <ContextMenuContent onCloseAutoFocus={onMenuClosed}>{menu(contextMenuParts)}</ContextMenuContent>
     </ContextMenu>
   )
 }

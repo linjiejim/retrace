@@ -40,7 +40,8 @@ describe("design guards", () => {
   })
 
   it("uses the kit for dialogs and overlays", () => {
-    const native = scan(files, /\b(?:window\.)?(?:alert|confirm|prompt)\(\s*["'`]/)
+    // Bare calls only: a method of the same name (notify.prompt) is fine; window.* is caught below.
+    const native = scan(files, /(?<![.\w$])(?:alert|confirm|prompt)\(\s*["'`]/)
     const winNative = scan(files, /\bwindow\.(?:alert|confirm|prompt)\(/)
     const uiDirs = cfg.uiDirs.map((d) => path.normalize(d) + path.sep)
     const outsideKit = files.filter((f) => !uiDirs.some((d) => path.normalize(f).startsWith(d)))

@@ -94,6 +94,11 @@ const rules: [fg: string, bgs: string[], min: number][] = [
   ["--ring", ["--background", "--popover"], 3],
 ]
 
+// Categorical colours (--cat-<name>, user-chosen tag / project / series colours): every one the
+// theme declares is text on the canvas, on floating surfaces and on its own -subtle fill.
+const categorical = [...new Set(Object.keys(scopes.light).flatMap((k) => k.match(/^--cat-([a-z]+)$/)?.[1] ?? []))]
+for (const c of categorical) rules.push([`--cat-${c}`, [...surfaces, `--cat-${c}-subtle`], 4.5])
+
 // Tokens every scope must define and resolve; a missing one means broken
 // focus rings or invisible text, not a skipped check.
 const required = [...new Set(rules.flatMap(([fg, bgs]) => [fg, ...bgs]))]
