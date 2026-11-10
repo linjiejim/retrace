@@ -10,7 +10,7 @@ import { prefs, selectionKey, ui, useStore, type Selection } from "@/lib/store"
 import { WORKTREE_ROW, type BranchStatus, type HistoryRow, type Overview, type RefLabel, type Trunk } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { t, tp } from "@/lib/i18n"
-import { branchKey, invalidateProject, isArchived, isRemovableBranch, useBranchStatuses, useChanges, useHistory, type Tab } from "@/hooks/queries"
+import { branchKey, branchOfTab, invalidateProject, isArchived, isRemovableBranch, prRemote, useBranchPr, useBranchStatuses, useChanges, useHistory, type Tab } from "@/hooks/queries"
 import { useProjectView } from "@/hooks/use-project-view"
 import { useDelayedFlag } from "@/hooks/use-delayed-flag"
 import { IconButton } from "@/components/ui/button"
@@ -23,7 +23,7 @@ import { Tooltip } from "@/components/ui/tooltip"
 import { notify } from "@/components/ui/toast"
 import { PanelHeader } from "@/components/layout/LayoutView"
 import { ArchiveMenu } from "./ArchiveMenu"
-import { PrMenu } from "./PullRequests"
+import { BranchPrBadge, PrMenu } from "./PullRequests"
 import { Lanes, lanesWidth, ROW_H } from "./Lanes"
 
 type View = ReturnType<typeof useProjectView>
@@ -134,7 +134,13 @@ function TabsBar({ view }: { view: View }) {
           title={t("Branches without a worktree: in progress or kept")}
           branches={others.map((b) => {
             const st = b.remote ? undefined : statusOf.get(b.name)
-            return { name: b.name, remote: b.remote, meta: st && <BranchMeta status={st} trunk={trunk} />, action: st?.kept && st.integration !== "none" ? { label: t("Stop keeping {name}", { name: b.name }), onClick: () => unkeep(b.name) } : undefined }
+            const meta = (
+              <>
+                <BranchPrBadge projectId={projectId} branch={!b.remote || b.name.startsWith(`${prRemote(trunk)}/`) ? bare(b) : null} />
+                {st && <BranchMeta status={st} trunk={trunk} />}
+              </>
+            )
+            return { name: b.name, remote: b.remote, meta, action: st?.kept && st.integration !== "none" ? { label: t("Stop keeping {name}", { name: b.name }), onClick: () => unkeep(b.name) } : undefined }
           })}
           current={listBranchTab?.label}
           onPick={openBranch}
@@ -143,7 +149,7 @@ function TabsBar({ view }: { view: View }) {
         </BranchPicker>
       )}
       {ov.webUrl && (
-        <PrMenu pulls={view.pulls} webUrl={ov.webUrl} current={prTab?.prNumber ?? null} onOpen={openPullRequest}>
+        <PrMenu pulls={view.pulls} webUrl={ov.webUrl} trees={ov.trees} current={prTab?.prNumber ?? null} onOpen={openPullRequest}>
           <GroupTrigger icon={<GitPullRequest />} label={t("PRs")} count={pulls?.state === "ok" ? pulls.items.length : null} current={prTab} trunk={trunk} />
         </PrMenu>
       )}
@@ -276,10 +282,12 @@ function TreeMenu({ tabs, current, trunk, onOpen }: { tabs: Tab[]; current: Tab 
 const OPERATION: Record<string, string> = { merge: "Merging", rebase: "Rebasing", "cherry-pick": "Cherry-picking", revert: "Reverting", bisect: "Bisecting" }
 
 function TabBadges({ tab, trunk }: { tab: Tab; trunk: Trunk | null }) {
+  const projectId = useStore(ui, (st) => st.projectId)
   const s = tab.status
   const cmp = tab.kind === "tree" ? s?.trunk : null
   return (
     <span className="inline-flex shrink-0 items-center gap-1.5 text-caption font-normal">
+      <BranchPrBadge projectId={projectId} branch={branchOfTab(tab, prRemote(trunk))} />
       {s?.operation && <span className="text-warning">{t(OPERATION[s.operation])}</span>}
       {!!s?.files && (
         <span className="tabular text-warning" aria-label={tp("{n} uncommitted file", "{n} uncommitted files", s.files)}>
@@ -545,6 +553,8 @@ const clickItem = (it: Item) => pickRow(selectionOf(it))
 
 function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; trunk: Trunk | null; overview: Overview; path: string | null }) {
   const { projectId, dirtyFiles, compare } = view
+  // A branch with an open pull request: its "everything since" row offers the PR itself.
+  const branchPr = useBranchPr(projectId, branchOfTab(tab, prRemote(trunk)))
   // One file's history leaves out "everything since the trunk": it isn't a commit to the file.
   const showCompare = view.showCompare && !path
   const others = useStore(prefs, (s) => s.otherBranches)
@@ -644,6 +654,7 @@ function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; tru
               isHead={it.kind === "row" && it.row.id === tab.head && dirtyFiles === 0}
               compareAhead={compare?.ahead ?? 0}
               compareLabel={tab.kind === "pr" ? t("Everything in PR #{n}", { n: tab.prNumber ?? "" }) : t("Everything since {trunk}", { trunk: trunk?.name ?? "" })}
+              comparePr={branchPr?.number}
               dirtyFiles={path ? 0 : dirtyFiles}
               treePath={tab.tree?.path}
               onSelect={clickItem}
@@ -671,6 +682,8 @@ const GraphRow = memo(function GraphRow(p: {
   isHead: boolean
   compareAhead: number
   compareLabel: string
+  /** The open pull request of this branch, offered on the "everything since" row. */
+  comparePr: number | undefined
   dirtyFiles: number
   treePath: string | undefined
   onSelect: (it: Item) => void
@@ -686,6 +699,20 @@ const GraphRow = memo(function GraphRow(p: {
         </span>
         <span className="min-w-0 flex-1 truncate font-medium">{p.compareLabel}</span>
         <span className="shrink-0 text-caption tabular text-faint-foreground">{tp("{n} commit", "{n} commits", p.compareAhead)}</span>
+        {p.comparePr !== undefined && (
+          <Tooltip content={t("See PR #{n} here", { n: p.comparePr })}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                openPullRequest(p.comparePr!)
+              }}
+              className="-mr-1.5 inline-flex h-5 shrink-0 items-center gap-1 rounded-xs px-1.5 text-caption font-medium text-primary hover:bg-primary-subtle"
+            >
+              <GitPullRequest className="size-3" />
+              PR #{p.comparePr}
+            </button>
+          </Tooltip>
+        )}
       </div>
     )
   }

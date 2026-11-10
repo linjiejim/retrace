@@ -356,4 +356,13 @@ export const zh: Record<string, string> = {
   "Show the description": "展开描述",
   "Merges {head} into {base}": "把 {head} 合并进 {base}",
   "Has conflicts": "有冲突",
+  "See PR #{n} here": "在 Retrace 里看 PR #{n}",
+  "PR #{n}: {title}": "PR #{n}：{title}",
+  "Checked out in {path}": "检出在 {path}",
+  "Passed": "通过",
+  "Failed": "失败",
+  "Cancelled": "已取消",
+  "Running": "进行中",
+  "Skipped": "已跳过",
+  "Neutral": "中性",
 }

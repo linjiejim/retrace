@@ -35,6 +35,18 @@ export function absoluteTime(unixSeconds: number, now = new Date()): string {
   return sameYear ? `${md} ${hm}` : `${d.getFullYear()}年${md} ${hm}`
 }
 
+/** How long a check ran: "38s", "1m 38s", "1h 2m" (Chinese: "38 秒", "1 分 38 秒", "1 小时 2 分"). */
+export function duration(seconds: number): string {
+  const zh = lang() === "zh"
+  const s = Math.max(0, Math.round(seconds))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  if (h) return zh ? `${h} 小时 ${m} 分` : `${h}h ${m}m`
+  if (m) return zh ? `${m} 分 ${sec} 秒` : `${m}m ${sec}s`
+  return zh ? `${sec} 秒` : `${sec}s`
+}
+
 export const shortHash = (hash: string) => hash.slice(0, 7)
 
 /** "~/Code/foo" for paths under the home folder. */

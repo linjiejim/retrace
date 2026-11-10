@@ -1,11 +1,11 @@
 import { lazy, Suspense, useState } from "react"
 import type { UseQueryResult } from "@tanstack/react-query"
-import { Check as CheckMark, ChevronRight, CircleCheck, CircleDashed, CircleX, ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, RefreshCw, Search } from "lucide-react"
+import { Check as CheckMark, ChevronRight, CircleCheck, CircleDashed, CircleMinus, CircleX, ExternalLink, FolderGit2, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, RefreshCw, Search } from "lucide-react"
 import { openLink } from "@/lib/commands"
-import { checkTally } from "@/lib/github"
-import { absoluteTime, ago } from "@/lib/format"
+import { checkTally, sortChecks } from "@/lib/github"
+import { absoluteTime, ago, duration, tildify } from "@/lib/format"
 import { prefs, useStore } from "@/lib/store"
-import type { Check, PullRequest, PullRequests, Target } from "@/lib/types"
+import type { Check, CheckState, PullRequest, PullRequests, Target, Worktree } from "@/lib/types"
 import { t, tp } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
@@ -14,6 +14,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Tooltip } from "@/components/ui/tooltip"
+import { useBranchPr } from "@/hooks/queries"
 
 const Markdown = lazy(() => import("./Markdown"))
 
@@ -32,15 +33,70 @@ function ChecksIcon({ checks, className }: { checks: Check[]; className?: string
   return <Icon aria-label={tallyText(checks)} className={cn("size-3.5 shrink-0", failed ? "text-destructive" : pending ? "text-warning" : "text-success", className)} />
 }
 
+const STATE_ICON: Record<CheckState, { icon: typeof CircleCheck; tone: string }> = {
+  success: { icon: CircleCheck, tone: "text-success" },
+  failure: { icon: CircleX, tone: "text-destructive" },
+  cancelled: { icon: CircleX, tone: "text-faint-foreground" },
+  pending: { icon: CircleDashed, tone: "text-warning" },
+  skipped: { icon: CircleMinus, tone: "text-faint-foreground" },
+  neutral: { icon: CircleMinus, tone: "text-faint-foreground" },
+}
+
+/** Read at render time, so the language in use applies. */
+const stateLabel = (state: CheckState) =>
+  ({ success: t("Passed"), failure: t("Failed"), cancelled: t("Cancelled"), pending: t("Running"), skipped: t("Skipped"), neutral: t("Neutral") })[state]
+
+/** The checks' summary; opens the list of every check, each linking to its page. */
 export function ChecksSummary({ checks }: { checks: Check[] }) {
   const { failed, pending } = checkTally(checks)
   return (
-    <Tooltip content={tallyText(checks)}>
-      <span className={cn("inline-flex items-center gap-1", failed ? "text-destructive" : pending ? "text-warning" : "text-success")}>
-        <ChecksIcon checks={checks} />
-        {failed ? tp("{n} check failed", "{n} checks failed", failed) : pending ? tp("{n} check running", "{n} checks running", pending) : t("Checks passed")}
-      </span>
-    </Tooltip>
+    <Popover>
+      <Tooltip content={tallyText(checks)}>
+        <PopoverTrigger asChild>
+          <button className={cn("-mx-0.5 inline-flex items-center gap-1 rounded-xs px-0.5 hover:bg-accent", failed ? "text-destructive" : pending ? "text-warning" : "text-success")}>
+            <ChecksIcon checks={checks} />
+            {failed ? tp("{n} check failed", "{n} checks failed", failed) : pending ? tp("{n} check running", "{n} checks running", pending) : t("Checks passed")}
+          </button>
+        </PopoverTrigger>
+      </Tooltip>
+      <PopoverContent className="w-[380px] p-1" align="start">
+        <div className="px-2 pb-1 pt-1.5 text-caption text-faint-foreground">{tallyText(checks)}</div>
+        <ul className="max-h-[50vh] overflow-y-auto">
+          {sortChecks(checks).map((c) => {
+            const s = STATE_ICON[c.state]
+            const took = c.startedAt && c.completedAt ? duration(c.completedAt - c.startedAt) : null
+            return (
+              <li key={`${c.workflow ?? ""}/${c.name}`}>
+                <button
+                  disabled={!c.url}
+                  onClick={() => c.url && openLink(c.url)}
+                  className="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-body enabled:hover:bg-accent"
+                >
+                  <s.icon aria-label={stateLabel(c.state)} className={cn("size-4 shrink-0", s.tone)} />
+                  <span className="min-w-0 flex-1 truncate">
+                    {c.workflow && <span className="text-faint-foreground">{c.workflow} / </span>}
+                    {c.name}
+                  </span>
+                  {took && <span className="shrink-0 text-caption tabular text-faint-foreground">{took}</span>}
+                  {c.url && <ExternalLink className="size-3.5 shrink-0 text-faint-foreground" />}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/** `#N` on a worktree or branch whose branch has an open pull request. Not a control: it sits inside tab buttons. */
+export function BranchPrBadge({ projectId, branch }: { projectId: string | null; branch: string | null | undefined }) {
+  const pr = useBranchPr(projectId, branch)
+  if (!pr) return null
+  return (
+    <span role="img" className="inline-flex shrink-0 items-center gap-0.5 font-mono text-faint-foreground" aria-label={t("PR #{n}: {title}", { n: pr.number, title: pr.title })}>
+      <PrStateIcon pr={pr} className="size-3" />#{pr.number}
+    </span>
   )
 }
 
@@ -83,12 +139,15 @@ function Stat({ pr }: { pr: PullRequest }) {
 export function PrMenu({
   pulls,
   webUrl,
+  trees,
   current,
   onOpen,
   children,
 }: {
   pulls: UseQueryResult<PullRequests>
   webUrl: string
+  /** To mark pull requests whose branch is checked out here. */
+  trees: Worktree[]
   current: number | null
   onOpen: (n: number) => void
   children: React.ReactNode
@@ -171,7 +230,9 @@ export function PrMenu({
           note(t("No matching pull requests"))
         ) : (
           <ul className="max-h-[50vh] overflow-y-auto px-1 pb-1">
-            {list.map((pr) => (
+            {list.map((pr) => {
+              const tree = pr.isCrossRepository ? undefined : trees.find((w) => w.branch === pr.headRefName)
+              return (
               <li key={pr.number}>
                 <button
                   onClick={() => {
@@ -193,6 +254,11 @@ export function PrMenu({
                     </span>
                   </span>
                   <span className="mt-0.5 flex shrink-0 items-center gap-1.5 text-caption">
+                    {tree && (
+                      <Tooltip content={t("Checked out in {path}", { path: tildify(tree.path) })}>
+                        <FolderGit2 aria-label={t("Checked out in {path}", { path: tildify(tree.path) })} className="size-3.5 shrink-0 text-muted-foreground" />
+                      </Tooltip>
+                    )}
                     {pr.isDraft && <span className="text-faint-foreground">{t("Draft")}</span>}
                     {pr.reviewDecision === "approved" && <span className="text-success">{t("Approved")}</span>}
                     {pr.reviewDecision === "changesRequested" && <span className="text-warning">{t("Changes requested")}</span>}
@@ -202,7 +268,8 @@ export function PrMenu({
                   {pr.number === current && <CheckMark className="mt-0.5 size-4 shrink-0" />}
                 </button>
               </li>
-            ))}
+              )
+            })}
           </ul>
         )}
         <div className="border-t p-1">

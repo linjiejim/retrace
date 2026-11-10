@@ -1,5 +1,6 @@
 import { keepPreviousData, useInfiniteQuery, useQuery, type QueryClient } from "@tanstack/react-query"
 import { api } from "@/lib/api"
+import { prOfBranch } from "@/lib/github"
 import type { BranchRef, BranchStatus, Overview, PreparedPr, PullRequest, Target, TreeStatus, Trunk, TrunkCompare, Worktree } from "@/lib/types"
 
 export const targetKey = (t: Target | null) =>
@@ -105,11 +106,36 @@ export const useFileContent = (id: string | null, target: Target | null, path: s
  * Open pull requests. `gh` takes a second or two and goes over the network, so file-system events
  * don't refresh it: it goes stale after two minutes and is read again on ⌘R or when the menu opens.
  */
-export const usePullRequests = (id: string | null, enabled: boolean) =>
-  useQuery({ queryKey: ["pulls", id], queryFn: () => api.pullRequests(id!), enabled: enabled && !!id, staleTime: 120_000 })
+export const pullsQuery = (id: string | null) => ({ queryKey: ["pulls", id], queryFn: () => api.pullRequests(id!), staleTime: 120_000 })
+
+export const usePullRequests = (id: string | null, enabled: boolean) => useQuery({ ...pullsQuery(id), enabled: enabled && !!id })
+
+/** The list as already read; never starts a gh call itself. */
+export const useCachedPullRequests = (id: string | null) => useQuery({ ...pullsQuery(id), enabled: false })
 
 export const usePullRequest = (id: string | null, n: number | null) =>
   useQuery({ queryKey: ["pull", id, n], queryFn: () => api.pullRequest(id!, n!), enabled: !!id && !!n, staleTime: 60_000 })
+
+/** The open pull request whose head is this branch, from the list already read. */
+export function useBranchPr(id: string | null, branch: string | null | undefined): PullRequest | undefined {
+  return prOfBranch(useCachedPullRequests(id).data?.items, branch)
+}
+
+/** The remote the pull requests are read from: the one the trunk tracks, else `origin` (as the backend picks it). */
+export const prRemote = (trunk: Trunk | null) => trunk?.remoteRef?.split("/")[0] || "origin"
+
+/**
+ * The branch name a pull request of the repository would have for this tab: a worktree's branch,
+ * a local branch, or `x` for `<remote>/x` on the pull requests' own remote (other remotes are
+ * other repositories).
+ */
+export function branchOfTab(tab: Tab | undefined, remote: string): string | null {
+  if (!tab || tab.kind === "pr") return null
+  if (tab.kind === "tree") return tab.tree?.branch ?? null
+  const name = tab.branch?.name ?? tab.label
+  if (!tab.branch?.remote) return name
+  return name.startsWith(`${remote}/`) ? name.slice(remote.length + 1) : null
+}
 
 /** Its commits are here (fetched as objects if they weren't); keyed by the commits, so it never goes stale. */
 export const usePreparedPr = (id: string | null, pr: PullRequest | undefined) =>

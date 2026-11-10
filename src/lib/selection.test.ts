@@ -5,7 +5,7 @@ import type { Overview, PullRequest, Trunk } from "./types"
 vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} })
 
 const { commands, openPullRequest, pickRow } = await import("./commands")
-const { buildTabs, compareOf } = await import("@/hooks/queries")
+const { branchOfTab, buildTabs, compareOf, prRemote } = await import("@/hooks/queries")
 const { ui } = await import("./store")
 const { targetOf } = await import("@/hooks/use-project-view")
 const initial = ui.get()
@@ -110,5 +110,25 @@ describe("pull request tab", () => {
     ui.set({ selection: { kind: "commit", hash: "c1" } })
     openPullRequest(7)
     expect(ui.get().selection).toEqual({ kind: "commit", hash: "c1" })
+  })
+})
+
+describe("branch of a tab", () => {
+  const remote = (name: string): Tab => ({ key: `branch:${name}`, kind: "branch", label: name, head: "h", branch: { name, tip: "h", remote: true } })
+
+  it("is the worktree's branch, a local branch, or a branch on the pull requests' own remote", () => {
+    expect(branchOfTab(tab, "origin")).toBe("feature")
+    expect(branchOfTab({ key: "branch:x", kind: "branch", label: "x", head: "h", branch: { name: "x", tip: "h", remote: false } }, "origin")).toBe("x")
+    expect(branchOfTab(remote("origin/feat/y"), "origin")).toBe("feat/y")
+    expect(branchOfTab({ key: "pr:7", kind: "pr", label: "#7", head: null, prNumber: 7 }, "origin")).toBeNull()
+    expect(branchOfTab(undefined, "origin")).toBeNull()
+  })
+
+  it("leaves other remotes' branches alone: they belong to other repositories", () => {
+    expect(branchOfTab(remote("upstream/feat/y"), "origin")).toBeNull()
+    expect(branchOfTab(remote("upstream/feat/y"), "upstream")).toBe("feat/y")
+    expect(prRemote({ remoteRef: "upstream/main" } as Trunk)).toBe("upstream")
+    expect(prRemote({ remoteRef: null } as Trunk)).toBe("origin")
+    expect(prRemote(null)).toBe("origin")
   })
 })

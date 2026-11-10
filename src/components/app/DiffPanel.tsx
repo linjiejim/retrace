@@ -1,7 +1,7 @@
 import { lazy, Suspense } from "react"
-import { ChevronDown, ChevronRight, ChevronUp, Columns2, Copy, FileText, Files, GitCompareArrows, GitPullRequest, History, Maximize2, Minimize2, Rows2, WrapText, X } from "lucide-react"
+import { ChevronDown, ChevronRight, ChevronUp, Columns2, Copy, ExternalLink, FileText, Files, GitCompareArrows, GitPullRequest, History, Maximize2, Minimize2, Rows2, WrapText, X } from "lucide-react"
 import { copyText } from "@/lib/api"
-import { closeDiff, openFile, openLink, showFileHistory } from "@/lib/commands"
+import { closeDiff, openFile, openLink, openPullRequest, showFileHistory } from "@/lib/commands"
 import { prNumber, prUrl } from "@/lib/github"
 import { isImage, isMarkdown, isSvg } from "@/lib/filetype"
 import { absoluteTime, shortHash } from "@/lib/format"
@@ -11,7 +11,7 @@ import { STATUS_LETTER } from "@/lib/tree"
 import type { FileChange, Target, Trunk } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { t, tp } from "@/lib/i18n"
-import { useChanges, useCommit, useOverview } from "@/hooks/queries"
+import { useCachedPullRequests, useChanges, useCommit, useOverview } from "@/hooks/queries"
 import { targetOf, useProjectView } from "@/hooks/use-project-view"
 import { Button, IconButton } from "@/components/ui/button"
 import { Segmented } from "@/components/ui/segmented"
@@ -270,6 +270,9 @@ function CommitInfo({ projectId, hash, trunk }: { projectId: string; hash: strin
   const c = commit.data
   const pr = c ? prNumber(c.subject) : null
   const webUrl = overview.data?.webUrl
+  // Without a working gh the PR can't be read here: the button goes to the browser as before.
+  const pulls = useCachedPullRequests(projectId).data
+  const inApp = !pulls || pulls.state === "ok"
 
   return (
     <div className="selectable max-h-[40%] shrink-0 overflow-y-auto border-b px-3 py-2">
@@ -296,13 +299,26 @@ function CommitInfo({ projectId, hash, trunk }: { projectId: string; hash: strin
               </Tooltip>
             )}
             <h2 className="min-w-0 flex-1 text-body font-semibold [overflow-wrap:anywhere]">{c.subject}</h2>
-            {pr && webUrl && (
+            {pr && webUrl && !inApp && (
               <Tooltip content={t("Open PR #{n} in the browser", { n: pr })}>
                 <Button size="sm" variant="ghost" className="-my-1 -mr-1.5 shrink-0" onClick={() => openLink(prUrl(webUrl, pr))}>
                   <GitPullRequest />
                   PR #{pr}
                 </Button>
               </Tooltip>
+            )}
+            {pr && webUrl && inApp && (
+              <span className="-my-1 -mr-1.5 inline-flex shrink-0 items-center">
+                <Tooltip content={t("See PR #{n} here", { n: pr })}>
+                  <Button size="sm" variant="ghost" onClick={() => openPullRequest(pr)}>
+                    <GitPullRequest />
+                    PR #{pr}
+                  </Button>
+                </Tooltip>
+                <IconButton label={t("Open PR #{n} in the browser", { n: pr })} size="icon-sm" className="text-faint-foreground" onClick={() => openLink(prUrl(webUrl, pr))}>
+                  <ExternalLink />
+                </IconButton>
+              </span>
             )}
           </div>
           <div className="flex flex-wrap items-center gap-x-1.5 text-caption text-faint-foreground">
