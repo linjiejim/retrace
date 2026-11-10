@@ -37,7 +37,7 @@ const T = {
   "num.writes": ["accidental commits", "次误提交"],
   "features.title": ["Review like a <span>reviewer</span>, not a git client.", "像审查者一样看，<span>而不是 git 客户端。</span>"],
   "f1.t": ["The integration branch stays left", "集成分支永远在最左列"],
-  "f1.d": ["main owns column 0 of a compact, one-line graph. Other branches join only when you ask for them.", "main 占紧凑单行提交图的第 0 列。其他分支要的时候再加，先本地，可选远程。"],
+  "f1.d": ["main owns column 0 of a compact, one-line graph. Other branches join only when you ask, and merges can fold away until you open one.", "main 占紧凑单行提交图的第 0 列。其他分支要的时候再加，先本地，可选远程；合并进来的提交可以折叠，用到时再展开。"],
   "f2.t": ["Worktrees, folded", "worktree 收纳好"],
   "f2.d": ["Active, merged and branch-only work sit in three menus. Remove merged worktrees and branches safely: no --force, checked again first, Undo for branches.", "进行中、已合并、只有分支的各收一个下拉。已合并的 worktree 和分支可以安全删除：不加 --force，删前逐项复查，删掉的分支能撤销。"],
   "f3.t": ["Diffs that read well", "好读的 diff"],
