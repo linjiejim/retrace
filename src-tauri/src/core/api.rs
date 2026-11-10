@@ -405,8 +405,13 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 tips: Option<Vec<String>>,
                 /// Only this file's history.
                 path: Option<String>,
+                /// Walk first parents only; `expanded` merges show what they brought in.
+                #[serde(default)]
+                fold: bool,
+                #[serde(default)]
+                expanded: Vec<String>,
             }
-            let A { id, trunk_tip, tip, worktree_head, all_branches, remotes, offset, count, tips: snapshot, path } = args(a)?;
+            let A { id, trunk_tip, tip, worktree_head, all_branches, remotes, offset, count, tips: snapshot, path, fold, expanded } = args(a)?;
             let dir = project_dir(state, &id)?;
             let path = path.filter(|p| !p.is_empty());
             if path.as_deref().is_some_and(|p| p.starts_with('/') || p.contains('\0') || p.split('/').any(|s| s == "..")) {
@@ -427,7 +432,7 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                     t
                 }
             };
-            if tips.iter().any(|t| t.starts_with('-')) {
+            if tips.iter().chain(&expanded).any(|t| t.starts_with('-')) {
                 bail!(tr!("提交标识无效", "Invalid commit id"));
             }
             json!(state.history.page(history::Query {
@@ -436,6 +441,8 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 tips,
                 worktree_head: worktree_head.as_deref(),
                 path: path.as_deref(),
+                fold,
+                expanded,
                 offset,
                 count: count.unwrap_or(500).clamp(1, 5000),
             })?)

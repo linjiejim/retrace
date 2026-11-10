@@ -114,6 +114,8 @@ export interface HistoryRow {
   col: number
   color: number
   segs: Segment[]
+  /** Merges folded: a first-parent merge, true while what it merged is hidden, false once expanded. */
+  folded?: boolean
 }
 
 export interface HistoryPage {

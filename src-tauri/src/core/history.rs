@@ -6,11 +6,15 @@
 //!
 //! With a path, the history is that file's: only commits that change it, with parents rewritten
 //! to the nearest such ancestor so the graph still connects.
+//!
+//! With merges folded, only first-parent chains are walked: a merge stands for everything it
+//! brought in, and an expanded merge has those commits laid out right below it.
 
 use super::git;
 use super::graph::Lanes;
 use super::model::*;
 use anyhow::Result;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -18,6 +22,9 @@ pub const WORKTREE_ROW: &str = "WORKTREE";
 /// Rows beyond this are not shown (the page says so).
 pub const MAX_ROWS: usize = 100_000;
 const CACHE_SIZE: usize = 8;
+/// An expanded merge shows at most this many of the commits it brought in.
+const MAX_MERGED_IN: usize = 5000;
+const FORMAT: &str = "--format=%H%x1f%P%x1f%an%x1f%at%x1f%s%x1e";
 
 #[derive(Clone)]
 struct Raw {
@@ -50,6 +57,31 @@ fn parse_log(text: &str) -> Vec<Raw> {
         .collect()
 }
 
+fn row(r: Raw, p: super::graph::Placed, folded: Option<bool>) -> HistoryRow {
+    HistoryRow { id: r.id, parents: r.parents, author: r.author, time: r.time, subject: r.subject, col: p.col, color: p.color, segs: p.segs, folded }
+}
+
+fn worktree_row(parents: Vec<String>, p: super::graph::Placed) -> HistoryRow {
+    row(Raw { id: WORKTREE_ROW.into(), parents, author: String::new(), time: 0, subject: String::new() }, p, None)
+}
+
+/// Merges folded: the walk follows first parents only.
+struct Fold {
+    /// Merges whose merged-in commits are laid out below them.
+    expanded: HashSet<String>,
+    /// Every commit on the walked first-parent chains; read on the first expansion.
+    chains: Option<HashSet<String>>,
+    /// Rows laid out so far: an edge to one of them would point upwards, so none is drawn.
+    placed: HashSet<String>,
+}
+
+impl Fold {
+    /// Whether an edge to `id` can be drawn: it is laid out further down.
+    fn below(&self, id: &str, inner: &HashSet<&str>) -> bool {
+        inner.contains(id) || (!self.placed.contains(id) && self.chains.as_ref().is_some_and(|c| c.contains(id)))
+    }
+}
+
 struct Stream {
     dir: PathBuf,
     revs: Vec<String>,
@@ -63,25 +95,78 @@ struct Stream {
     done: bool,
     rows: Vec<HistoryRow>,
     lanes: Lanes,
+    fold: Option<Fold>,
 }
 
 impl Stream {
     fn new(dir: &Path, trunk_tip: Option<&str>, revs: Vec<String>, path: Option<String>, worktree_head: Option<String>, worktree_first: bool) -> Self {
-        Self { dir: dir.to_path_buf(), revs, path, worktree_head, worktree_first, read: 0, done: false, rows: Vec::new(), lanes: Lanes::new(trunk_tip) }
+        Self { dir: dir.to_path_buf(), revs, path, worktree_head, worktree_first, read: 0, done: false, rows: Vec::new(), lanes: Lanes::new(trunk_tip), fold: None }
+    }
+
+    /// Lay out one commit read from the walk (and, for an expanded merge, what it brought in).
+    fn push(&mut self, r: Raw) -> Result<()> {
+        let Some(fold) = self.fold.as_mut() else {
+            let p = self.lanes.place(&r.id, &r.parents, false);
+            self.rows.push(row(r, p, None));
+            return Ok(());
+        };
+        fold.placed.insert(r.id.clone());
+        if r.parents.len() < 2 {
+            let p = self.lanes.place(&r.id, &r.parents, false);
+            self.rows.push(row(r, p, None));
+            return Ok(());
+        }
+        if !fold.expanded.contains(&r.id) {
+            let p = self.lanes.place(&r.id, &r.parents[..1], false);
+            self.rows.push(row(r, p, Some(true)));
+            return Ok(());
+        }
+        if fold.chains.is_none() {
+            let n = format!("-n{MAX_ROWS}");
+            let mut args = vec!["rev-list", "--first-parent", n.as_str()];
+            args.extend(self.revs.iter().map(String::as_str));
+            args.push("--");
+            fold.chains = Some(git::text(&self.dir, &args)?.split_whitespace().map(str::to_string).collect());
+        }
+        // What the merge brought in: reachable from its other parents but not its first, minus
+        // anything a first-parent chain or an earlier row already shows.
+        let n = format!("-n{MAX_MERGED_IN}");
+        let mut args = vec!["log", "--topo-order", FORMAT, n.as_str()];
+        args.extend(r.parents[1..].iter().map(String::as_str));
+        args.extend(["--not", r.parents[0].as_str(), "--"]);
+        let chains = fold.chains.as_ref().expect("read above");
+        let merged: Vec<Raw> = parse_log(&git::text(&self.dir, &args)?).into_iter().filter(|m| !chains.contains(&m.id) && !fold.placed.contains(&m.id)).collect();
+        let inner: HashSet<&str> = merged.iter().map(|m| m.id.as_str()).collect();
+        let drawn = |ps: &[String]| -> Vec<String> { ps.iter().filter(|p| fold.below(p, &inner)).cloned().collect() };
+        let mut edges = vec![r.parents[0].clone()];
+        edges.extend(drawn(&r.parents[1..]));
+        let inner_edges: Vec<Vec<String>> = merged.iter().map(|m| drawn(&m.parents)).collect();
+        drop(inner);
+        let p = self.lanes.place(&r.id, &edges, false);
+        self.rows.push(row(r, p, Some(false)));
+        for (m, edges) in merged.into_iter().zip(inner_edges) {
+            fold.placed.insert(m.id.clone());
+            let p = self.lanes.place(&m.id, &edges, false);
+            self.rows.push(row(m, p, None));
+        }
+        Ok(())
     }
 
     /// Read and lay out commits until at least `want` rows exist or history ends.
     fn fill(&mut self, want: usize) -> Result<()> {
         if self.worktree_first && self.rows.is_empty() {
             let p = self.lanes.place(WORKTREE_ROW, &[], self.lanes.trunk_lane_free());
-            self.rows.push(HistoryRow { id: WORKTREE_ROW.into(), parents: vec![], author: String::new(), time: 0, subject: String::new(), col: p.col, color: p.color, segs: p.segs });
+            self.rows.push(worktree_row(vec![], p));
         }
         while !self.done && self.rows.len() < want {
             // The topological walk costs about the same for 1k or 10k rows, so read generously.
             let chunk = (want - self.rows.len()).max(self.read).clamp(1000, 20_000);
             let skip = format!("--skip={}", self.read);
             let n = format!("-n{chunk}");
-            let mut args = vec!["log", "--topo-order", "--format=%H%x1f%P%x1f%an%x1f%at%x1f%s%x1e", skip.as_str(), n.as_str()];
+            let mut args = vec!["log", "--topo-order", FORMAT, skip.as_str(), n.as_str()];
+            if self.fold.is_some() {
+                args.push("--first-parent");
+            }
             if self.path.is_some() {
                 // Rewrites %P to the nearest commits that touch the path.
                 args.push("--parents");
@@ -100,10 +185,9 @@ impl Stream {
                     let pinned = self.lanes.expects_trunk(&r.id) && self.lanes.trunk_lane_free();
                     let parents = vec![r.id.clone()];
                     let p = self.lanes.place(WORKTREE_ROW, &parents, pinned);
-                    self.rows.push(HistoryRow { id: WORKTREE_ROW.into(), parents, author: String::new(), time: 0, subject: String::new(), col: p.col, color: p.color, segs: p.segs });
+                    self.rows.push(worktree_row(parents, p));
                 }
-                let p = self.lanes.place(&r.id, &r.parents, false);
-                self.rows.push(HistoryRow { id: r.id, parents: r.parents, author: r.author, time: r.time, subject: r.subject, col: p.col, color: p.color, segs: p.segs });
+                self.push(r)?;
             }
         }
         Ok(())
@@ -123,6 +207,10 @@ pub struct Query<'a> {
     pub worktree_head: Option<&'a str>,
     /// Only this file's history (a repository-relative path).
     pub path: Option<&'a str>,
+    /// Walk first parents only (ignored for a file's history).
+    pub fold: bool,
+    /// Folded merges to show expanded.
+    pub expanded: Vec<String>,
     pub offset: usize,
     pub count: usize,
 }
@@ -139,7 +227,14 @@ impl HistoryCache {
         if revs.is_empty() {
             return Ok(HistoryPage { rows: vec![], has_more: false, capped: false, tips });
         }
-        let key = format!("{}\0{}\0{}\0{}\0{}", q.dir.display(), q.trunk_tip.unwrap_or(""), revs.join(" "), q.worktree_head.unwrap_or(""), q.path.unwrap_or(""));
+        let fold = (q.fold && q.path.is_none()).then(|| {
+            let mut expanded = q.expanded.clone();
+            expanded.sort();
+            expanded.dedup();
+            expanded
+        });
+        let fold_key = fold.as_ref().map_or_else(|| "-".to_string(), |e| e.join(" "));
+        let key = format!("{}\0{}\0{}\0{}\0{}\0{fold_key}", q.dir.display(), q.trunk_tip.unwrap_or(""), revs.join(" "), q.worktree_head.unwrap_or(""), q.path.unwrap_or(""));
         let stream = {
             let mut streams = self.streams.lock().map_err(|_| anyhow::anyhow!("history cache poisoned"))?;
             match streams.iter().position(|(k, _)| *k == key) {
@@ -151,7 +246,11 @@ impl HistoryCache {
                 }
                 None => {
                     let s = Arc::new(Mutex::new(match q.path {
-                        None => Stream::new(q.dir, q.trunk_tip, revs, None, q.worktree_head.map(str::to_string), false),
+                        None => {
+                            let mut s = Stream::new(q.dir, q.trunk_tip, revs, None, q.worktree_head.map(str::to_string), false);
+                            s.fold = fold.map(|e| Fold { expanded: e.into_iter().collect(), chains: None, placed: HashSet::new() });
+                            s
+                        }
                         Some(path) => {
                             // The trunk tip and the worktree's HEAD may not touch the file: lay out
                             // against the latest commits that do.

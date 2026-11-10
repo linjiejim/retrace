@@ -1065,3 +1065,66 @@ fn a_pull_requests_fetch_leaves_submodules_alone() {
     call(&f, "preparePr", json!({ "id": id, "number": 9, "head": head, "base": base, "baseRef": "main" }));
     assert_eq!((sh(&f.main, &["for-each-ref"]), sh(&sub, &["for-each-ref"])), refs_before, "no ref written here or in the submodule");
 }
+
+/// main: c0 c1 … c2 c3 M(c3, f2) c4, where the branch f1 → fm(merge main) → f2 was merged as M.
+#[test]
+fn folded_merges_show_the_first_parent_chain_and_expand_on_request() {
+    let base = std::env::temp_dir().join(format!("retrace-test-fold-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let _tmp = TempDir(std::fs::canonicalize(&base).unwrap());
+    let repo = _tmp.0.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    sh(&repo, &["init", "-q", "-b", "main"]);
+    let c0 = commit(&repo, "a.txt", "0\n", "c0");
+    let c1 = commit(&repo, "a.txt", "1\n", "c1");
+    sh(&repo, &["switch", "-q", "-c", "feat"]);
+    let f1 = commit(&repo, "f.txt", "1\n", "f1");
+    sh(&repo, &["switch", "-q", "main"]);
+    let c2 = commit(&repo, "a.txt", "2\n", "c2");
+    sh(&repo, &["switch", "-q", "feat"]);
+    sh(&repo, &["merge", "-q", "--no-ff", "-m", "merge main into feat", "main"]);
+    let fm = sh(&repo, &["rev-parse", "HEAD"]);
+    let f2 = commit(&repo, "f.txt", "2\n", "f2");
+    sh(&repo, &["switch", "-q", "main"]);
+    let c3 = commit(&repo, "a.txt", "3\n", "c3");
+    sh(&repo, &["merge", "-q", "--no-ff", "-m", "Merge PR", "feat"]);
+    let m = sh(&repo, &["rev-parse", "HEAD"]);
+    let c4 = commit(&repo, "a.txt", "4\n", "c4");
+
+    let state = State::with_config(_tmp.0.join("config.json"));
+    dispatch(&state, "addPath", json!({ "path": repo })).unwrap();
+    let id = repo.to_string_lossy().to_string();
+    let page = |expanded: Vec<&str>| dispatch(&state, "history", json!({ "id": id, "trunkTip": c4, "tip": c4, "fold": true, "expanded": expanded })).unwrap();
+    let ids = |p: &Value| p["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let no_dangling = |p: &Value| {
+        let last = p["rows"].as_array().unwrap().last().unwrap();
+        assert!(last["segs"].as_array().unwrap().iter().all(|s| s[0] != 0), "a lane runs past the root: {last}");
+    };
+
+    let folded = page(vec![]);
+    assert_eq!(ids(&folded), [c4.as_str(), &m, &c3, &c2, &c1, &c0]);
+    let rows = folded["rows"].as_array().unwrap();
+    assert!(rows.iter().all(|r| r["col"] == 0 && r["segs"].as_array().unwrap().iter().all(|s| s[1] == 0 && s[2] == 0)));
+    assert_eq!(rows[1]["folded"], json!(true));
+    assert!(rows[0].get("folded").is_none());
+    // The real parents still go to the client (the commit view links them).
+    assert_eq!(rows[1]["parents"].as_array().unwrap().len(), 2);
+    no_dangling(&folded);
+
+    // Expanded: the branch's own commits right below the merge; main's c2 stays on the trunk.
+    let open = page(vec![m.as_str()]);
+    assert_eq!(ids(&open), [c4.as_str(), &m, &f2, &fm, &f1, &c3, &c2, &c1, &c0]);
+    let rows = open["rows"].as_array().unwrap();
+    assert_eq!(rows[1]["folded"], json!(false));
+    for r in &rows[2..5] {
+        assert!(r["col"].as_u64().unwrap() >= 1);
+        assert!(r.get("folded").is_none(), "only first-parent merges fold");
+    }
+    no_dangling(&open);
+
+    // Without folding nothing changes.
+    let plain = dispatch(&state, "history", json!({ "id": id, "trunkTip": c4, "tip": c4, "expanded": [m] })).unwrap();
+    assert_eq!(plain["rows"].as_array().unwrap().len(), 9);
+    assert!(plain["rows"].as_array().unwrap().iter().all(|r| r.get("folded").is_none()));
+}

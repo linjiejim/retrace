@@ -35,17 +35,26 @@ export const useHistory = (a: {
   remotes: boolean
   /** Only this file's history. */
   path: string | null
+  /** First parents only, with these merges opened. */
+  fold: boolean
+  expanded: string[]
+  /** Rows to load at first (opening a merge deep down keeps it loaded). */
+  depth: number
 }) =>
   useInfiniteQuery({
-    queryKey: ["history", a.id, a.trunkTip, a.tip, a.worktreeHead, a.allBranches, a.remotes, a.path],
+    queryKey: ["history", a.id, a.trunkTip, a.tip, a.worktreeHead, a.allBranches, a.remotes, a.path, a.fold, a.expanded],
     // Later pages reuse the first page's branch tips: a branch moving in between can't splice two histories.
-    queryFn: ({ pageParam }) => api.history({ ...a, id: a.id!, offset: pageParam.offset, count: HISTORY_PAGE, tips: pageParam.tips }),
-    initialPageParam: { offset: 0, tips: undefined } as { offset: number; tips: string[] | undefined },
+    queryFn: ({ pageParam }) => api.history({ ...a, id: a.id!, offset: pageParam.offset, count: pageParam.count, tips: pageParam.tips }),
+    initialPageParam: { offset: 0, count: Math.min(5000, Math.max(HISTORY_PAGE, a.depth)), tips: undefined } as { offset: number; count: number; tips: string[] | undefined },
     getNextPageParam: (last, pages) =>
-      last.hasMore && !last.capped ? { offset: pages.reduce((n, p) => n + p.rows.length, 0), tips: pages[0].tips } : undefined,
+      last.hasMore && !last.capped ? { offset: pages.reduce((n, p) => n + p.rows.length, 0), count: HISTORY_PAGE, tips: pages[0].tips } : undefined,
     enabled: !!a.id && !!(a.trunkTip || a.tip),
     staleTime: 60_000,
+    // Folding or opening a merge keeps the rows on screen until the new layout arrives.
+    placeholderData: (prev, prevQuery) => (prevQuery && sameHistory(prevQuery.queryKey, [a.id, a.trunkTip, a.tip, a.worktreeHead, a.allBranches, a.remotes, a.path]) ? prev : undefined),
   })
+
+const sameHistory = (key: readonly unknown[], rest: unknown[]) => rest.every((v, i) => key[i + 1] === v)
 
 export const usePatch = (id: string | null, target: Target | null, enabled: boolean) =>
   useQuery({

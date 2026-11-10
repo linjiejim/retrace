@@ -81,6 +81,9 @@ export const api = {
     tips?: string[]
     /** Only this file's history. */
     path?: string | null
+    /** First parents only; `expanded` merges show what they brought in. */
+    fold?: boolean
+    expanded?: string[]
   }) => call<HistoryPage>("history", a),
   /** `moved`: a project dragged into or out of a group or the pinned ones, saved with the new order. */
   reorderProjects: (ids: string[], moved?: { id: string; group: string | null; pinned?: boolean }) => call<null>("reorderProjects", { ids, moved }),

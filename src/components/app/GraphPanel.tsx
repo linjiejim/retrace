@@ -433,6 +433,7 @@ function GraphOptions({ view }: { view: View }) {
   const { projectId, overview, trunk } = view
   const others = useStore(prefs, (s) => s.otherBranches)
   const remotes = useStore(prefs, (s) => s.remoteBranches)
+  const fold = useStore(prefs, (s) => s.foldMerges)
   const [open, setOpen] = useState(false)
   const [picking, setPicking] = useState(false)
   const ov = overview.data!
@@ -454,7 +455,7 @@ function GraphOptions({ view }: { view: View }) {
     >
       <PopoverTrigger asChild>
         <span className="inline-flex">
-          <IconButton label={t("Graph options")} size="icon-sm" className={cn(others && "text-primary")}>
+          <IconButton label={t("Graph options")} size="icon-sm" className={cn((others || fold) && "text-primary")}>
             <SlidersHorizontal />
           </IconButton>
         </span>
@@ -492,6 +493,14 @@ function GraphOptions({ view }: { view: View }) {
             <label className={cn("flex items-center gap-2 text-body", !others && "text-faint-foreground")}>
               <Checkbox disabled={!others} checked={remotes} onCheckedChange={(v) => prefs.set({ remoteBranches: v === true })} />
               {t("Include remote branches")}
+            </label>
+            <div className="border-t" />
+            <label className="flex items-center gap-3 text-body">
+              <span className="flex-1">
+                {t("Fold merged commits")}
+                <span className="block text-caption text-faint-foreground">{t("Each branch shows only its own line; open a merge to see what it brought in")}</span>
+              </span>
+              <Switch checked={fold} onCheckedChange={(v) => prefs.set({ foldMerges: v })} />
             </label>
           </div>
         )}
@@ -551,6 +560,19 @@ const selectItem = (it: Item) => ui.set({ selection: selectionOf(it), focusArea:
 /** Click (module-level so memoised rows get a stable callback): open the row or deselect it. */
 const clickItem = (it: Item) => pickRow(selectionOf(it))
 
+/** Rows the graph has loaded, so a merge opened deep down stays loaded in the new layout. */
+let loadedRows = 0
+const NO_EXPANDED: string[] = []
+/** Open or close a folded merge (module-level so memoised rows get a stable callback). */
+const toggleMerge = (id: string) =>
+  ui.set((s) => {
+    const pid = s.projectId
+    if (!pid) return {}
+    const open = s.expandedMerges[pid] ?? []
+    const next = open.includes(id) ? open.filter((m) => m !== id) : [...open, id]
+    return { expandedMerges: { ...s.expandedMerges, [pid]: next }, historyDepth: loadedRows }
+  })
+
 function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; trunk: Trunk | null; overview: Overview; path: string | null }) {
   const { projectId, dirtyFiles, compare } = view
   // A branch with an open pull request: its "everything since" row offers the PR itself.
@@ -559,6 +581,9 @@ function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; tru
   const showCompare = view.showCompare && !path
   const others = useStore(prefs, (s) => s.otherBranches)
   const remotes = useStore(prefs, (s) => s.remoteBranches)
+  const fold = useStore(prefs, (s) => s.foldMerges)
+  const expanded = useStore(ui, (s) => (projectId && s.expandedMerges[projectId]) || NO_EXPANDED)
+  const depth = useStore(ui, (s) => s.historyDepth)
   // In a file's history the uncommitted row shows only when that file is among the uncommitted changes.
   const worktree = useChanges(projectId, path && dirtyFiles > 0 && tab.tree ? { kind: "worktree", tree: tab.tree.path } : null)
   const fileDirty = !!worktree.data?.some((f) => f.path === path)
@@ -571,12 +596,19 @@ function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; tru
     allBranches: others,
     remotes: others && remotes,
     path,
+    // A file's history is never folded.
+    fold: fold && !path,
+    expanded: fold && !path ? expanded : NO_EXPANDED,
+    depth,
   })
   const selection = useStore(ui, (s) => s.selection)
   const query = useStore(ui, (s) => s.query).trim().toLowerCase()
   const scroller = useRef<HTMLDivElement>(null)
   const rows = useMemo(() => history.data?.pages.flatMap((p) => p.rows), [history.data])
   const capped = history.data?.pages.at(-1)?.capped ?? false
+  useEffect(() => {
+    loadedRows = rows?.length ?? 0
+  }, [rows])
   const items: Item[] = useMemo(
     () => [...(showCompare ? [{ kind: "compare" } as Item] : []), ...(rows ?? []).map((row): Item => ({ kind: "row", row }))],
     [rows, showCompare],
@@ -658,6 +690,7 @@ function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; tru
               dirtyFiles={path ? 0 : dirtyFiles}
               treePath={tab.tree?.path}
               onSelect={clickItem}
+              onToggle={toggleMerge}
             />
           )
         })}
@@ -687,6 +720,8 @@ const GraphRow = memo(function GraphRow(p: {
   dirtyFiles: number
   treePath: string | undefined
   onSelect: (it: Item) => void
+  /** Open or close a folded merge. */
+  onToggle: (id: string) => void
 }) {
   const style = { transform: `translateY(${p.top}px)` }
   const base = "absolute inset-x-0 top-0 flex h-[26px] items-center gap-2 whitespace-nowrap pr-3 text-small"
@@ -732,8 +767,24 @@ const GraphRow = memo(function GraphRow(p: {
   return (
     <div style={style} className={cn(base, tone, p.dim && "opacity-35")} onClick={() => p.onSelect(p.item)}>
       <Lanes row={r} width={p.width} isHead={p.isHead} isWorktree={false} />
+      {r.folded !== undefined && (
+        <Tooltip content={r.folded ? t("Show the commits this merge brought in") : t("Hide the commits this merge brought in")}>
+          <button
+            aria-label={r.folded ? t("Show the commits this merge brought in") : t("Hide the commits this merge brought in")}
+            aria-expanded={!r.folded}
+            onClick={(e) => {
+              e.stopPropagation()
+              p.onToggle(r.id)
+            }}
+            className="-mx-1 inline-flex size-5 shrink-0 items-center justify-center rounded-xs text-faint-foreground hover:bg-accent hover:text-foreground"
+          >
+            {r.folded ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+          </button>
+        </Tooltip>
+      )}
       <RefPills labels={p.labels ?? []} trunk={p.trunk} />
-      <span className={cn("min-w-0 flex-1 truncate", r.parents.length > 1 && "text-muted-foreground")}>
+      {/* A merge on a folded chain stands for its branch: not muted like a plain merge. */}
+      <span className={cn("min-w-0 flex-1 truncate", r.parents.length > 1 && r.folded === undefined && "text-muted-foreground")}>
         <Highlight text={r.subject} query={p.query} />
       </span>
       <span className="shrink-0 font-mono text-caption text-faint-foreground @max-[470px]:hidden">{shortHash(r.id)}</span>

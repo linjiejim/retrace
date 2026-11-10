@@ -56,6 +56,10 @@ export interface UiState {
   /** The graph lists only this file's commits (set by picking a file in the files view). */
   historyFile: string | null
   settingsOpen: boolean
+  /** Merges folded: the ones opened, per project. */
+  expandedMerges: Record<string, string[]>
+  /** Rows the graph had loaded when a merge was opened or closed: the new history loads as deep. */
+  historyDepth: number
   adding: AddState | null
   /** A fetch from the remote is running. */
   fetching: boolean
@@ -80,6 +84,8 @@ export interface Prefs {
   /** Graph: also draw the other local branches, and optionally remote ones. */
   otherBranches: boolean
   remoteBranches: boolean
+  /** Graph: first-parent chains only, each merge folded until opened. */
+  foldMerges: boolean
   /** Look for a new release at launch and every few hours, and install it. */
   autoUpdate: boolean
   /** Groups folded in the projects list. */
@@ -107,6 +113,7 @@ const defaults: Prefs = {
   projectsCollapsed: false,
   otherBranches: false,
   remoteBranches: false,
+  foldMerges: false,
   autoUpdate: true,
   collapsedGroups: [],
   fileIcons: "color",
@@ -143,6 +150,8 @@ export const ui = createStore<UiState>({
   preview: null,
   historyFile: null,
   settingsOpen: false,
+  expandedMerges: {},
+  historyDepth: 0,
   adding: null,
   fetching: false,
 })

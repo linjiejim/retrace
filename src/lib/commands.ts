@@ -163,6 +163,7 @@ export const commands = {
   toggleContinuous: () => prefs.set((p) => ({ diffView: p.diffView === "all" ? "file" : "all" })),
   toggleOtherBranches: () => prefs.set((p) => ({ otherBranches: !p.otherBranches })),
   toggleRemotes: () => prefs.set((p) => ({ otherBranches: true, remoteBranches: !p.remoteBranches })),
+  toggleFoldMerges: () => prefs.set((p) => ({ foldMerges: !p.foldMerges })),
   /** Back to the first-run view: the sketch layout, projects shown, diff closed. */
   resetLayout: () => {
     prefs.set({ layout: DEFAULT_LAYOUT, projectsCollapsed: false })

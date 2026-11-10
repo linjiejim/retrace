@@ -153,6 +153,10 @@ pub struct HistoryRow {
     pub color: u8,
     /// `[kind, from, to, color]`, kind: 0 pass-through, 1 into the node, 2 out of the node, 3 cut-off edge.
     pub segs: Vec<[u16; 4]>,
+    /// With merges folded, a merge on a first-parent chain: true while what it merged is hidden,
+    /// false once expanded. Absent on every other row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folded: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
