@@ -1,9 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, FolderGit2, GitBranch, GitCompareArrows, History, House, PanelLeftOpen, Pin, PinOff, RefreshCw, Search, SlidersHorizontal, Tag, X } from "lucide-react"
+import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, FolderGit2, GitBranch, GitCompareArrows, GitPullRequest, History, House, PanelLeftOpen, Pin, PinOff, RefreshCw, Search, SlidersHorizontal, Tag, X } from "lucide-react"
 import { api } from "@/lib/api"
-import { pickRow, run, showFileHistory } from "@/lib/commands"
+import { openPullRequest, pickRow, run, showFileHistory } from "@/lib/commands"
 import { absoluteTime, ago, relativeTime, shortHash, tildify } from "@/lib/format"
 import { keyNav } from "@/lib/keys"
 import { prefs, selectionKey, ui, useStore, type Selection } from "@/lib/store"
@@ -23,6 +23,7 @@ import { Tooltip } from "@/components/ui/tooltip"
 import { notify } from "@/components/ui/toast"
 import { PanelHeader } from "@/components/layout/LayoutView"
 import { ArchiveMenu } from "./ArchiveMenu"
+import { PrMenu } from "./PullRequests"
 import { Lanes, lanesWidth, ROW_H } from "./Lanes"
 
 type View = ReturnType<typeof useProjectView>
@@ -50,6 +51,8 @@ export function GraphPanel() {
         <StateView kind="error" description={String(overview.error?.message ?? "")} onRetry={() => overview.refetch()} />
       ) : !overview.data ? (
         <GraphSkeleton />
+      ) : tab?.kind === "pr" && !tab.head ? (
+        view.prError ? <StateView kind="error" description={view.prError.message} onRetry={view.retryPr} /> : <GraphSkeleton />
       ) : tab ? (
         <>
           {historyFile && <FileHistoryBar path={historyFile} />}
@@ -103,6 +106,8 @@ function TabsBar({ view }: { view: View }) {
   })
   const mergedBranchTab = branchTab && removableNames.has(branchTab.label) ? branchTab : null
   const listBranchTab = mergedBranchTab ? null : branchTab
+  const prTab = tab?.kind === "pr" ? tab : null
+  const pulls = view.pulls.data
 
   const unkeep = async (name: string) => {
     try {
@@ -136,6 +141,11 @@ function TabsBar({ view }: { view: View }) {
         >
           <GroupTrigger icon={<GitBranch />} label={t("Branches")} count={others.length} current={listBranchTab} trunk={trunk} />
         </BranchPicker>
+      )}
+      {ov.webUrl && (
+        <PrMenu pulls={view.pulls} webUrl={ov.webUrl} current={prTab?.prNumber ?? null} onOpen={openPullRequest}>
+          <GroupTrigger icon={<GitPullRequest />} label={t("PRs")} count={pulls?.state === "ok" ? pulls.items.length : null} current={prTab} trunk={trunk} />
+        </PrMenu>
       )}
       <span data-tauri-drag-region className="h-full min-w-2 flex-1" />
     </div>
@@ -198,7 +208,7 @@ function GroupTrigger({
   trunk,
   className,
   ...rest
-}: React.ComponentProps<"button"> & { icon: React.ReactNode; label: string; count: number; current: Tab | null; trunk: Trunk | null }) {
+}: React.ComponentProps<"button"> & { icon: React.ReactNode; label: string; count: number | null; current: Tab | null; trunk: Trunk | null }) {
   return (
     <button
       {...rest}
@@ -217,7 +227,7 @@ function GroupTrigger({
       ) : (
         <>
           <span className="@max-[520px]/header:hidden">{label}</span>
-          <span className="tabular text-faint-foreground">{count}</span>
+          {count !== null && <span className="tabular text-faint-foreground">{count}</span>}
         </>
       )}
       <ChevronDown />
@@ -633,6 +643,7 @@ function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; tru
               trunk={trunk}
               isHead={it.kind === "row" && it.row.id === tab.head && dirtyFiles === 0}
               compareAhead={compare?.ahead ?? 0}
+              compareLabel={tab.kind === "pr" ? t("Everything in PR #{n}", { n: tab.prNumber ?? "" }) : t("Everything since {trunk}", { trunk: trunk?.name ?? "" })}
               dirtyFiles={path ? 0 : dirtyFiles}
               treePath={tab.tree?.path}
               onSelect={clickItem}
@@ -659,6 +670,7 @@ const GraphRow = memo(function GraphRow(p: {
   trunk: Trunk | null
   isHead: boolean
   compareAhead: number
+  compareLabel: string
   dirtyFiles: number
   treePath: string | undefined
   onSelect: (it: Item) => void
@@ -672,7 +684,7 @@ const GraphRow = memo(function GraphRow(p: {
         <span className="flex shrink-0 justify-start pl-[5px] text-primary" style={{ width: p.width }}>
           <GitCompareArrows className="size-4" />
         </span>
-        <span className="min-w-0 flex-1 truncate font-medium">{t("Everything since {trunk}", { trunk: p.trunk?.name ?? "" })}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">{p.compareLabel}</span>
         <span className="shrink-0 text-caption tabular text-faint-foreground">{tp("{n} commit", "{n} commits", p.compareAhead)}</span>
       </div>
     )

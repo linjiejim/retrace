@@ -1,6 +1,6 @@
 import { keepPreviousData, useInfiniteQuery, useQuery, type QueryClient } from "@tanstack/react-query"
 import { api } from "@/lib/api"
-import type { BranchRef, BranchStatus, Overview, Target, TreeStatus, Trunk, TrunkCompare, Worktree } from "@/lib/types"
+import type { BranchRef, BranchStatus, Overview, PreparedPr, PullRequest, Target, TreeStatus, Trunk, TrunkCompare, Worktree } from "@/lib/types"
 
 export const targetKey = (t: Target | null) =>
   !t ? "" : t.kind === "commit" ? `c:${t.hash}` : t.kind === "worktree" ? `w:${t.tree}` : `x:${t.base}:${t.tip}`
@@ -101,6 +101,26 @@ export const useFileContent = (id: string | null, target: Target | null, path: s
     staleTime: target?.kind === "worktree" ? 5_000 : Infinity,
   })
 
+/**
+ * Open pull requests. `gh` takes a second or two and goes over the network, so file-system events
+ * don't refresh it: it goes stale after two minutes and is read again on ⌘R or when the menu opens.
+ */
+export const usePullRequests = (id: string | null, enabled: boolean) =>
+  useQuery({ queryKey: ["pulls", id], queryFn: () => api.pullRequests(id!), enabled: enabled && !!id, staleTime: 120_000 })
+
+export const usePullRequest = (id: string | null, n: number | null) =>
+  useQuery({ queryKey: ["pull", id, n], queryFn: () => api.pullRequest(id!, n!), enabled: !!id && !!n, staleTime: 60_000 })
+
+/** Its commits are here (fetched as objects if they weren't); keyed by the commits, so it never goes stale. */
+export const usePreparedPr = (id: string | null, pr: PullRequest | undefined) =>
+  useQuery({
+    queryKey: ["preparedPr", id, pr?.number, pr?.headRefOid, pr?.baseRefOid],
+    queryFn: () => api.preparePr(id!, pr!),
+    enabled: !!id && !!pr,
+    staleTime: Infinity,
+    retry: false,
+  })
+
 export const usePrefs = () => useQuery({ queryKey: ["prefs"], queryFn: api.getPrefs, staleTime: Infinity })
 
 /** After a file-system or fetch event: refresh what can have changed for this project. */
@@ -125,19 +145,32 @@ export function invalidateProject(qc: QueryClient, id: string, opts: { git: bool
 
 export interface Tab {
   key: string
-  kind: "tree" | "branch"
-  /** Branch name, or the folder name for a detached worktree. */
+  kind: "tree" | "branch" | "pr"
+  /** Branch name, the folder name for a detached worktree, or `#N` for a pull request. */
   label: string
+  /** A pull request's head only once its commits are here. */
   head: string | null
   tree?: Worktree
   status?: TreeStatus
   branch?: BranchRef
   /** Can't be closed (the trunk tab of a bare repository). */
   pinned?: boolean
+  /** The pull request tab: its number always, the rest once read. */
+  prNumber?: number
+  pr?: PullRequest
+  prepared?: PreparedPr
 }
 
 export const treeKey = (path: string) => `tree:${path}`
 export const branchKey = (name: string) => `branch:${name}`
+export const prKey = (n: number) => `pr:${n}`
+
+/** The pull request opened as a tab, as far as it has loaded. */
+export interface PrSlot {
+  number: number
+  pr: PullRequest | undefined
+  prepared: PreparedPr | undefined
+}
 
 /**
  * A linked worktree with nothing uncommitted whose HEAD is already in the trunk: safe to delete.
@@ -154,7 +187,7 @@ export function isArchived(tab: Tab, trunk: Trunk | null): boolean {
   return s.files === 0 && !s.operation && merged
 }
 
-export function buildTabs(ov: Overview | undefined, statuses: TreeStatus[] | undefined, branchTabs: string[]): Tab[] {
+export function buildTabs(ov: Overview | undefined, statuses: TreeStatus[] | undefined, branchTabs: string[], prSlot: PrSlot | null = null): Tab[] {
   if (!ov) return []
   const tabs: Tab[] = ov.trees
     .filter((t) => !t.bare)
@@ -175,10 +208,17 @@ export function buildTabs(ov: Overview | undefined, statuses: TreeStatus[] | und
     const b = ov.branches.find((x) => x.name === name)
     if (b) tabs.push({ key: branchKey(name), kind: "branch", label: name, head: b.tip, branch: b })
   }
+  // Listed while it loads, so the tab doesn't fall back to the main tree in the meantime.
+  if (prSlot) {
+    const { number, pr, prepared } = prSlot
+    tabs.push({ key: prKey(number), kind: "pr", label: pr ? `#${number} ${pr.title}` : `#${number}`, head: pr && prepared ? pr.headRefOid : null, prNumber: number, pr, prepared })
+  }
   return tabs
 }
 
 export function compareOf(tab: Tab | undefined, branchCompare: TrunkCompare | undefined): TrunkCompare | null {
   if (!tab) return null
+  // A pull request is compared with its own base, which needn't be the trunk.
+  if (tab.kind === "pr") return tab.prepared ? { ahead: tab.prepared.ahead, behind: 0, integration: "none" } : null
   return tab.kind === "tree" ? (tab.status?.trunk ?? null) : (branchCompare ?? null)
 }

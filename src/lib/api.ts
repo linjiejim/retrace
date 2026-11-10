@@ -17,8 +17,11 @@ import type {
   HistoryPage,
   Overview,
   Prefs,
+  PreparedPr,
   Project,
   ProjectSummary,
+  PullRequest,
+  PullRequests,
   RepoChanged,
   Target,
   TreeStatus,
@@ -101,6 +104,13 @@ export const api = {
   /** `old`: the version the target is compared with (parent, HEAD, merge base). `null` when the file isn't there. */
   fileContent: (id: string, target: Target, path: string, side: "new" | "old", oldPath?: string | null) =>
     call<FileContent | null>("fileContent", { id, target, path, side, oldPath: oldPath ?? null }),
+  /** Open pull requests through the user's `gh`; the state says when it isn't available. */
+  pullRequests: (id: string) => call<PullRequests>("pullRequests", { id }),
+  /** One pull request, with its description. */
+  pullRequest: (id: string, number: number) => call<PullRequest>("pullRequest", { id, number }),
+  /** Fetches the pull request's commits (objects only) when they aren't here yet. */
+  preparePr: (id: string, pr: PullRequest) =>
+    call<PreparedPr>("preparePr", { id, number: pr.number, head: pr.headRefOid, base: pr.baseRefOid, baseRef: pr.baseRefName }),
   openUrl: (url: string) => call<null>("openUrl", { url }),
   /** Language of error messages from the backend. */
   setLanguage: (lang: "zh" | "en") => call<null>("setLanguage", { lang }),

@@ -254,3 +254,56 @@ export interface FileContent {
   binary: boolean
   tooLarge: boolean
 }
+
+/** A pull request on GitHub, as `gh` reports it. */
+export interface PullRequest {
+  number: number
+  title: string
+  author: string
+  state: "open" | "merged" | "closed"
+  isDraft: boolean
+  headRefName: string
+  headRefOid: string
+  baseRefName: string
+  /** The base tip GitHub compares with (for a merged PR: as it was before the merge). */
+  baseRefOid: string
+  /** From a fork: its branch isn't one of ours. */
+  isCrossRepository: boolean
+  headOwner: string | null
+  reviewDecision: "approved" | "changesRequested" | "reviewRequired" | null
+  mergeable: "mergeable" | "conflicting" | "unknown"
+  additions: number
+  deletions: number
+  changedFiles: number
+  checks: Check[]
+  createdAt: number | null
+  updatedAt: number | null
+  mergedAt: number | null
+  closedAt: number | null
+  url: string
+  /** Only when one pull request is read. */
+  body: string | null
+}
+
+export type CheckState = "success" | "failure" | "pending" | "skipped" | "neutral" | "cancelled"
+
+export interface Check {
+  name: string
+  workflow: string | null
+  state: CheckState
+  url: string | null
+  startedAt: number | null
+  completedAt: number | null
+}
+
+export interface PullRequests {
+  /** `noGh`: gh isn't installed; `noAuth`: not logged in; `noGithub`: no GitHub remote. */
+  state: "ok" | "noGh" | "noAuth" | "noGithub" | "error"
+  message: string | null
+  items: PullRequest[]
+}
+
+/** The pull request's commits are here; `ahead` of them on top of its base. */
+export interface PreparedPr {
+  ahead: number
+}

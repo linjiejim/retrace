@@ -33,10 +33,12 @@ export type AddState = { step: "path" } | { step: "pick"; candidates: Candidate[
 
 export interface UiState {
   projectId: string | null
-  /** Tab per project: `tree:<path>` or `branch:<name>`. */
+  /** Tab per project: `tree:<path>`, `branch:<name>` or `pr:<number>`. */
   tabs: Record<string, string>
   /** The branch opened from the 分支 menu, per project (at most one). */
   branchTabs: Record<string, string[]>
+  /** The pull request opened as a tab, per project (at most one). */
+  prTabs: Record<string, number>
   selection: Selection | null
   file: { path: string; oldPath: string | null } | null
   /** Bumped when the user picks a file, so continuous reading scrolls to it (scrolling itself doesn't). */
@@ -129,6 +131,7 @@ export const ui = createStore<UiState>({
   projectId: localStorage.getItem(LAST_PROJECT),
   tabs: {},
   branchTabs: {},
+  prTabs: {},
   selection: null,
   file: null,
   jump: 0,

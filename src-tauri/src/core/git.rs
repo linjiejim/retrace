@@ -246,20 +246,15 @@ pub fn run_with_input(dir: &Path, args: &[&str], input: Vec<u8>) -> Result<Vec<u
 /// A network call that ran to the end, successfully or not.
 pub struct Finished {
     pub ok: bool,
+    /// The exit code; `None` when a signal ended it.
+    pub code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
 }
 
-/// Long-running network calls (fetch, push) get a hard timeout so a stuck remote can't pile up
-/// processes. Only running out of time or failing to start is an error; a git failure is `ok: false`.
-pub fn run_with_timeout_output(dir: &Path, args: &[&str], timeout: Duration) -> Result<Finished> {
-    let _pass = PROCESSES.enter();
-    let mut child = command(dir, args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| tr!("无法运行 git（{}）", "Can't run git ({})", binary().display()))?;
-    // Drained while it runs, so a full pipe can't stall it.
+/// Waits for a spawned child with piped stdout and stderr, draining both while it runs so a full
+/// pipe can't stall it. `None`: it ran past `timeout` and was stopped.
+pub fn wait_for(mut child: std::process::Child, timeout: Duration) -> std::io::Result<Option<Finished>> {
     let drain = |pipe: Option<Box<dyn Read + Send>>| {
         std::thread::spawn(move || {
             let mut text = String::new();
@@ -274,14 +269,29 @@ pub fn run_with_timeout_output(dir: &Path, args: &[&str], timeout: Duration) -> 
     let started = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
-            return Ok(Finished { ok: status.success(), stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() });
+            return Ok(Some(Finished { ok: status.success(), code: status.code(), stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() }));
         }
         if started.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
-            bail!(tr!("git {} 超时（{} 秒）", "git {} timed out ({} s)", args.first().copied().unwrap_or(""), timeout.as_secs()));
+            return Ok(None);
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Long-running network calls (fetch, push) get a hard timeout so a stuck remote can't pile up
+/// processes. Only running out of time or failing to start is an error; a git failure is `ok: false`.
+pub fn run_with_timeout_output(dir: &Path, args: &[&str], timeout: Duration) -> Result<Finished> {
+    let _pass = PROCESSES.enter();
+    let child = command(dir, args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| tr!("无法运行 git（{}）", "Can't run git ({})", binary().display()))?;
+    match wait_for(child, timeout)? {
+        Some(done) => Ok(done),
+        None => bail!(tr!("git {} 超时（{} 秒）", "git {} timed out ({} s)", args.first().copied().unwrap_or(""), timeout.as_secs())),
     }
 }
 

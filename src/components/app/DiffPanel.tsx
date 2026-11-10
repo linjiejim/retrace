@@ -22,6 +22,7 @@ import { PanelHeader } from "@/components/layout/LayoutView"
 import { STATUS_TONE } from "./ChangesPanel"
 import { RefPills } from "./GraphPanel"
 import { FilePreview, ImageCompare } from "./Preview"
+import { PrInfo } from "./PullRequests"
 
 // @pierre/diffs + Shiki are the heaviest part of the app: load them after first paint.
 const Pool = lazy(() => import("./DiffViews").then((m) => ({ default: m.Pool })))
@@ -38,7 +39,12 @@ export function DiffPanel() {
   const mode = useStore(prefs, (s) => s.changesMode)
   const target = targetOf(selection, tab, trunk)
   const changes = useChanges(projectId, target)
-  const info = projectId && selection?.kind === "commit" ? <CommitInfo projectId={projectId} hash={selection.hash} trunk={trunk} /> : null
+  const info =
+    projectId && selection?.kind === "commit" ? (
+      <CommitInfo projectId={projectId} hash={selection.hash} trunk={trunk} />
+    ) : projectId && selection?.kind === "compare" && tab?.kind === "pr" && tab.pr ? (
+      <PrInfo projectId={projectId} pr={tab.pr} target={target} />
+    ) : null
 
   return (
     <section className="flex h-full min-w-0 flex-col">

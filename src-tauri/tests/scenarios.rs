@@ -968,3 +968,100 @@ fn groups_hold_projects_and_survive_reordering() {
     assert_eq!(call(&f, "listProjects", json!({})).as_array().unwrap().len(), 2);
     assert_eq!(call(&f, "listGroups", json!({})).as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn a_pull_requests_commits_come_in_as_objects_only() {
+    let f = fixture("pr-objects");
+    let root = f.main.parent().unwrap().to_path_buf();
+    let origin = root.join("origin.git");
+    sh(&root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+    sh(&f.main, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    sh(&f.main, &["push", "-q", "-u", "origin", "main"]);
+    // A fork's pull request: its commits reach origin only as refs/pull/7/head.
+    let fork = root.join("fork");
+    sh(&root, &["clone", "-q", "-b", "main", origin.to_str().unwrap(), fork.to_str().unwrap()]);
+    commit(&fork, "src/fork.rs", "f1\n", "fork 1");
+    let head = commit(&fork, "src/fork.rs", "f1\nf2\n", "fork 2");
+    sh(&fork, &["push", "-q", "origin", "HEAD:refs/pull/7/head"]);
+    // origin's main moved on too: fetching the base branch must not move origin/main here.
+    let moved_base = commit(&fork, "src/other.rs", "x\n", "elsewhere");
+    sh(&fork, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+    let base = sh(&f.main, &["rev-parse", "main"]);
+
+    call(&f, "addPath", json!({ "path": f.main }));
+    let id = f.main.to_string_lossy().to_string();
+    let refs_before = sh(&f.main, &["for-each-ref"]);
+    let fetch_head = f.main.join(".git/FETCH_HEAD");
+    assert!(!fetch_head.exists());
+    let has = |oid: &str| Command::new("git").args(["cat-file", "-e", &format!("{oid}^{{commit}}")]).current_dir(&f.main).output().unwrap().status.success();
+    assert!(!has(&head), "the PR's commits start out missing");
+
+    let prepare = |head: &str, base: &str| dispatch(&f.state, "preparePr", json!({ "id": id, "number": 7, "head": head, "base": base, "baseRef": "main" }));
+    let out = prepare(&head, &base).unwrap();
+    assert_eq!(out["ahead"], 2);
+    assert_eq!(sh(&f.main, &["for-each-ref"]), refs_before, "no ref written or moved");
+    assert!(!fetch_head.exists(), "no FETCH_HEAD");
+
+    let changes = call(&f, "changes", json!({ "id": id, "target": { "kind": "compare", "base": base, "tip": head } }));
+    assert_eq!(changes.as_array().unwrap().len(), 1);
+    assert_eq!(changes[0]["path"], "src/fork.rs");
+
+    // A base commit that isn't here comes from the base branch, still without moving origin/main.
+    assert!(!has(&moved_base));
+    prepare(&head, &moved_base).unwrap();
+    assert!(has(&moved_base));
+    assert_eq!(sh(&f.main, &["for-each-ref"]), refs_before, "origin/main stays where the last fetch left it");
+
+    // Ids that aren't full hex never reach git; commits nobody has are an error, not a crash.
+    assert!(prepare("--upload-pack=touch /tmp/x", &base).is_err());
+    assert!(prepare(&head[..7], &base).is_err());
+    assert!(prepare(&"0".repeat(40), &base).is_err());
+    assert_eq!(sh(&f.main, &["for-each-ref"]), refs_before);
+}
+
+#[test]
+fn pull_requests_need_a_github_remote() {
+    let f = fixture("pr-no-github");
+    call(&f, "addPath", json!({ "path": f.main }));
+    let id = f.main.to_string_lossy().to_string();
+    let list = call(&f, "pullRequests", json!({ "id": id }));
+    assert_eq!(list["state"], "noGithub");
+    assert_eq!(list["items"], json!([]));
+    assert!(dispatch(&f.state, "pullRequest", json!({ "id": id, "number": 1 })).is_err());
+}
+
+#[test]
+fn a_pull_requests_fetch_leaves_submodules_alone() {
+    let f = fixture("pr-submodule");
+    let root = f.main.parent().unwrap().to_path_buf();
+    let lib = root.join("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    sh(&lib, &["init", "-q", "-b", "main"]);
+    commit(&lib, "lib.txt", "1\n", "lib 1");
+    let origin = root.join("origin.git");
+    sh(&root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+    // Let submodule fetches over file:// through, so a recursive fetch would really happen.
+    sh(&f.main, &["config", "protocol.file.allow", "always"]);
+    sh(&f.main, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", lib.to_str().unwrap(), "sub"]);
+    sh(&f.main.join("sub"), &["config", "protocol.file.allow", "always"]);
+    sh(&f.main, &["commit", "-q", "-m", "add sub"]);
+    sh(&f.main, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    sh(&f.main, &["push", "-q", "-u", "origin", "main"]);
+    let base = sh(&f.main, &["rev-parse", "main"]);
+
+    // The pull request moves the submodule to a commit the submodule here hasn't fetched.
+    let bumped = commit(&lib, "lib.txt", "1\n2\n", "lib 2");
+    let fork = root.join("fork");
+    sh(&root, &["clone", "-q", "-b", "main", origin.to_str().unwrap(), fork.to_str().unwrap()]);
+    sh(&fork, &["update-index", "--cacheinfo", &format!("160000,{bumped},sub")]);
+    sh(&fork, &["commit", "-q", "-m", "bump sub"]);
+    let head = sh(&fork, &["rev-parse", "HEAD"]);
+    sh(&fork, &["push", "-q", "origin", "HEAD:refs/pull/9/head"]);
+
+    call(&f, "addPath", json!({ "path": f.main }));
+    let id = f.main.to_string_lossy().to_string();
+    let sub = f.main.join("sub");
+    let refs_before = (sh(&f.main, &["for-each-ref"]), sh(&sub, &["for-each-ref"]));
+    call(&f, "preparePr", json!({ "id": id, "number": 9, "head": head, "base": base, "baseRef": "main" }));
+    assert_eq!((sh(&f.main, &["for-each-ref"]), sh(&sub, &["for-each-ref"])), refs_before, "no ref written here or in the submodule");
+}

@@ -16,6 +16,7 @@ Agents now write code in a dozen worktrees at once. Retrace puts every project, 
 - **The integration branch stays left.** `main` (or whatever you pick) owns column 0 of a compact one-line graph. Other branches join only when you ask, local first, remote optionally.
 - **Worktrees and branches, folded.** The main tree, then *Active* (uncommitted work, or commits not yet in `main`), *Merged* (clean worktrees and local branches already in `main`, squash merges included) and *Branches* without a worktree still in progress. Merged ones can be removed safely: no `--force`, everything checked again first, a branch deleted only while it still points at the commit you saw, and Undo right after. `develop`, `release/*` and branches you keep are never offered.
 - **Commits as you'd review them.** Click a row to open its message and diff below the graph; click it again to close. The body is shown in full (fold it if you like), and squash or merge commits get a **PR #N** button that opens the pull request on GitHub.
+- **Pull requests, read here.** On a GitHub project, *PRs* lists the open pull requests through your own GitHub CLI (`gh`): Retrace never sees a token. Pick one to read it like a branch: its commits in the graph, its whole change exactly as GitHub's *Files changed* shows it, and its description, checks and review status above the diff.
 - **Diffs that read well.** Side by side by default, no wrapping, syntax highlighted off the main thread. Read one file at a time or every change in a row. Changed images show before and after.
 - **Browse any version.** Switch *Changes* to *Files* to see the whole tree at the selected commit (or on disk for uncommitted work): filter, fold, and preview code, images, and Markdown rendered like GitHub with its relative links and images. Pick a file and the graph narrows to the commits that changed it, so you can step through its history diff by diff. File icons come in four themes (Settings → File icons).
 - **Your layout.** Drag any view's grip to dock it on another view's edge or swap them. Each view keeps a minimum size, so nothing gets squeezed.
@@ -34,7 +35,7 @@ Every git call runs with `GIT_OPTIONAL_LOCKS=0`, so Retrace never takes the `ind
 
 There are exactly two writes:
 
-- `git fetch`, which only updates remote-tracking branches (turn it off in Settings);
+- `git fetch`, which only updates remote-tracking branches (turn it off in Settings). Opening a pull request whose commits haven't been fetched yet (pushed since the last fetch, from a fork, or its branch deleted) fetches just those commits, `refs/pull/<N>/head` and, if needed, its base branch, without writing any ref or `FETCH_HEAD` and without touching submodules;
 - removing merged worktrees and deleting merged local branches, only after you confirm (and restoring a branch you just deleted). If you tick it, a deleted branch's own copy on origin goes too (`git push origin :<branch>`, guarded by `--force-with-lease`), only when origin still has it where the last fetch saw it and its commits are in the trunk.
 
 ## Install

@@ -1,9 +1,11 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { Tab } from "@/hooks/queries"
+import type { Overview, PullRequest, Trunk } from "./types"
 
 vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} })
 
-const { commands, pickRow } = await import("./commands")
+const { commands, openPullRequest, pickRow } = await import("./commands")
+const { buildTabs, compareOf } = await import("@/hooks/queries")
 const { ui } = await import("./store")
 const { targetOf } = await import("@/hooks/use-project-view")
 const initial = ui.get()
@@ -70,5 +72,43 @@ describe("unselected changes target", () => {
   it("does not invent a worktree for a branch without one", () => {
     expect(targetOf(null, { key: "branch:feature", kind: "branch", label: "feature", head: "head" }, null)).toBeNull()
     expect(targetOf(null, undefined, null)).toBeNull()
+  })
+})
+
+describe("pull request tab", () => {
+  const trunk = { name: "main", tip: "trunktip" } as Trunk
+  const pr = { number: 7, title: "Stacked", headRefOid: "prhead", baseRefOid: "prbase", baseRefName: "feat/base" } as PullRequest
+  const overview = { trees: [], branches: [], trunk } as unknown as Overview
+
+  it("is listed while it loads, with no head until its commits are here", () => {
+    const [loading] = buildTabs(overview, [], [], { number: 7, pr: undefined, prepared: undefined }).filter((t) => t.kind === "pr")
+    expect(loading).toMatchObject({ key: "pr:7", label: "#7", head: null })
+    expect(targetOf({ kind: "compare" }, loading, trunk)).toBeNull()
+    expect(compareOf(loading, undefined)).toBeNull()
+
+    const [ready] = buildTabs(overview, [], [], { number: 7, pr, prepared: { ahead: 3 } }).filter((t) => t.kind === "pr")
+    expect(ready).toMatchObject({ label: "#7 Stacked", head: "prhead" })
+    expect(compareOf(ready, undefined)).toEqual({ ahead: 3, behind: 0, integration: "none" })
+  })
+
+  it("compares with the pull request's own base, not the trunk", () => {
+    const tab: Tab = { key: "pr:7", kind: "pr", label: "#7", head: "prhead", prNumber: 7, pr, prepared: { ahead: 3 } }
+    expect(targetOf({ kind: "compare" }, tab, trunk)).toEqual({ kind: "compare", base: "prbase", tip: "prhead" })
+    expect(targetOf({ kind: "commit", hash: "c1" }, tab, trunk)).toEqual({ kind: "commit", hash: "c1" })
+    expect(targetOf(null, tab, trunk)).toBeNull()
+  })
+
+  it("opens with the diff shown, and picking it again brings its change back", () => {
+    ui.set({ projectId: "/repo", tabs: {}, prTabs: {} })
+    openPullRequest(7)
+    expect(ui.get()).toMatchObject({ tabs: { "/repo": "pr:7" }, prTabs: { "/repo": 7 }, selection: null, diffOpen: true })
+
+    ui.set({ selection: null, diffOpen: false })
+    openPullRequest(7)
+    expect(ui.get()).toMatchObject({ selection: { kind: "compare" }, diffOpen: true })
+
+    ui.set({ selection: { kind: "commit", hash: "c1" } })
+    openPullRequest(7)
+    expect(ui.get().selection).toEqual({ kind: "commit", hash: "c1" })
   })
 })

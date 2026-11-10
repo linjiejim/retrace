@@ -4,7 +4,7 @@
 use crate::tr;
 use super::config::{self, GroupEntry, Prefs, ProjectEntry};
 use super::model::*;
-use super::{cleanup, diff, files, git, history, repo, State};
+use super::{cleanup, diff, files, git, github, history, repo, State};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -353,6 +353,38 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let refs = repo::refs(&dir)?;
             let trunk = repo::resolve_trunk(&dir, entry.trunk.as_deref(), &refs, &trees).ok_or_else(|| anyhow!(tr!("没有找到集成分支", "No integration branch found")))?;
             json!(repo::compare_with_trunk(&dir, &trunk, &tip, &state.integration)?)
+        }
+        "pullRequests" => {
+            let Id { id } = args(a)?;
+            let dir = project_dir(state, &id)?;
+            let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
+            json!(github::list(&dir, repo::web_url(&dir, trunk.as_ref()).as_deref()))
+        }
+        "pullRequest" => {
+            #[derive(Deserialize)]
+            struct A {
+                id: String,
+                number: u32,
+            }
+            let A { id, number } = args(a)?;
+            let dir = project_dir(state, &id)?;
+            let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
+            json!(github::view(&dir, repo::web_url(&dir, trunk.as_ref()).as_deref(), number)?)
+        }
+        "preparePr" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct A {
+                id: String,
+                number: u32,
+                head: String,
+                base: String,
+                base_ref: String,
+            }
+            let A { id, number, head, base, base_ref } = args(a)?;
+            let dir = project_dir(state, &id)?;
+            let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
+            json!(github::prepare(&dir, repo::primary_remote(&dir, trunk.as_ref()).as_deref(), number, &head, &base, &base_ref)?)
         }
         "history" => {
             #[derive(Deserialize)]

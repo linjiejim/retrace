@@ -9,7 +9,7 @@ import { queryClient } from "./query"
 import { prefs, selectionKey, ui, type Selection } from "./store"
 import type { Overview, Project } from "./types"
 import { checkForUpdates } from "./updater"
-import { invalidateProject, summaryQuery } from "@/hooks/queries"
+import { invalidateProject, prKey, summaryQuery } from "@/hooks/queries"
 import { notify } from "@/components/ui/toast"
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -44,6 +44,24 @@ export function showFileHistory(path: string | null) {
 /** A web link, in the browser chosen in settings (the system default unless set). */
 export function openLink(url: string) {
   api.openUrl(url).catch((e) => notify.error(message(e)))
+}
+
+/** Open a pull request of the current project as its tab (one per project, like a branch). */
+export function openPullRequest(n: number) {
+  const id = ui.get().projectId
+  if (!id) return
+  // Already the shown tab: just show its change again (an empty selection would stay empty).
+  if (ui.get().tabs[id] === prKey(n)) return ui.set((s) => ({ diffOpen: true, selection: s.selection ?? { kind: "compare" } }))
+  ui.set((s) => ({
+    prTabs: { ...s.prTabs, [id]: n },
+    tabs: { ...s.tabs, [id]: prKey(n) },
+    selection: null,
+    file: null,
+    historyFile: null,
+    focusMode: false,
+    // Opened to read it: show its description and diff right away.
+    diffOpen: true,
+  }))
 }
 
 export function closeDiff() {
@@ -108,6 +126,9 @@ async function refresh() {
   const id = ui.get().projectId
   if (!id) return
   invalidateProject(queryClient, id, { git: true, trees: [] })
+  // Pull requests only refresh on request: gh goes over the network.
+  queryClient.invalidateQueries({ queryKey: ["pulls", id] })
+  queryClient.invalidateQueries({ queryKey: ["pull", id] })
   const ov = queryClient.getQueryData<Overview>(["overview", id])
   if (!ov?.hasRemote || ui.get().fetching) return
   ui.set({ fetching: true })

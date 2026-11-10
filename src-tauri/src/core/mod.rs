@@ -4,6 +4,7 @@ pub mod config;
 pub mod diff;
 pub mod files;
 pub mod git;
+pub mod github;
 pub mod graph;
 pub mod history;
 pub mod i18n;

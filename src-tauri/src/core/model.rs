@@ -325,3 +325,67 @@ pub struct FilePair {
     pub old: Option<Blob>,
     pub new: Option<Blob>,
 }
+
+/// A pull request on GitHub, as `gh` reports it.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequest {
+    pub number: u32,
+    pub title: String,
+    pub author: String,
+    /// `open` | `merged` | `closed`
+    pub state: &'static str,
+    pub is_draft: bool,
+    pub head_ref_name: String,
+    pub head_ref_oid: String,
+    pub base_ref_name: String,
+    /// The base branch's tip GitHub compares with (for a merged PR: as it was before the merge).
+    pub base_ref_oid: String,
+    /// From a fork: its branch isn't one of ours.
+    pub is_cross_repository: bool,
+    pub head_owner: Option<String>,
+    /// `approved` | `changesRequested` | `reviewRequired`
+    pub review_decision: Option<&'static str>,
+    /// `mergeable` | `conflicting` | `unknown`
+    pub mergeable: &'static str,
+    pub additions: u64,
+    pub deletions: u64,
+    pub changed_files: u64,
+    pub checks: Vec<Check>,
+    pub created_at: Option<i64>,
+    pub updated_at: Option<i64>,
+    pub merged_at: Option<i64>,
+    pub closed_at: Option<i64>,
+    pub url: String,
+    /// Only when one pull request is read.
+    pub body: Option<String>,
+}
+
+/// One CI check of a pull request's head commit (a check run or a commit status).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Check {
+    pub name: String,
+    pub workflow: Option<String>,
+    /// `success` | `failure` | `pending` | `skipped` | `neutral` | `cancelled`
+    pub state: &'static str,
+    pub url: Option<String>,
+    pub started_at: Option<i64>,
+    pub completed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequests {
+    /// `ok` | `noGh` (not installed) | `noAuth` (not logged in) | `noGithub` | `error`
+    pub state: &'static str,
+    pub message: Option<String>,
+    pub items: Vec<PullRequest>,
+}
+
+/// A pull request's commits are in the repository; `ahead` of them on top of its base.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedPr {
+    pub ahead: u32,
+}

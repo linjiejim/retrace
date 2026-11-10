@@ -23,7 +23,8 @@ const schema = {
   tagNames: (defaultSchema.tagNames ?? []).filter((tag) => tag !== "source" && tag !== "picture"),
   attributes: { ...defaultSchema.attributes, "*": [...(defaultSchema.attributes?.["*"] ?? []), "align"] },
 }
-export default function Markdown({ text, path, projectId, target }: { text: string; path: string; projectId: string; target: Target }) {
+/** `compact`: inline in a card (a pull request's description), without the page's own scroller and margins. */
+export default function Markdown({ text, path, projectId, target, compact }: { text: string; path: string; projectId: string; target: Target; compact?: boolean }) {
   const components: Components = {
     a: ({ href, children }) => (
       <a
@@ -42,13 +43,15 @@ export default function Markdown({ text, path, projectId, target }: { text: stri
     ),
     img: ({ src, alt, width, height }) => <RepoImage src={typeof src === "string" ? src : ""} alt={alt ?? ""} size={{ width, height }} from={path} projectId={projectId} target={target} />,
   }
+  const body = (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, [rehypeSanitize, schema]]} components={components}>
+      {text}
+    </ReactMarkdown>
+  )
+  if (compact) return <article className="markdown max-w-[860px]">{body}</article>
   return (
     <div className="selectable h-full overflow-y-auto">
-      <article className="markdown mx-auto max-w-[860px] px-8 py-6">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, [rehypeSanitize, schema]]} components={components}>
-          {text}
-        </ReactMarkdown>
-      </article>
+      <article className="markdown mx-auto max-w-[860px] px-8 py-6">{body}</article>
     </div>
   )
 }

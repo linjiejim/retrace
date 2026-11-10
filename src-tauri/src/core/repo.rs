@@ -522,11 +522,16 @@ pub fn last_commit_time(dir: &Path) -> Option<i64> {
 /// The repository's page on GitHub (or a GitHub Enterprise host), from the remote the trunk
 /// tracks (else `origin`, else the first remote). Credentials in the URL never make it out.
 pub fn web_url(dir: &Path, trunk: Option<&Trunk>) -> Option<String> {
+    let name = primary_remote(dir, trunk)?;
+    github_web_url(&git::text(dir, &["remote", "get-url", &name]).ok()?)
+}
+
+/// The remote `web_url` reads: the one the trunk tracks, else `origin`, else the first.
+pub fn primary_remote(dir: &Path, trunk: Option<&Trunk>) -> Option<String> {
     let remotes = git::text(dir, &["remote"]).ok()?;
     let names: Vec<&str> = remotes.lines().map(str::trim).filter(|n| !n.is_empty()).collect();
     let tracked = trunk.and_then(|t| t.tip_ref.split_once('/')).map(|(remote, _)| remote).filter(|r| names.contains(r));
-    let name = tracked.or_else(|| names.iter().copied().find(|n| *n == "origin")).or_else(|| names.first().copied())?;
-    github_web_url(&git::text(dir, &["remote", "get-url", name]).ok()?)
+    tracked.or_else(|| names.iter().copied().find(|n| *n == "origin")).or_else(|| names.first().copied()).map(str::to_string)
 }
 
 /// `git@github.com:o/r.git`, `ssh://git@github.com:22/o/r`, `https://token@github.com/o/r.git` → `https://github.com/o/r`.
