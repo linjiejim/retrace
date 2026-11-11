@@ -432,8 +432,13 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 fold: bool,
                 #[serde(default)]
                 expanded: Vec<String>,
+                /// Draw every other branch as one row at its tip; `open_branches` (tips) stay drawn in full.
+                #[serde(default)]
+                fold_branches: bool,
+                #[serde(default)]
+                open_branches: Vec<String>,
             }
-            let A { id, trunk_tip, tip, worktree_head, all_branches, remotes, offset, count, tips: snapshot, path, fold, expanded } = args(a)?;
+            let A { id, trunk_tip, tip, worktree_head, all_branches, remotes, offset, count, tips: snapshot, path, fold, expanded, fold_branches, open_branches } = args(a)?;
             let dir = project_dir(state, &id)?;
             let path = path.filter(|p| !p.is_empty());
             if path.as_deref().is_some_and(|p| p.starts_with('/') || p.contains('\0') || p.split('/').any(|s| s == "..")) {
@@ -447,27 +452,45 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let tips = match snapshot {
                 Some(t) => t,
                 None => {
-                    let mut t: Vec<String> = tip.into_iter().collect();
+                    let mut t: Vec<String> = tip.iter().cloned().collect();
                     if all_branches {
                         t.extend(history::branch_tips(&dir, remotes)?);
                     }
                     t
                 }
             };
-            if tips.iter().chain(&expanded).any(|t| t.starts_with('-')) {
+            if tips.iter().chain(&expanded).chain(&open_branches).any(|t| t.starts_with('-')) {
                 bail!(tr!("提交标识无效", "Invalid commit id"));
             }
             json!(state.history.page(history::Query {
                 dir: &dir,
                 trunk_tip: trunk_tip.as_deref(),
                 tips,
+                head: tip.as_deref(),
                 worktree_head: worktree_head.as_deref(),
                 path: path.as_deref(),
                 fold,
                 expanded,
+                fold_branches,
+                open_branches,
                 offset,
                 count: count.unwrap_or(500).clamp(1, 5000),
             })?)
+        }
+        "grepHistory" => {
+            #[derive(Deserialize)]
+            struct A {
+                id: String,
+                /// The trunk and the tips a history page was built from.
+                revs: Vec<String>,
+                query: String,
+            }
+            let A { id, revs, query } = args(a)?;
+            let dir = project_dir(state, &id)?;
+            if revs.iter().any(|r| r.starts_with('-')) {
+                bail!(tr!("提交标识无效", "Invalid commit id"));
+            }
+            json!(history::grep(&dir, &revs, &query)?)
         }
         "commit" => {
             #[derive(Deserialize)]

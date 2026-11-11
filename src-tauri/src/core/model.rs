@@ -157,6 +157,18 @@ pub struct HistoryRow {
     /// false once expanded. Absent on every other row.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub folded: Option<bool>,
+    /// With other branches folded, the tip of one of them. Absent on every other row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<BranchFold>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchFold {
+    /// Its own commits are hidden and this row stands for them (false once opened).
+    pub folded: bool,
+    /// Its own commits: neither the trunk nor the tab's HEAD has them (nor, while folded, an opened branch).
+    pub commits: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]

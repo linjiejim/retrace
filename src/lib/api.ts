@@ -86,7 +86,12 @@ export const api = {
     /** First parents only; `expanded` merges show what they brought in. */
     fold?: boolean
     expanded?: string[]
+    /** Every branch but the trunk and `tip` as one row; `openBranches` (tips) drawn in full. */
+    foldBranches?: boolean
+    openBranches?: string[]
   }) => call<HistoryPage>("history", a),
+  /** Commits among `revs` whose whole message holds `query` (any case). */
+  grepHistory: (id: string, revs: string[], query: string) => call<string[]>("grepHistory", { id, revs, query }),
   /** `moved`: a project dragged into or out of a group or the pinned ones, saved with the new order. */
   reorderProjects: (ids: string[], moved?: { id: string; group: string | null; pinned?: boolean }) => call<null>("reorderProjects", { ids, moved }),
   patch: (id: string, target: Target) => call<PatchText>("patch", { id, target }),

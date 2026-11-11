@@ -42,6 +42,7 @@ export function targetOf(sel: Selection | null, tab: Tab | undefined, trunk: Tru
   if (!sel) return tab.tree ? { kind: "worktree", tree: tab.tree.path } : null
   if (sel.kind === "commit") return { kind: "commit", hash: sel.hash }
   if (sel.kind === "worktree") return tab.tree ? { kind: "worktree", tree: tab.tree.path } : null
+  if (sel.kind === "branch") return trunk ? { kind: "compare", base: trunk.tip, tip: sel.tip } : { kind: "commit", hash: sel.tip }
   // A pull request: what GitHub's Files changed shows, against its own base.
   if (tab.kind === "pr") return tab.pr && tab.head ? { kind: "compare", base: tab.pr.baseRefOid, tip: tab.pr.headRefOid } : null
   return trunk && tab.head ? { kind: "compare", base: trunk.tip, tip: tab.head } : null

@@ -187,6 +187,7 @@ export const commands = {
   toggleOtherBranches: () => prefs.set((p) => ({ otherBranches: !p.otherBranches })),
   toggleRemotes: () => prefs.set((p) => ({ otherBranches: true, remoteBranches: !p.remoteBranches })),
   toggleFoldMerges: () => prefs.set((p) => ({ foldMerges: !p.foldMerges })),
+  toggleFoldBranches: () => prefs.set((p) => ({ otherBranches: true, foldBranches: !(p.otherBranches && p.foldBranches) })),
   /** Back to the first-run view: the sketch layout, projects shown, diff closed. */
   resetLayout: () => {
     prefs.set({ layout: DEFAULT_LAYOUT, projectsCollapsed: false })

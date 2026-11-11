@@ -18,6 +18,7 @@ const CHECKS: Partial<Record<CommandId, Checked>> = {
   toggleOtherBranches: (p) => p.otherBranches,
   toggleRemotes: (p) => p.otherBranches && p.remoteBranches,
   toggleFoldMerges: (p) => p.foldMerges,
+  toggleFoldBranches: (p) => p.otherBranches && p.foldBranches,
 }
 
 let generation = 0
@@ -134,6 +135,7 @@ export async function installMenu(): Promise<() => void> {
           await sep(),
           await check("toggleOtherBranches", "Show Other Branches in Graph"),
           await check("toggleRemotes", "Include Remote Branches"),
+          await check("toggleFoldBranches", "Fold Each Branch into One Row"),
           await check("toggleFoldMerges", "Fold Merged Commits"),
           await sep(),
           await item("resetLayout", "Restore Default Layout"),

@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, FolderGit2, GitBranch, GitCompareArrows, GitPullRequest, History, House, PanelLeftOpen, Pin, PinOff, RefreshCw, Search, SlidersHorizontal, Tag, X } from "lucide-react"
+import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, FolderGit2, GitBranch, GitCompareArrows, GitPullRequest, History, House, LetterText, PanelLeftOpen, Pin, PinOff, RefreshCw, Search, SlidersHorizontal, Tag, X } from "lucide-react"
 import { api } from "@/lib/api"
 import { openPullRequest, pickRow, run, showFileHistory } from "@/lib/commands"
 import { absoluteTime, ago, relativeTime, shortHash, tildify } from "@/lib/format"
@@ -10,7 +10,8 @@ import { prefs, selectionKey, ui, useStore, type Selection } from "@/lib/store"
 import { WORKTREE_ROW, type BranchStatus, type HistoryRow, type Overview, type RefLabel, type Trunk } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { t, tp } from "@/lib/i18n"
-import { branchKey, branchOfTab, invalidateProject, isArchived, isRemovableBranch, prRemote, useBranchPr, useBranchStatuses, useChanges, useHistory, type Tab } from "@/hooks/queries"
+import { branchKey, branchOfTab, invalidateProject, isArchived, isRemovableBranch, prRemote, useBranchPr, useBranchStatuses, useChanges, useHistory, useMessageSearch, type Tab } from "@/hooks/queries"
+import { useDebounced } from "@/hooks/use-debounced"
 import { useProjectView } from "@/hooks/use-project-view"
 import { useDelayedFlag } from "@/hooks/use-delayed-flag"
 import { IconButton } from "@/components/ui/button"
@@ -395,30 +396,47 @@ function BranchPicker({ children, onPick, ...props }: Omit<React.ComponentProps<
 
 function GraphTools({ view }: { view: View }) {
   const query = useStore(ui, (s) => s.query)
+  const bodies = useStore(prefs, (s) => s.searchBodies)
   const fetching = useStore(ui, (s) => s.fetching)
   const input = useRef<HTMLInputElement>(null)
   keyNav.focusSearch = () => input.current?.select()
   return (
     <>
       {/* Always open; narrower headers give the tabs room first. */}
-      <Tooltip content={`${t("Filter commits")}  ⌘F`} side="bottom" delayDuration={700}>
-        <label className="flex h-6 w-[200px] shrink-0 items-center gap-1.5 rounded-sm bg-background px-2 text-faint-foreground ring-1 ring-border focus-within:ring-ring @max-[640px]/header:w-[150px] @max-[480px]/header:w-[110px] @max-[380px]/header:w-[80px]">
-          <Search className="size-3.5 shrink-0" />
-          <input
-            ref={input}
-            value={query}
-            onChange={(e) => ui.set({ query: e.target.value })}
-            placeholder={t("Filter commits, authors, hashes")}
-            aria-label={t("Filter commits")}
-            className="w-full min-w-0 bg-transparent text-caption text-foreground outline-none placeholder:text-faint-foreground"
-          />
-          {query && (
-            <button aria-label={t("Clear filter")} onMouseDown={(e) => e.preventDefault()} onClick={() => ui.set({ query: "" })} className="shrink-0 hover:text-foreground">
-              <X className="size-3.5" />
-            </button>
-          )}
-        </label>
-      </Tooltip>
+      <div className="flex h-6 w-[200px] shrink-0 items-center gap-1 rounded-sm bg-background pl-2 pr-0.5 text-faint-foreground ring-1 ring-border focus-within:ring-ring @max-[640px]/header:w-[150px] @max-[480px]/header:w-[110px] @max-[380px]/header:w-[80px]">
+        <Tooltip content={`${t("Filter commits")}  ⌘F`} side="bottom" delayDuration={700}>
+          <label className="flex h-full min-w-0 flex-1 items-center gap-1.5">
+            <Search className="size-3.5 shrink-0" />
+            <input
+              ref={input}
+              value={query}
+              onChange={(e) => ui.set({ query: e.target.value })}
+              placeholder={bodies ? t("Filter messages, authors, hashes") : t("Filter commits, authors, hashes")}
+              aria-label={t("Filter commits")}
+              className="w-full min-w-0 bg-transparent text-caption text-foreground outline-none placeholder:text-faint-foreground"
+            />
+            {query && (
+              <button aria-label={t("Clear filter")} onMouseDown={(e) => e.preventDefault()} onClick={() => ui.set({ query: "" })} className="shrink-0 hover:text-foreground">
+                <X className="size-3.5" />
+              </button>
+            )}
+          </label>
+        </Tooltip>
+        <Tooltip content={bodies ? t("Searching whole commit messages") : t("Also search whole commit messages")} side="bottom">
+          <button
+            aria-label={t("Also search whole commit messages")}
+            aria-pressed={bodies}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => prefs.set({ searchBodies: !bodies })}
+            className={cn(
+              "inline-flex size-5 shrink-0 items-center justify-center rounded-xs hover:bg-accent hover:text-foreground @max-[380px]/header:hidden",
+              bodies && "bg-primary-subtle text-primary hover:bg-primary-subtle hover:text-primary",
+            )}
+          >
+            <LetterText className="size-3.5" />
+          </button>
+        </Tooltip>
+      </div>
       <GraphOptions view={view} />
       <IconButton label={fetching ? t("Fetching from the remote") : `${t("Refresh and fetch")}  ⌘R`} size="icon-sm" onClick={() => run("refresh")}>
         <RefreshCw className={cn(fetching && "animate-spin")} />
@@ -434,6 +452,7 @@ function GraphOptions({ view }: { view: View }) {
   const others = useStore(prefs, (s) => s.otherBranches)
   const remotes = useStore(prefs, (s) => s.remoteBranches)
   const fold = useStore(prefs, (s) => s.foldMerges)
+  const foldBranches = useStore(prefs, (s) => s.foldBranches)
   const [open, setOpen] = useState(false)
   const [picking, setPicking] = useState(false)
   const ov = overview.data!
@@ -494,6 +513,13 @@ function GraphOptions({ view }: { view: View }) {
               <Checkbox disabled={!others} checked={remotes} onCheckedChange={(v) => prefs.set({ remoteBranches: v === true })} />
               {t("Include remote branches")}
             </label>
+            <label className={cn("flex items-start gap-2 text-body", !others && "text-faint-foreground")}>
+              <Checkbox className="mt-0.5" disabled={!others} checked={foldBranches} onCheckedChange={(v) => prefs.set({ foldBranches: v === true })} />
+              <span>
+                {t("Fold each branch into one row")}
+                <span className="block text-caption text-faint-foreground">{t("Click the row for everything it adds; open it for its commits")}</span>
+              </span>
+            </label>
             <div className="border-t" />
             <label className="flex items-center gap-3 text-body">
               <span className="flex-1">
@@ -552,9 +578,16 @@ function GraphSkeleton() {
 }
 
 type Item = { kind: "compare" } | { kind: "row"; row: HistoryRow }
-const keyOf = (it: Item) => (it.kind === "compare" ? "compare" : it.row.id === WORKTREE_ROW ? "worktree" : it.row.id)
+const keyOf = (it: Item) => (it.kind === "compare" ? "compare" : it.row.id === WORKTREE_ROW ? "worktree" : it.row.branch?.folded ? `branch:${it.row.id}` : it.row.id)
+/** A folded branch's row stands for the whole branch: everything it adds to the trunk. */
 const selectionOf = (it: Item): Selection =>
-  it.kind === "compare" ? { kind: "compare" } : it.row.id === WORKTREE_ROW ? { kind: "worktree" } : { kind: "commit", hash: it.row.id }
+  it.kind === "compare"
+    ? { kind: "compare" }
+    : it.row.id === WORKTREE_ROW
+      ? { kind: "worktree" }
+      : it.row.branch?.folded
+        ? { kind: "branch", tip: it.row.id }
+        : { kind: "commit", hash: it.row.id }
 /** Keyboard: move the selection, leave the diff as it is. */
 const selectItem = (it: Item) => ui.set({ selection: selectionOf(it), focusArea: "graph" })
 /** Click (module-level so memoised rows get a stable callback): open the row or deselect it. */
@@ -572,6 +605,15 @@ const toggleMerge = (id: string) =>
     const next = open.includes(id) ? open.filter((m) => m !== id) : [...open, id]
     return { expandedMerges: { ...s.expandedMerges, [pid]: next }, historyDepth: loadedRows }
   })
+/** Open or fold again the branches named on a tip (module-level so memoised rows get a stable callback). */
+const toggleBranch = (names: string[], open: boolean) =>
+  ui.set((s) => {
+    const pid = s.projectId
+    if (!pid || names.length === 0) return {}
+    const now = s.openBranches[pid] ?? []
+    const next = open ? [...new Set([...now, ...names])] : now.filter((n) => !names.includes(n))
+    return { openBranches: { ...s.openBranches, [pid]: next }, historyDepth: loadedRows }
+  })
 
 function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; trunk: Trunk | null; overview: Overview; path: string | null }) {
   const { projectId, dirtyFiles, compare } = view
@@ -583,6 +625,13 @@ function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; tru
   const remotes = useStore(prefs, (s) => s.remoteBranches)
   const fold = useStore(prefs, (s) => s.foldMerges)
   const expanded = useStore(ui, (s) => (projectId && s.expandedMerges[projectId]) || NO_EXPANDED)
+  // Other branches fold only when they are drawn, and never in a file's history.
+  const foldBranches = useStore(prefs, (s) => s.foldBranches) && others && !path
+  const openNames = useStore(ui, (s) => (projectId && s.openBranches[projectId]) || NO_EXPANDED)
+  const openTips = useMemo(() => {
+    const names = new Set(openNames)
+    return [...new Set(overview.branches.filter((b) => names.has(b.name)).map((b) => b.tip))].sort()
+  }, [openNames, overview.branches])
   const depth = useStore(ui, (s) => s.historyDepth)
   // In a file's history the uncommitted row shows only when that file is among the uncommitted changes.
   const worktree = useChanges(projectId, path && dirtyFiles > 0 && tab.tree ? { kind: "worktree", tree: tab.tree.path } : null)
@@ -599,6 +648,8 @@ function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; tru
     // A file's history is never folded.
     fold: fold && !path,
     expanded: fold && !path ? expanded : NO_EXPANDED,
+    foldBranches,
+    openBranches: foldBranches ? openTips : NO_EXPANDED,
     depth,
   })
   const selection = useStore(ui, (s) => s.selection)
@@ -621,10 +672,18 @@ function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; tru
     }
     return lanesWidth(max)
   }, [rows])
+  // Whole messages: git searches them once typing pauses; subjects, authors and hashes match at once.
+  const bodies = useStore(prefs, (s) => s.searchBodies)
+  const settled = useDebounced(query, 250)
+  const tips = history.data?.pages[0]?.tips
+  const revs = useMemo(() => [...(trunk?.tip ? [trunk.tip] : []), ...(tips ?? [])], [trunk?.tip, tips])
+  const inBodies = useMessageSearch(projectId, revs, settled, bodies && settled === query).data
   const matches = useMemo(() => {
     if (!query || !rows) return null
-    return new Set(rows.filter((r) => r.id !== WORKTREE_ROW && (r.subject.toLowerCase().includes(query) || r.author.toLowerCase().includes(query) || r.id.startsWith(query))).map((r) => r.id))
-  }, [rows, query])
+    const found = new Set(rows.filter((r) => r.id !== WORKTREE_ROW && (r.subject.toLowerCase().includes(query) || r.author.toLowerCase().includes(query) || r.id.startsWith(query))).map((r) => r.id))
+    if (bodies) inBodies?.forEach((id) => found.add(id))
+    return found
+  }, [rows, query, bodies, inBodies])
 
   const v = useVirtualizer({ count: items.length, getScrollElement: () => scroller.current, estimateSize: () => ROW_H, overscan: 20 })
   const virtualItems = v.getVirtualItems()
@@ -691,6 +750,7 @@ function Graph({ view, tab, trunk, overview, path }: { view: View; tab: Tab; tru
               treePath={tab.tree?.path}
               onSelect={clickItem}
               onToggle={toggleMerge}
+              onToggleBranch={toggleBranch}
             />
           )
         })}
@@ -722,6 +782,8 @@ const GraphRow = memo(function GraphRow(p: {
   onSelect: (it: Item) => void
   /** Open or close a folded merge. */
   onToggle: (id: string) => void
+  /** Open or fold again the branches named on a tip. */
+  onToggleBranch: (names: string[], open: boolean) => void
 }) {
   const style = { transform: `translateY(${p.top}px)` }
   const base = "absolute inset-x-0 top-0 flex h-[26px] items-center gap-2 whitespace-nowrap pr-3 text-small"
@@ -764,9 +826,28 @@ const GraphRow = memo(function GraphRow(p: {
       </div>
     )
   }
+  const branchNames = (p.labels ?? []).filter((l) => l.kind !== "tag").map((l) => l.name)
+  if (r.branch?.folded) {
+    return (
+      <div style={style} className={cn(base, tone, p.dim && "opacity-35")} onClick={() => p.onSelect(p.item)}>
+        <Lanes row={r} width={p.width} isHead={false} isWorktree={false} folded />
+        <FoldToggle folded label={t("Show this branch's commits")} onClick={() => p.onToggleBranch(branchNames, true)} />
+        <RefPills labels={p.labels ?? []} trunk={p.trunk} tint={r.color} />
+        <span className="min-w-0 flex-1 truncate text-muted-foreground">
+          <Highlight text={r.subject} query={p.query} />
+        </span>
+        <span className="shrink-0 text-caption tabular text-faint-foreground">{tp("{n} commit", "{n} commits", r.branch.commits)}</span>
+        <span className="w-[64px] shrink-0 truncate text-caption text-faint-foreground @max-[560px]:hidden">{r.author}</span>
+        <span className="w-[52px] shrink-0 text-right text-caption tabular text-faint-foreground" title={absoluteTime(r.time)}>
+          {relativeTime(r.time)}
+        </span>
+      </div>
+    )
+  }
   return (
     <div style={style} className={cn(base, tone, p.dim && "opacity-35")} onClick={() => p.onSelect(p.item)}>
       <Lanes row={r} width={p.width} isHead={p.isHead} isWorktree={false} />
+      {r.branch && <FoldToggle folded={false} label={t("Fold this branch into one row")} onClick={() => p.onToggleBranch(branchNames, false)} />}
       {r.folded !== undefined && (
         <Tooltip content={r.folded ? t("Show the commits this merge brought in") : t("Hide the commits this merge brought in")}>
           <button
@@ -796,6 +877,25 @@ const GraphRow = memo(function GraphRow(p: {
   )
 })
 
+/** The chevron that opens a folded branch, or folds it again. */
+function FoldToggle({ folded, label, onClick }: { folded: boolean; label: string; onClick: () => void }) {
+  return (
+    <Tooltip content={label}>
+      <button
+        aria-label={label}
+        aria-expanded={!folded}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClick()
+        }}
+        className="-mx-1 inline-flex size-5 shrink-0 items-center justify-center rounded-xs text-faint-foreground hover:bg-accent hover:text-foreground"
+      >
+        {folded ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+      </button>
+    </Tooltip>
+  )
+}
+
 function Highlight({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>
   const i = text.toLowerCase().indexOf(query)
@@ -809,8 +909,11 @@ function Highlight({ text, query }: { text: string; query: string }) {
   )
 }
 
-/** Local and remote branches on the same commit merge into one pill: `main · origin`. */
-export function RefPills({ labels, trunk, max = 3 }: { labels: RefLabel[]; trunk: Trunk | null; max?: number }) {
+/**
+ * Local and remote branches on the same commit merge into one pill: `main · origin`.
+ * `tint`: a lane colour for the branch pills (a folded branch's row).
+ */
+export function RefPills({ labels, trunk, max = 3, tint }: { labels: RefLabel[]; trunk: Trunk | null; max?: number; tint?: number }) {
   if (!labels.length) return null
   const branches = labels.filter((l) => l.kind === "branch")
   const remotes = labels.filter((l) => l.kind === "remote")
@@ -830,6 +933,7 @@ export function RefPills({ labels, trunk, max = 3 }: { labels: RefLabel[]; trunk
       {shown.map((p) => (
         <span
           key={p.kind + p.name}
+          style={tint !== undefined && p.kind !== "tag" ? { color: `var(--lane-${tint})`, background: `color-mix(in oklab, var(--lane-${tint}) 14%, transparent)` } : undefined}
           className={cn(
             "inline-flex h-[18px] max-w-[200px] items-center gap-1 truncate rounded-xs px-1.5 text-caption font-medium",
             p.kind === "tag" ? "text-muted-foreground ring-1 ring-border ring-inset" : "bg-muted text-foreground",

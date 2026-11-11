@@ -1166,3 +1166,156 @@ fn a_merge_of_commits_already_drawn_does_not_fold() {
     let last = rows.last().unwrap();
     assert!(last["segs"].as_array().unwrap().iter().all(|s| s[0] != 0), "a lane runs past the root: {last}");
 }
+
+fn commit_at(dir: &Path, file: &str, content: &str, msg: &str, t: i64) -> String {
+    write(dir, file, content);
+    sh(dir, &["add", "-A"]);
+    let date = format!("@{t} +0000");
+    let out = Command::new("git")
+        .args(["commit", "-q", "-m", msg])
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env("GIT_AUTHOR_DATE", &date)
+        .env("GIT_COMMITTER_DATE", &date)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    sh(dir, &["rev-parse", "HEAD"])
+}
+
+/// main: c0 c1 c2 c3. Branch a (a1 a2) from c1 with t (t1) stacked on it; b (b1) from c2;
+/// s (s1, then main merged in as sm, then s2) from c1.
+#[test]
+fn other_branches_fold_into_one_row_each() {
+    let base = std::env::temp_dir().join(format!("retrace-test-fold-branches-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let _tmp = TempDir(std::fs::canonicalize(&base).unwrap());
+    let repo = _tmp.0.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    sh(&repo, &["init", "-q", "-b", "main"]);
+    let mut t = 1_700_000_000;
+    let mut at = || {
+        t += 60;
+        t
+    };
+    let c0 = commit_at(&repo, "m.txt", "0\n", "c0", at());
+    let c1 = commit_at(&repo, "m.txt", "1\n", "c1", at());
+    sh(&repo, &["switch", "-q", "-c", "a"]);
+    let a1 = commit_at(&repo, "a.txt", "1\n", "a1", at());
+    let a2 = commit_at(&repo, "a.txt", "2\n", "a2", at());
+    sh(&repo, &["switch", "-q", "-c", "t"]);
+    let t1 = commit_at(&repo, "t.txt", "1\n", "t1", at());
+    sh(&repo, &["switch", "-q", "-c", "s", &c1]);
+    let s1 = commit_at(&repo, "s.txt", "1\n", "s1", at());
+    sh(&repo, &["switch", "-q", "main"]);
+    let c2 = commit_at(&repo, "m.txt", "2\n", "c2", at());
+    sh(&repo, &["switch", "-q", "-c", "b"]);
+    let b1 = commit_at(&repo, "b.txt", "1\n", "b1", at());
+    sh(&repo, &["switch", "-q", "main"]);
+    let c3 = commit_at(&repo, "m.txt", "3\n", "c3", at());
+    sh(&repo, &["switch", "-q", "s"]);
+    let date = format!("@{} +0000", at());
+    let out = Command::new("git")
+        .args(["merge", "-q", "--no-ff", "-m", "merge main into s", "main"])
+        .current_dir(&repo)
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env("GIT_AUTHOR_DATE", &date)
+        .env("GIT_COMMITTER_DATE", &date)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let sm = sh(&repo, &["rev-parse", "HEAD"]);
+    let s2 = commit_at(&repo, "s.txt", "2\n", "s2", at());
+    // u ends in main merged in: its row reads as its own last commit.
+    sh(&repo, &["switch", "-q", "-c", "u", &c2]);
+    commit_at(&repo, "u.txt", "1\n", "u1", at());
+    sh(&repo, &["merge", "-q", "--no-ff", "-m", "merge main into u", "main"]);
+    let um = sh(&repo, &["rev-parse", "HEAD"]);
+    sh(&repo, &["switch", "-q", "main"]);
+
+    let state = State::with_config(_tmp.0.join("config.json"));
+    dispatch(&state, "addPath", json!({ "path": repo })).unwrap();
+    let id = repo.to_string_lossy().to_string();
+    let page = |tip: &str, open: Vec<&str>, fold: bool| {
+        dispatch(&state, "history", json!({ "id": id, "trunkTip": c3, "tip": tip, "allBranches": true, "foldBranches": true, "openBranches": open, "fold": fold })).unwrap()
+    };
+    let rows = |p: &Value| p["rows"].as_array().unwrap().clone();
+    let ids = |p: &Value| rows(p).iter().map(|r| r["id"].as_str().unwrap().to_string()).collect::<HashSet<_>>();
+    let find = |p: &Value, id: &str| rows(p).into_iter().find(|r| r["id"] == id).unwrap_or_else(|| panic!("{id} not in {p}"));
+    let ends = |p: &Value| {
+        let last = rows(p).last().unwrap().clone();
+        assert!(last["segs"].as_array().unwrap().iter().all(|s| s[0] != 0), "a lane runs past the root: {last}");
+    };
+    use std::collections::HashSet;
+    let set = |v: &[&String]| v.iter().map(|s| s.to_string()).collect::<HashSet<_>>();
+
+    // On main: the trunk in full, then one row for t (standing for a too), b, s and u.
+    let main = page(&c3, vec![], false);
+    assert_eq!(ids(&main), set(&[&c0, &c1, &c2, &c3, &t1, &b1, &s2, &um]));
+    assert_eq!(find(&main, &um)["subject"], "u1");
+    assert_eq!(find(&main, &um)["branch"], json!({ "folded": true, "commits": 2 }));
+    assert_eq!(find(&main, &s2)["subject"], "s2");
+    assert_eq!(find(&main, &t1)["branch"], json!({ "folded": true, "commits": 3 }));
+    assert_eq!(find(&main, &b1)["branch"], json!({ "folded": true, "commits": 1 }));
+    assert_eq!(find(&main, &s2)["branch"], json!({ "folded": true, "commits": 3 }));
+    assert!(find(&main, &c3).get("branch").is_none());
+    // s merged main in at c3: its line goes there, not to where it started.
+    let s_row = find(&main, &s2);
+    let lane = s_row["col"].as_u64().unwrap();
+    let c3_row = find(&main, &c3);
+    assert!(c3_row["segs"].as_array().unwrap().iter().any(|s| s[0] == 1 && s[1] == lane && s[2] == 0), "s joins at c3: {c3_row}");
+    ends(&main);
+
+    // Opening t shows a and t in full; t's tip offers to fold it again.
+    let open = page(&c3, vec![t1.as_str()], false);
+    assert_eq!(ids(&open), set(&[&c0, &c1, &c2, &c3, &t1, &a2, &a1, &b1, &s2, &um]));
+    assert_eq!(find(&open, &t1)["branch"], json!({ "folded": false, "commits": 3 }));
+    assert!(find(&open, &a2).get("branch").is_none());
+    ends(&open);
+
+    // On b's tab, b is drawn in full and the others still fold.
+    let on_b = page(&b1, vec![], false);
+    assert!(find(&on_b, &b1).get("branch").is_none());
+    assert!(!ids(&on_b).contains(&sm) && !ids(&on_b).contains(&s1) && !ids(&on_b).contains(&a1));
+    ends(&on_b);
+
+    // With merges folded too, every row still ends its lanes.
+    let both = page(&c3, vec![], true);
+    assert_eq!(ids(&both), set(&[&c0, &c1, &c2, &c3, &t1, &b1, &s2, &um]));
+    ends(&both);
+
+    // Off: everything as before.
+    let plain = dispatch(&state, "history", json!({ "id": id, "trunkTip": c3, "tip": c3, "allBranches": true })).unwrap();
+    assert_eq!(rows(&plain).len(), 13);
+    assert!(rows(&plain).iter().all(|r| r.get("branch").is_none()));
+}
+
+#[test]
+fn commit_messages_are_searched_body_and_all() {
+    let f = fixture("grep");
+    call(&f, "addPath", json!({ "path": f.main }));
+    let id = f.main.to_string_lossy().to_string();
+    write(&f.main, "z.txt", "z\n");
+    sh(&f.main, &["add", "-A"]);
+    sh(&f.main, &["commit", "-q", "-m", "plain subject", "-m", "The body mentions a Zebra crossing."]);
+    let z = sh(&f.main, &["rev-parse", "HEAD"]);
+    let grep = |q: &str| call(&f, "grepHistory", json!({ "id": id, "revs": [z], "query": q }));
+    assert_eq!(grep("zebra"), json!([z]), "case is ignored and the body counts");
+    assert_eq!(grep("Zebra cross"), json!([z]));
+    // A fixed string, not a pattern, and never an option.
+    assert_eq!(grep("Ze.ra"), json!([]));
+    assert_eq!(grep("--all"), json!([]));
+    assert_eq!(grep("  "), json!([]));
+    assert!(dispatch(&f.state, "grepHistory", json!({ "id": id, "revs": ["--all"], "query": "x" })).is_err());
+}

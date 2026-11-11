@@ -26,7 +26,8 @@ export function useStore<T extends object, U>(store: ReturnType<typeof createSto
   return useSyncExternalStore(store.subscribe, () => selector(store.get()))
 }
 
-export type Selection = { kind: "commit"; hash: string } | { kind: "worktree" } | { kind: "compare" }
+/** `branch`: a folded branch's row, showing everything it adds to the trunk. */
+export type Selection = { kind: "commit"; hash: string } | { kind: "worktree" } | { kind: "compare" } | { kind: "branch"; tip: string }
 
 /** The add-projects dialog: type a path (browser), or tick the repositories found inside a folder. */
 export type AddState = { step: "path" } | { step: "pick"; candidates: Candidate[] }
@@ -63,6 +64,8 @@ export interface UiState {
   settingsOpen: boolean
   /** Merges folded: the ones opened, per project. */
   expandedMerges: Record<string, string[]>
+  /** Other branches folded: the ones opened, by name, per project. */
+  openBranches: Record<string, string[]>
   /** Rows the graph had loaded when a merge was opened or closed: the new history loads as deep. */
   historyDepth: number
   adding: AddState | null
@@ -91,6 +94,10 @@ export interface Prefs {
   remoteBranches: boolean
   /** Graph: first-parent chains only, each merge folded until opened. */
   foldMerges: boolean
+  /** Graph: each other branch drawn as one row at its tip until opened. */
+  foldBranches: boolean
+  /** The commit filter also looks in the message bodies (asks git). */
+  searchBodies: boolean
   /** Look for a new release at launch and every few hours, and install it. */
   autoUpdate: boolean
   /** Groups folded in the projects list. */
@@ -119,6 +126,8 @@ const defaults: Prefs = {
   otherBranches: false,
   remoteBranches: false,
   foldMerges: false,
+  foldBranches: true,
+  searchBodies: false,
   autoUpdate: true,
   collapsedGroups: [],
   fileIcons: "color",
@@ -157,6 +166,7 @@ export const ui = createStore<UiState>({
   historyFile: null,
   settingsOpen: false,
   expandedMerges: {},
+  openBranches: {},
   historyDepth: 0,
   adding: null,
   fetching: false,
@@ -168,5 +178,5 @@ ui.subscribe(() => {
 
 export function selectionKey(s: Selection | null): string {
   if (!s) return ""
-  return s.kind === "commit" ? s.hash : s.kind
+  return s.kind === "commit" ? s.hash : s.kind === "branch" ? `branch:${s.tip}` : s.kind
 }

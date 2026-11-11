@@ -116,6 +116,8 @@ export interface HistoryRow {
   segs: Segment[]
   /** Merges folded: a first-parent merge, true while what it merged is hidden, false once expanded. */
   folded?: boolean
+  /** Other branches folded: the tip of one, standing for its own commits while folded. */
+  branch?: { folded: boolean; commits: number }
 }
 
 export interface HistoryPage {

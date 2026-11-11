@@ -31,7 +31,7 @@ function path([kind, from, to]: [number, number, number, number]) {
 }
 
 /** One row of the commit graph: lines passing through, joining and leaving, plus the node. */
-export function Lanes({ row, width, isHead, isWorktree }: { row: HistoryRow; width: number; isHead: boolean; isWorktree: boolean }) {
+export function Lanes({ row, width, isHead, isWorktree, folded }: { row: HistoryRow; width: number; isHead: boolean; isWorktree: boolean; folded?: boolean }) {
   const cx = x(row.col)
   const color = lane(row.color)
   const merge = row.parents.length > 1
@@ -48,7 +48,13 @@ export function Lanes({ row, width, isHead, isWorktree }: { row: HistoryRow; wid
         />
       ))}
       {isHead && <circle cx={cx} cy={NODE_Y} r={7} fill="none" stroke={color} strokeOpacity={0.35} strokeWidth={2} />}
-      {isWorktree ? (
+      {folded ? (
+        // A folded branch: a small stack, its commits behind the tip.
+        <>
+          <rect x={cx - 2.5} y={NODE_Y - 6.5} width={9} height={9} rx={2} fill={color} fillOpacity={0.35} />
+          <rect x={cx - 4.5} y={NODE_Y - 4.5} width={9} height={9} rx={2} fill={color} />
+        </>
+      ) : isWorktree ? (
         <circle cx={cx} cy={NODE_Y} r={4} fill="var(--background)" stroke={color} strokeWidth={1.5} strokeDasharray="2 2" />
       ) : merge ? (
         <circle cx={cx} cy={NODE_Y} r={4} fill="var(--background)" stroke={color} strokeWidth={2} />
