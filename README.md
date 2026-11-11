@@ -13,7 +13,7 @@ Agents now write code in a dozen worktrees at once. Retrace puts every project, 
 ## Features
 
 - **Many repositories, one window.** Add repositories, or a folder of them. A dot marks projects with uncommitted work; drag to reorder, pin the ones you use most to the top, and sort the rest into groups that fold away (drag a group's header to reorder the groups). Right-click a project or group for its menu.
-- **The integration branch stays left.** `main` (or whatever you pick) owns column 0 of a compact one-line graph. Other branches join only when you ask, local first, remote optionally. Fold merged commits to keep each branch to its own line, so `main` reads as its merge commits; open any merge in place to see what it brought in.
+- **The integration branch stays left.** `main` (or whatever you pick) owns column 0 of a compact one-line graph. Other branches join only when you ask, local first, remote optionally. Each other branch folds into one coloured row with its commit count and a line to the `main` commit it's built on: click it for everything it adds to `main`, open it for its commits. Fold merged commits to keep each branch to its own line, so `main` reads as its merge commits; open any merge in place to see what it brought in.
 - **Worktrees and branches, folded.** The main tree, then *Active* (uncommitted work, or commits not yet in `main`), *Merged* (clean worktrees and local branches already in `main`, squash merges included) and *Branches* without a worktree still in progress. Merged ones can be removed safely: no `--force`, everything checked again first, a branch deleted only while it still points at the commit you saw, and Undo right after. `develop`, `release/*` and branches you keep are never offered.
 - **Commits as you'd review them.** Click a row to open its message and diff below the graph; click it again to close. The body is shown in full (fold it if you like), and squash or merge commits get a **PR #N** button that opens the pull request right here (or, next to it, on GitHub).
 - **Pull requests, read here.** On a GitHub project, *PRs* lists the open pull requests through your own GitHub CLI (`gh`): Retrace never sees a token. Pick one to read it like a branch: it opens as its description, full width, and a file picked in *Changes* shows its diff (click the file again to go back). Its commits are in the graph, its whole change matches GitHub's *Files changed*, and its review status and every check sit above the diff. Screenshots in the description show up too, from private repositories as well, and the conversation (comments, reviews and line comments with the code they're on) opens in a side panel, each thread a click away from its file. Worktrees and branches with an open pull request show its number, and their *Everything since main* row jumps to it.
@@ -58,7 +58,7 @@ After that Retrace keeps itself up to date from GitHub Releases: at launch and e
 | F | Focus: only the changes and the diff |
 | Esc | Leave focus → close the diff → clear the filter |
 | ⌘J | Show / hide the diff |
-| ⌘F | Filter commits |
+| ⌘F | Filter commits (the button at the box's end also searches whole messages) |
 | ⌘R | Refresh and fetch |
 | ⌘\\ | Show / hide the projects |
 | ⌘O | Add a project |
