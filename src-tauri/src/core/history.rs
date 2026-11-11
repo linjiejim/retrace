@@ -69,7 +69,7 @@ fn worktree_row(parents: Vec<String>, p: super::graph::Placed) -> HistoryRow {
 struct Fold {
     /// Merges whose merged-in commits are laid out below them.
     expanded: HashSet<String>,
-    /// Every commit on the walked first-parent chains; read on the first expansion.
+    /// Every commit on the walked first-parent chains; read at the first merge.
     chains: Option<HashSet<String>>,
     /// Rows laid out so far: an edge to one of them would point upwards, so none is drawn.
     placed: HashSet<String>,
@@ -116,11 +116,6 @@ impl Stream {
             self.rows.push(row(r, p, None));
             return Ok(());
         }
-        if !fold.expanded.contains(&r.id) {
-            let p = self.lanes.place(&r.id, &r.parents[..1], false);
-            self.rows.push(row(r, p, Some(true)));
-            return Ok(());
-        }
         if fold.chains.is_none() {
             let n = format!("-n{MAX_ROWS}");
             let mut args = vec!["rev-list", "--first-parent", n.as_str()];
@@ -128,13 +123,29 @@ impl Stream {
             args.push("--");
             fold.chains = Some(git::text(&self.dir, &args)?.split_whitespace().map(str::to_string).collect());
         }
+        let chains = fold.chains.as_ref().expect("read above");
+        // Its other parents are on a drawn chain already (main merged into a branch, or a branch
+        // that is drawn too): it brought in nothing of its own, so it is a plain merge with lines
+        // to those parents still below.
+        if r.parents[1..].iter().all(|p| chains.contains(p) || fold.placed.contains(p)) {
+            let none = HashSet::new();
+            let mut edges = vec![r.parents[0].clone()];
+            edges.extend(r.parents[1..].iter().filter(|p| fold.below(p, &none)).cloned());
+            let p = self.lanes.place(&r.id, &edges, false);
+            self.rows.push(row(r, p, None));
+            return Ok(());
+        }
+        if !fold.expanded.contains(&r.id) {
+            let p = self.lanes.place(&r.id, &r.parents[..1], false);
+            self.rows.push(row(r, p, Some(true)));
+            return Ok(());
+        }
         // What the merge brought in: reachable from its other parents but not its first, minus
         // anything a first-parent chain or an earlier row already shows.
         let n = format!("-n{MAX_MERGED_IN}");
         let mut args = vec!["log", "--topo-order", FORMAT, n.as_str()];
         args.extend(r.parents[1..].iter().map(String::as_str));
         args.extend(["--not", r.parents[0].as_str(), "--"]);
-        let chains = fold.chains.as_ref().expect("read above");
         let merged: Vec<Raw> = parse_log(&git::text(&self.dir, &args)?).into_iter().filter(|m| !chains.contains(&m.id) && !fold.placed.contains(&m.id)).collect();
         let inner: HashSet<&str> = merged.iter().map(|m| m.id.as_str()).collect();
         let drawn = |ps: &[String]| -> Vec<String> { ps.iter().filter(|p| fold.below(p, &inner)).cloned().collect() };

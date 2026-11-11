@@ -1128,3 +1128,41 @@ fn folded_merges_show_the_first_parent_chain_and_expand_on_request() {
     assert_eq!(plain["rows"].as_array().unwrap().len(), 9);
     assert!(plain["rows"].as_array().unwrap().iter().all(|r| r.get("folded").is_none()));
 }
+
+/// main: c0 c1 c2; the branch b1 → bm (merge main) → b2 is still open.
+#[test]
+fn a_merge_of_commits_already_drawn_does_not_fold() {
+    let base = std::env::temp_dir().join(format!("retrace-test-sync-merge-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let _tmp = TempDir(std::fs::canonicalize(&base).unwrap());
+    let repo = _tmp.0.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    sh(&repo, &["init", "-q", "-b", "main"]);
+    commit(&repo, "a.txt", "0\n", "c0");
+    commit(&repo, "a.txt", "1\n", "c1");
+    sh(&repo, &["switch", "-q", "-c", "b"]);
+    commit(&repo, "b.txt", "1\n", "b1");
+    sh(&repo, &["switch", "-q", "main"]);
+    let c2 = commit(&repo, "a.txt", "2\n", "c2");
+    sh(&repo, &["switch", "-q", "b"]);
+    sh(&repo, &["merge", "-q", "--no-ff", "-m", "merge main into b", "main"]);
+    let bm = sh(&repo, &["rev-parse", "HEAD"]);
+    let b2 = commit(&repo, "b.txt", "2\n", "b2");
+
+    let state = State::with_config(_tmp.0.join("config.json"));
+    dispatch(&state, "addPath", json!({ "path": repo })).unwrap();
+    let id = repo.to_string_lossy().to_string();
+    let page = dispatch(&state, "history", json!({ "id": id, "trunkTip": c2, "tip": b2, "fold": true, "expanded": [] })).unwrap();
+    let rows = page["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 6, "every commit once: {rows:?}");
+    let merge = rows.iter().find(|r| r["id"] == bm.as_str()).unwrap();
+    // Everything it brought in is on main's line already: nothing to open.
+    assert!(merge.get("folded").is_none(), "{merge}");
+    // Its line to main is drawn when main's commit comes further down, and never points upwards.
+    let at = |id: &str| rows.iter().position(|r| r["id"] == id).unwrap();
+    let outs = merge["segs"].as_array().unwrap().iter().filter(|s| s[0] == 2).count();
+    assert_eq!(outs, if at(&c2) > at(&bm) { 2 } else { 1 });
+    let last = rows.last().unwrap();
+    assert!(last["segs"].as_array().unwrap().iter().all(|s| s[0] != 0), "a lane runs past the root: {last}");
+}
