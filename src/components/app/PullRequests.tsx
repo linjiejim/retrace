@@ -15,6 +15,9 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Tooltip } from "@/components/ui/tooltip"
 import { useBranchPr } from "@/hooks/queries"
+import { useDelayedFlag } from "@/hooks/use-delayed-flag"
+
+import { DiscussionButton } from "./PrDiscussion"
 
 const Markdown = lazy(() => import("./Markdown"))
 
@@ -292,16 +295,43 @@ export function PrMenu({
 // ---------- above the diff ----------
 
 /** Above the diff of a pull request's whole change: what GitHub shows at the top of the PR. */
-export function PrInfo({ projectId, pr, target }: { projectId: string; pr: PullRequest; target: Target | null }) {
-  const showBody = useStore(prefs, (s) => s.commitBody)
+/** The PR card while the pull request or its commits are read: the same shape, filling the area. */
+export function PrInfoSkeleton() {
+  const show = useDelayedFlag(true)
+  if (!show) return <div className="min-h-0 flex-1" />
+  return (
+    <div aria-busy aria-label={t("Loading the pull request")} className="min-h-0 flex-1 space-y-2 overflow-hidden px-3 py-2">
+      <Skeleton className="h-4 w-1/2" />
+      <Skeleton className="h-3 w-1/3" />
+      <DescriptionSkeleton />
+    </div>
+  )
+}
+
+function DescriptionSkeleton() {
+  const show = useDelayedFlag(true)
+  if (!show) return null
+  return (
+    <div className="mt-2 space-y-2 border-t pt-3">
+      <Skeleton className="h-3 w-full" />
+      <Skeleton className="h-3 w-11/12" />
+      <Skeleton className="h-3 w-4/5" />
+      <Skeleton className="h-3 w-2/3" />
+    </div>
+  )
+}
+
+/** `fill`: no file picked, the card takes the whole area and the description is always shown. */
+export function PrInfo({ projectId, pr, target, fill }: { projectId: string; pr: PullRequest; target: Target | null; fill?: boolean }) {
+  const showBody = useStore(prefs, (s) => s.commitBody) || !!fill
   const body = pr.body?.trim()
   const when = pr.state === "merged" ? pr.mergedAt : pr.state === "closed" ? pr.closedAt : pr.updatedAt
   const whenLabel = pr.state === "merged" ? t("Merged {time}", { time: when ? ago(when) : "" }) : pr.state === "closed" ? t("Closed {time}", { time: when ? ago(when) : "" }) : t("Updated {time}", { time: when ? ago(when) : "" })
 
   return (
-    <div className="selectable max-h-[40%] shrink-0 overflow-y-auto border-b px-3 py-2">
+    <div className={cn("selectable overflow-y-auto px-3 py-2", fill ? "min-h-0 flex-1" : "max-h-[40%] shrink-0 border-b")}>
       <div className="flex items-start gap-1">
-        {body && (
+        {body && !fill && (
           <Tooltip content={showBody ? t("Hide the description") : t("Show the description")}>
             <button
               aria-label={showBody ? t("Hide the description") : t("Show the description")}
@@ -316,6 +346,7 @@ export function PrInfo({ projectId, pr, target }: { projectId: string; pr: PullR
         <h2 className="min-w-0 flex-1 text-body font-semibold [overflow-wrap:anywhere]">
           {pr.title} <span className="font-normal text-faint-foreground">#{pr.number}</span>
         </h2>
+        {target && <DiscussionButton projectId={projectId} pr={pr} target={target} />}
         <Tooltip content={t("Open PR #{n} in the browser", { n: pr.number })}>
           <Button size="sm" variant="ghost" className="-my-1 -mr-1.5 shrink-0" onClick={() => openLink(pr.url)}>
             <ExternalLink />
@@ -360,10 +391,12 @@ export function PrInfo({ projectId, pr, target }: { projectId: string; pr: PullR
         <Stat pr={pr} />
         <span>{tp("{n} file", "{n} files", pr.changedFiles)}</span>
       </div>
+      {/* Read from the list, the description isn't here yet: it comes with the PR's own read. */}
+      {pr.body === null && <DescriptionSkeleton />}
       {body && showBody && target && (
         <div className="mt-2 border-t pt-2">
           <Suspense fallback={<Skeleton className="h-3 w-1/2" />}>
-            <Markdown compact text={body} path="" projectId={projectId} target={target} />
+            <Markdown compact remoteImages text={body} path="" projectId={projectId} target={target} />
           </Suspense>
         </div>
       )}

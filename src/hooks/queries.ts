@@ -125,6 +125,14 @@ export const useCachedPullRequests = (id: string | null) => useQuery({ ...pullsQ
 export const usePullRequest = (id: string | null, n: number | null) =>
   useQuery({ queryKey: ["pull", id, n], queryFn: () => api.pullRequest(id!, n!), enabled: !!id && !!n, staleTime: 60_000 })
 
+/** One gh call (GraphQL) for comments, reviews and line comments. */
+export const usePrDiscussion = (id: string | null, n: number | null) =>
+  useQuery({ queryKey: ["prDiscussion", id, n], queryFn: () => api.prDiscussion(id!, n!), enabled: !!id && !!n, staleTime: 60_000 })
+
+/** Images don't change at a URL; a failed one isn't retried (a 404 stays a 404). */
+export const usePrImage = (id: string | null, url: string | null) =>
+  useQuery({ queryKey: ["prImage", id, url], queryFn: () => api.prImage(id!, url!), enabled: !!id && !!url, staleTime: Infinity, gcTime: 30 * 60_000, retry: false })
+
 /** The open pull request whose head is this branch, from the list already read. */
 export function useBranchPr(id: string | null, branch: string | null | undefined): PullRequest | undefined {
   return prOfBranch(useCachedPullRequests(id).data?.items, branch)

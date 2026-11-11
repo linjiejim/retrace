@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, List, ListTree, Search, X } from "lucide-react"
-import { openFile, openPreview } from "@/lib/commands"
+import { clickFile, openFile, openPreview } from "@/lib/commands"
 import { shortHash, tildify } from "@/lib/format"
 import { keyNav } from "@/lib/keys"
 import { prefs, ui, useStore } from "@/lib/store"
@@ -148,6 +148,7 @@ function ChangesList({ files }: { files: FileChange[] }) {
   const diffView = useStore(prefs, (s) => s.diffView)
   const diffOpen = useStore(ui, (s) => s.diffOpen)
   const current = useStore(ui, (s) => s.file)
+  const noFile = useStore(ui, (s) => s.noFile)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const tree = useMemo(() => buildTree(files), [files])
   const folders = useMemo(() => folderPaths(tree), [tree])
@@ -165,12 +166,12 @@ function ChangesList({ files }: { files: FileChange[] }) {
   }
   useFileNav(paths, current?.path ?? null, open)
 
-  // An open diff always shows a file: the first one until another is picked.
+  // An open diff shows a file: the first one until another is picked, unless none is wanted.
   useEffect(() => {
-    if (!diffOpen || diffView !== "file" || current || !paths[0]) return
+    if (!diffOpen || noFile || diffView !== "file" || current || !paths[0]) return
     const f = byPath.get(paths[0])
     if (f) ui.set({ file: { path: f.path, oldPath: f.oldPath } })
-  }, [diffOpen, diffView, current, paths, byPath])
+  }, [diffOpen, noFile, diffView, current, paths, byPath])
 
   const totals = useMemo(() => {
     // Huge commits come without line counts; don't show a misleading +0 −0.
@@ -208,7 +209,7 @@ function ChangesList({ files }: { files: FileChange[] }) {
         selected={current?.path ?? null}
         isOpen={(p) => !collapsed.has(p)}
         onFolder={(p) => setCollapsed((prev) => toggled(prev, p))}
-        onFile={(f) => open(f.path)}
+        onFile={(f) => clickFile({ path: f.path, oldPath: f.oldPath })}
         tip={(f) => `${f.oldPath ? `${f.oldPath} → ` : ""}${f.path} · ${t(STATUS_LABEL[f.status])}`}
         renderName={(f, name) => {
           const dir = f.path.split("/").slice(0, -1).join("/")

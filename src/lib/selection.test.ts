@@ -4,7 +4,7 @@ import type { Overview, PullRequest, Trunk } from "./types"
 
 vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} })
 
-const { commands, openPullRequest, pickRow } = await import("./commands")
+const { clickFile, commands, openFile, openPullRequest, pickRow } = await import("./commands")
 const { branchOfTab, buildTabs, compareOf, prRemote } = await import("@/hooks/queries")
 const { ui } = await import("./store")
 const { targetOf } = await import("@/hooks/use-project-view")
@@ -110,6 +110,45 @@ describe("pull request tab", () => {
     ui.set({ selection: { kind: "commit", hash: "c1" } })
     openPullRequest(7)
     expect(ui.get().selection).toEqual({ kind: "commit", hash: "c1" })
+  })
+
+  it("opens as its description, with no file picked", () => {
+    ui.set({ projectId: "/repo", tabs: {}, prTabs: {}, file: { path: "a.ts", oldPath: null }, noFile: false })
+    openPullRequest(8)
+    expect(ui.get()).toMatchObject({ file: null, noFile: true, diffOpen: true })
+
+    openFile({ path: "a.ts", oldPath: null })
+    expect(ui.get()).toMatchObject({ file: { path: "a.ts" }, noFile: false })
+    // Its whole change picked again in the graph: back to the description.
+    ui.set({ selection: { kind: "commit", hash: "c1" } })
+    pickRow({ kind: "compare" })
+    expect(ui.get()).toMatchObject({ selection: { kind: "compare" }, file: null, noFile: true, diffOpen: true })
+    pickRow({ kind: "commit", hash: "c2" })
+    expect(ui.get().noFile).toBe(false)
+  })
+})
+
+describe("clicking the selected file", () => {
+  const a = { path: "a.ts", oldPath: null }
+
+  it("deselects it and leaves the commit message or PR card on its own", () => {
+    ui.set({ projectId: "/repo", tabs: { "/repo": "pr:7" }, selection: { kind: "compare" }, file: null, noFile: true, diffOpen: true })
+    clickFile(a)
+    expect(ui.get()).toMatchObject({ file: a, noFile: false })
+    clickFile(a)
+    expect(ui.get()).toMatchObject({ file: null, noFile: true, diffOpen: true })
+
+    ui.set({ tabs: { "/repo": "tree:/repo" }, selection: { kind: "commit", hash: "c1" }, file: a, noFile: false })
+    clickFile(a)
+    expect(ui.get()).toMatchObject({ file: null, noFile: true, diffOpen: true })
+  })
+
+  it("closes the diff where there is no card", () => {
+    ui.set({ projectId: "/repo", tabs: { "/repo": "tree:/repo" }, selection: { kind: "worktree" }, file: a, noFile: false, diffOpen: true })
+    clickFile({ path: "b.ts", oldPath: null })
+    expect(ui.get()).toMatchObject({ file: { path: "b.ts" }, diffOpen: true })
+    clickFile({ path: "b.ts", oldPath: null })
+    expect(ui.get()).toMatchObject({ file: null, diffOpen: false })
   })
 })
 

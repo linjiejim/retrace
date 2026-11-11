@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { checkTally, prNumber, prOfBranch, sortChecks } from "./github"
-import type { Check, CheckState, PullRequest } from "./types"
+import { arrange, checkTally, discussionCount, hunkTail, prNumber, prOfBranch, sortChecks } from "./github"
+import type { Check, CheckState, PrDiscussion, PrPost, PrThread, PullRequest } from "./types"
 
 describe("prNumber", () => {
   it("reads squash and merge commit subjects", () => {
@@ -45,5 +45,38 @@ describe("prOfBranch", () => {
     expect(prOfBranch(items, "feat/z")).toBeUndefined()
     expect(prOfBranch(items, null)).toBeUndefined()
     expect(prOfBranch(undefined, "feat/x")).toBeUndefined()
+  })
+})
+
+describe("discussion", () => {
+  const post = (p: Partial<PrPost>): PrPost => ({ kind: "comment", id: null, author: "a", body: "hi", state: null, at: 1, url: "", ...p })
+  const thread = (reviewId: string | null, replies = 1): PrThread => ({
+    path: "a.ts", line: 3, startLine: null, originalLine: 3, oldSide: false, resolved: false, outdated: false, reviewId, diffHunk: "",
+    comments: Array.from({ length: replies }, () => ({ author: "b", body: "x", at: 2, url: "" })),
+  })
+  const d: PrDiscussion = {
+    posts: [
+      post({}),
+      post({ kind: "review", id: "R1", body: "", state: "commented" }),
+      post({ kind: "review", id: "R2", body: "", state: "commented" }),
+      post({ kind: "review", id: "R3", body: "", state: "approved" }),
+    ],
+    threads: [thread("R1", 2), thread("R9")],
+    truncated: false,
+  }
+
+  it("puts threads under their review and drops reviews with nothing to show", () => {
+    const { posts, loose } = arrange(d)
+    expect(posts.map((p) => p.post.id)).toEqual([null, "R1", "R3"])
+    expect(posts[1].threads).toHaveLength(1)
+    expect(loose).toHaveLength(1)
+  })
+
+  it("counts comments, reviews that say something, and every line comment", () => {
+    expect(discussionCount(d)).toBe(1 + 3)
+  })
+
+  it("keeps the end of the hunk, without its header", () => {
+    expect(hunkTail("@@ -1,5 +1,5 @@\n a\n b\n-c\n+d\n e", 3)).toEqual(["-c", "+d", " e"])
   })
 })

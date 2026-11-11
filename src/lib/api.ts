@@ -22,6 +22,8 @@ import type {
   ProjectSummary,
   PullRequest,
   PullRequests,
+  PrDiscussion,
+  RemoteImage,
   RepoChanged,
   Target,
   TreeStatus,
@@ -111,6 +113,10 @@ export const api = {
   pullRequests: (id: string) => call<PullRequests>("pullRequests", { id }),
   /** One pull request, with its description. */
   pullRequest: (id: string, number: number) => call<PullRequest>("pullRequest", { id, number }),
+  /** Comments, reviews and line comments, read-only. */
+  prDiscussion: (id: string, number: number) => call<PrDiscussion>("prDiscussion", { id, number }),
+  /** An image referenced in a pull request; the page itself never loads remote images. */
+  prImage: (id: string, url: string) => call<RemoteImage>("prImage", { id, url }),
   /** Fetches the pull request's commits (objects only) when they aren't here yet. */
   preparePr: (id: string, pr: PullRequest) =>
     call<PreparedPr>("preparePr", { id, number: pr.number, head: pr.headRefOid, base: pr.baseRefOid, baseRef: pr.baseRefName }),

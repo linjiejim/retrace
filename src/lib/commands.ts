@@ -24,11 +24,33 @@ export function pickRow(sel: Selection) {
   if (selectionKey(s.selection) === selectionKey(sel) && s.diffOpen) {
     return ui.set({ selection: null, file: null, diffOpen: false, focusMode: false, focusArea: "graph" })
   }
-  ui.set({ selection: sel, diffOpen: true, focusArea: "graph" })
+  // A pull request's whole change opens as its description; anything else shows a diff right away.
+  const pr = sel.kind === "compare" && isPrTab()
+  ui.set({ selection: sel, diffOpen: true, focusArea: "graph", noFile: pr, ...(pr ? { file: null } : {}) })
+}
+
+/** The shown tab is a pull request. */
+export function isPrTab(): boolean {
+  const { projectId, tabs } = ui.get()
+  return !!projectId && !!tabs[projectId]?.startsWith("pr:")
 }
 
 export function openFile(file: { path: string; oldPath: string | null }) {
-  ui.set({ file, focusArea: "changes", jump: Date.now(), diffOpen: true })
+  ui.set({ file, noFile: false, focusArea: "changes", jump: Date.now(), diffOpen: true })
+}
+
+/**
+ * A file in the changes list was clicked. Clicking the one already shown deselects it: the
+ * commit message or PR card is left on its own, or, where there is none (uncommitted changes,
+ * everything since the trunk), the diff closes.
+ */
+export function clickFile(file: { path: string; oldPath: string | null }) {
+  const s = ui.get()
+  if (s.diffOpen && !s.noFile && s.file?.path === file.path) {
+    const card = s.selection?.kind === "commit" || (s.selection?.kind === "compare" && isPrTab())
+    return ui.set({ file: null, noFile: true, ...(card ? {} : { diffOpen: false, focusMode: false }) })
+  }
+  openFile(file)
 }
 
 /** A file picked in the files view: preview it, and narrow the graph to its history. */
@@ -51,15 +73,16 @@ export function openPullRequest(n: number) {
   const id = ui.get().projectId
   if (!id) return
   // Already the shown tab: just show its change again (an empty selection would stay empty).
-  if (ui.get().tabs[id] === prKey(n)) return ui.set((s) => ({ diffOpen: true, selection: s.selection ?? { kind: "compare" } }))
+  if (ui.get().tabs[id] === prKey(n)) return ui.set((s) => ({ diffOpen: true, selection: s.selection ?? { kind: "compare" }, ...(s.selection ? {} : { file: null, noFile: true }) }))
   ui.set((s) => ({
     prTabs: { ...s.prTabs, [id]: n },
     tabs: { ...s.tabs, [id]: prKey(n) },
     selection: null,
     file: null,
+    // Opened to read it: its description fills the area until a file is picked.
+    noFile: true,
     historyFile: null,
     focusMode: false,
-    // Opened to read it: show its description and diff right away.
     diffOpen: true,
   }))
 }

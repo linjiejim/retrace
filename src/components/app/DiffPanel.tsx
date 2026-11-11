@@ -22,7 +22,7 @@ import { PanelHeader } from "@/components/layout/LayoutView"
 import { STATUS_TONE } from "./ChangesPanel"
 import { RefPills } from "./GraphPanel"
 import { FilePreview, ImageCompare } from "./Preview"
-import { PrInfo } from "./PullRequests"
+import { PrInfo, PrInfoSkeleton } from "./PullRequests"
 
 // @pierre/diffs + Shiki are the heaviest part of the app: load them after first paint.
 const Pool = lazy(() => import("./DiffViews").then((m) => ({ default: m.Pool })))
@@ -34,16 +34,24 @@ const ContinuousDiff = lazy(() => import("./DiffViews").then((m) => ({ default: 
  * a preview of the picked file. A selected commit shows its message on top.
  */
 export function DiffPanel() {
-  const { projectId, tab, trunk } = useProjectView()
+  const { projectId, tab, trunk, prError } = useProjectView()
   const selection = useStore(ui, (s) => s.selection)
   const mode = useStore(prefs, (s) => s.changesMode)
   const target = targetOf(selection, tab, trunk)
   const changes = useChanges(projectId, target)
+  const noFile = useStore(ui, (s) => s.noFile)
+  // No file picked: the card is all there is, so it takes the whole area (diff mode only; the
+  // files view always previews a file).
+  const fill = noFile && mode !== "files"
+  // A pull request still being read (or its commits fetched): its card's shape, not an empty pane.
+  const prLoading = tab?.kind === "pr" && !prError && (!tab.pr || !tab.head || !selection) && selection?.kind !== "commit"
   const info =
-    projectId && selection?.kind === "commit" ? (
-      <CommitInfo projectId={projectId} hash={selection.hash} trunk={trunk} />
+    prLoading && mode !== "files" ? (
+      <PrInfoSkeleton />
+    ) : projectId && selection?.kind === "commit" ? (
+      <CommitInfo projectId={projectId} hash={selection.hash} trunk={trunk} fill={fill} />
     ) : projectId && selection?.kind === "compare" && tab?.kind === "pr" && tab.pr ? (
-      <PrInfo projectId={projectId} pr={tab.pr} target={target} />
+      <PrInfo projectId={projectId} pr={tab.pr} target={target} fill={fill} />
     ) : null
 
   return (
@@ -51,7 +59,7 @@ export function DiffPanel() {
       {mode === "files" ? (
         <PreviewArea projectId={projectId} target={target} changes={changes.data} info={info} />
       ) : (
-        <DiffArea projectId={projectId} target={target} files={changes.data} info={info} />
+        <DiffArea projectId={projectId} target={target} files={changes.data} info={info} cardOnly={(fill || prLoading) && !!info} />
       )}
     </section>
   )
@@ -131,7 +139,20 @@ function CloseButton() {
 // ---------- diff ----------
 
 /** `files` is undefined while the selection's changes load. */
-function DiffArea({ projectId, target, files: loaded, info }: { projectId: string | null; target: Target | null; files: FileChange[] | undefined; info: React.ReactNode }) {
+function DiffArea({
+  projectId,
+  target,
+  files: loaded,
+  info,
+  cardOnly,
+}: {
+  projectId: string | null
+  target: Target | null
+  files: FileChange[] | undefined
+  info: React.ReactNode
+  /** No file picked: only the card, no diff. */
+  cardOnly: boolean
+}) {
   const file = useStore(ui, (s) => s.file)
   const diffStyle = useStore(prefs, (s) => s.diffStyle)
   const diffView = useStore(prefs, (s) => s.diffView)
@@ -143,7 +164,13 @@ function DiffArea({ projectId, target, files: loaded, info }: { projectId: strin
     <>
       <PanelHeader className="gap-1">
         {change && <span className={cn("w-3.5 shrink-0 text-center font-mono text-caption font-semibold", STATUS_TONE[change.status])}>{STATUS_LETTER[change.status]}</span>}
-        {file ? <PathLabel path={file.path} from={change?.oldPath} /> : <span className="min-w-0 flex-1 truncate text-caption text-faint-foreground">{diffView === "all" && files.length ? tp("All {n} file", "All {n} files", files.length) : t("Diff")}</span>}
+        {cardOnly ? (
+          <span className="min-w-0 flex-1 truncate text-caption text-faint-foreground">{!loaded ? "" : files.length ? t("Pick a file in Changes") : t("No file changes")}</span>
+        ) : file ? (
+          <PathLabel path={file.path} from={change?.oldPath} />
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-caption text-faint-foreground">{diffView === "all" && files.length ? tp("All {n} file", "All {n} files", files.length) : t("Diff")}</span>
+        )}
         {file && diffView === "file" && <HistoryButton path={file.path} />}
         <StepButtons />
         <span className="@max-[560px]/header:hidden">
@@ -176,7 +203,7 @@ function DiffArea({ projectId, target, files: loaded, info }: { projectId: strin
         <CloseButton />
       </PanelHeader>
       {info}
-      <div className="selectable relative min-h-0 flex-1 overflow-hidden">
+      {!cardOnly && <div className="selectable relative min-h-0 flex-1 overflow-hidden">
         {!projectId || !target ? (
           <Hint>{t("Pick a commit or the uncommitted changes")}</Hint>
         ) : (
@@ -194,7 +221,7 @@ function DiffArea({ projectId, target, files: loaded, info }: { projectId: strin
             </Pool>
           </Suspense>
         )}
-      </div>
+      </div>}
     </>
   )
 }
@@ -263,10 +290,11 @@ function PreviewArea({ projectId, target, changes, info }: { projectId: string |
 
 // ---------- commit message ----------
 
-function CommitInfo({ projectId, hash, trunk }: { projectId: string; hash: string; trunk: Trunk | null }) {
+function CommitInfo({ projectId, hash, trunk, fill }: { projectId: string; hash: string; trunk: Trunk | null; fill?: boolean }) {
   const commit = useCommit(projectId, hash)
   const overview = useOverview(projectId)
-  const showBody = useStore(prefs, (s) => s.commitBody)
+  // Filling the area, the message is all there is: always shown, nothing to fold.
+  const showBody = useStore(prefs, (s) => s.commitBody) || !!fill
   const c = commit.data
   const pr = c ? prNumber(c.subject) : null
   const webUrl = overview.data?.webUrl
@@ -275,7 +303,7 @@ function CommitInfo({ projectId, hash, trunk }: { projectId: string; hash: strin
   const inApp = !pulls || pulls.state === "ok"
 
   return (
-    <div className="selectable max-h-[40%] shrink-0 overflow-y-auto border-b px-3 py-2">
+    <div className={cn("selectable overflow-y-auto px-3 py-2", fill ? "min-h-0 flex-1" : "max-h-[40%] shrink-0 border-b")}>
       {commit.isError ? (
         <div className="text-caption text-destructive">{commit.error.message}</div>
       ) : !c ? (
@@ -286,7 +314,7 @@ function CommitInfo({ projectId, hash, trunk }: { projectId: string; hash: strin
       ) : (
         <>
           <div className="flex items-start gap-1">
-            {c.body && (
+            {c.body && !fill && (
               <Tooltip content={showBody ? t("Hide the message") : t("Show the message")}>
                 <button
                   aria-label={showBody ? t("Hide the message") : t("Show the message")}

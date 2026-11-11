@@ -71,6 +71,7 @@ export function useDefaultSelection() {
     if (sel && !stale) return
     const next: Selection | null =
       dirtyFiles > 0 ? { kind: "worktree" } : tab.kind === "pr" && showCompare ? { kind: "compare" } : tab.head ? { kind: "commit", hash: tab.head } : null
-    ui.set({ selection: next, file: null })
+    // A pull request's whole change starts as its description, with no file picked.
+    ui.set({ selection: next, file: null, noFile: next?.kind === "compare" && tab.kind === "pr" })
   }, [tab?.key, tab?.head, statusReady, dirtyFiles, showCompare, selection === null]) // eslint-disable-line react-hooks/exhaustive-deps
 }

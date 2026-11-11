@@ -41,6 +41,11 @@ export interface UiState {
   prTabs: Record<string, number>
   selection: Selection | null
   file: { path: string; oldPath: string | null } | null
+  /**
+   * No file on purpose: the message or PR card fills the area and no diff shows, and no file is
+   * picked for you. A pull request opens like this; clicking the selected file again comes back here.
+   */
+  noFile: boolean
   /** Bumped when the user picks a file, so continuous reading scrolls to it (scrolling itself doesn't). */
   jump: number
   /** Files in the order the changes list shows them (tree order, collapsed folders skipped). */
@@ -141,6 +146,7 @@ export const ui = createStore<UiState>({
   prTabs: {},
   selection: null,
   file: null,
+  noFile: false,
   jump: 0,
   fileOrder: [],
   query: "",

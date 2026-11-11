@@ -393,3 +393,66 @@ pub struct PullRequests {
 pub struct PreparedPr {
     pub ahead: u32,
 }
+
+/// An image from a pull request's description or discussion, fetched by the backend.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RemoteImage {
+    pub mime: &'static str,
+    /// Base64.
+    pub data: String,
+}
+
+/// A pull request's conversation: comments and reviews in time order, and the review threads on lines.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PrDiscussion {
+    pub posts: Vec<PrPost>,
+    pub threads: Vec<PrThread>,
+    /// GitHub had more than Retrace reads in one go (100 of each); the rest is on GitHub.
+    pub truncated: bool,
+}
+
+/// A comment on the conversation, or a review (its summary; its line comments are threads).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PrPost {
+    /// "comment" | "review"
+    pub kind: &'static str,
+    /// Reviews only: GitHub's node id, which threads point to.
+    pub id: Option<String>,
+    pub author: String,
+    pub body: String,
+    /// Reviews only: "approved" | "changesRequested" | "commented" | "dismissed"
+    pub state: Option<&'static str>,
+    pub at: Option<i64>,
+    pub url: String,
+}
+
+/// Comments on one place in the diff.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PrThread {
+    pub path: String,
+    /// The line in the current diff; `None` when the code it was on has changed (outdated).
+    pub line: Option<u32>,
+    pub start_line: Option<u32>,
+    pub original_line: Option<u32>,
+    /// The old side of the diff ("LEFT"): a removed line.
+    pub old_side: bool,
+    pub resolved: bool,
+    pub outdated: bool,
+    /// The review the first comment was posted in.
+    pub review_id: Option<String>,
+    /// The diff around the first comment, ending at its line.
+    pub diff_hunk: String,
+    pub comments: Vec<PrReply>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PrReply {
+    pub author: String,
+    pub body: String,
+    pub at: Option<i64>,
+    pub url: String,
+}

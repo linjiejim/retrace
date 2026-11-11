@@ -41,18 +41,18 @@ fn command(dir: &Path, args: &[&str]) -> Command {
 }
 
 /// A counting gate: at most `max` holders at once; the rest wait their turn.
-struct Gate {
+pub(crate) struct Gate {
     max: usize,
     busy: std::sync::Mutex<usize>,
     cv: std::sync::Condvar,
 }
 
 impl Gate {
-    const fn new(max: usize) -> Self {
+    pub(crate) const fn new(max: usize) -> Self {
         Self { max, busy: std::sync::Mutex::new(0), cv: std::sync::Condvar::new() }
     }
 
-    fn enter(&'static self) -> Pass {
+    pub(crate) fn enter(&'static self) -> Pass {
         let mut busy = self.busy.lock().unwrap_or_else(|e| e.into_inner());
         while *busy >= self.max {
             busy = self.cv.wait(busy).unwrap_or_else(|e| e.into_inner());
@@ -62,7 +62,7 @@ impl Gate {
     }
 }
 
-struct Pass(&'static Gate);
+pub(crate) struct Pass(&'static Gate);
 
 impl Drop for Pass {
     fn drop(&mut self) {
@@ -254,22 +254,51 @@ pub struct Finished {
 
 /// Waits for a spawned child with piped stdout and stderr, draining both while it runs so a full
 /// pipe can't stall it. `None`: it ran past `timeout` and was stopped.
-pub fn wait_for(mut child: std::process::Child, timeout: Duration) -> std::io::Result<Option<Finished>> {
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut text = String::new();
-            if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_string(&mut text);
-            }
-            text
-        })
-    };
-    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+pub fn wait_for(child: std::process::Child, timeout: Duration) -> std::io::Result<Option<Finished>> {
+    // Text that isn't UTF-8 comes back empty, as `read_to_string` leaves it.
+    Ok(wait_for_bytes(child, timeout, None)?.map(|done| Finished {
+        ok: done.ok,
+        code: done.code,
+        stdout: String::from_utf8(done.stdout).unwrap_or_default(),
+        stderr: done.stderr,
+    }))
+}
+
+/// [`Finished`] with stdout as bytes (an image from gh or curl).
+pub struct FinishedBytes {
+    pub ok: bool,
+    pub code: Option<i32>,
+    pub stdout: Vec<u8>,
+    /// More than the limit was written: `stdout` holds only the first `limit + 1` bytes.
+    pub cut: bool,
+    pub stderr: String,
+}
+
+/// [`wait_for`] for binary output. With a `limit`, reading stops one byte past it and the pipe is
+/// closed, so a huge download can't fill memory (the child then fails on the broken pipe).
+pub fn wait_for_bytes(mut child: std::process::Child, timeout: Duration, limit: Option<usize>) -> std::io::Result<Option<FinishedBytes>> {
+    let out = child.stdout.take();
+    let stdout = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(pipe) = out {
+            let _ = pipe.take(limit.map_or(u64::MAX, |n| n as u64 + 1)).read_to_end(&mut bytes);
+        }
+        bytes
+    });
+    let err = child.stderr.take();
+    let stderr = std::thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(mut pipe) = err {
+            let _ = pipe.read_to_string(&mut text);
+        }
+        text
+    });
     let started = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
-            return Ok(Some(Finished { ok: status.success(), code: status.code(), stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() }));
+            let stdout = stdout.join().unwrap_or_default();
+            let cut = limit.is_some_and(|n| stdout.len() > n);
+            return Ok(Some(FinishedBytes { ok: status.success(), code: status.code(), stdout, cut, stderr: stderr.join().unwrap_or_default() }));
         }
         if started.elapsed() > timeout {
             let _ = child.kill();
@@ -322,6 +351,15 @@ pub fn nul_tokens(bytes: &[u8]) -> Vec<String> {
 mod tests {
     use super::Gate;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn binary_output_stops_at_the_limit() {
+        let spawn = || std::process::Command::new("/bin/sh").args(["-c", "head -c 5000 /dev/zero"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+        let cut = super::wait_for_bytes(spawn(), std::time::Duration::from_secs(10), Some(100)).unwrap().unwrap();
+        assert!(cut.cut && cut.stdout.len() == 101);
+        let all = super::wait_for_bytes(spawn(), std::time::Duration::from_secs(10), None).unwrap().unwrap();
+        assert!(all.ok && !all.cut && all.stdout.len() == 5000 && all.stdout.iter().all(|b| *b == 0), "bytes, not text");
+    }
 
     #[test]
     fn gate_never_lets_more_than_max_through() {

@@ -371,6 +371,28 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
             json!(github::view(&dir, repo::web_url(&dir, trunk.as_ref()).as_deref(), number)?)
         }
+        "prDiscussion" => {
+            #[derive(Deserialize)]
+            struct A {
+                id: String,
+                number: u32,
+            }
+            let A { id, number } = args(a)?;
+            let dir = project_dir(state, &id)?;
+            let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
+            json!(github::discussion(&dir, repo::web_url(&dir, trunk.as_ref()).as_deref(), number)?)
+        }
+        "prImage" => {
+            #[derive(Deserialize)]
+            struct A {
+                id: String,
+                url: String,
+            }
+            let A { id, url } = args(a)?;
+            let dir = project_dir(state, &id)?;
+            let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
+            json!(github::image(&dir, repo::web_url(&dir, trunk.as_ref()).as_deref(), &url)?)
+        }
         "preparePr" => {
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]

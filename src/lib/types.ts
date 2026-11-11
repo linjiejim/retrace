@@ -305,6 +305,57 @@ export interface PullRequests {
   items: PullRequest[]
 }
 
+/** An image from a pull request, fetched by the backend (gh for GitHub's own, curl for the rest). */
+export interface RemoteImage {
+  mime: string
+  /** Base64. */
+  data: string
+}
+
+export type ReviewState = "approved" | "changesRequested" | "commented" | "dismissed"
+
+/** A comment on the conversation, or a review's summary (its line comments are threads). */
+export interface PrPost {
+  kind: "comment" | "review"
+  /** Reviews only: threads point to it with `reviewId`. */
+  id: string | null
+  author: string
+  body: string
+  state: ReviewState | null
+  at: number | null
+  url: string
+}
+
+export interface PrReply {
+  author: string
+  body: string
+  at: number | null
+  url: string
+}
+
+/** Comments on one place in the diff. */
+export interface PrThread {
+  path: string
+  /** The line in the current diff; `null` once the code has changed (outdated). */
+  line: number | null
+  startLine: number | null
+  originalLine: number | null
+  /** On the old side of the diff: a removed line. */
+  oldSide: boolean
+  resolved: boolean
+  outdated: boolean
+  reviewId: string | null
+  diffHunk: string
+  comments: PrReply[]
+}
+
+export interface PrDiscussion {
+  posts: PrPost[]
+  threads: PrThread[]
+  /** More than Retrace reads in one go (100 of each); the rest is on GitHub. */
+  truncated: boolean
+}
+
 /** The pull request's commits are here; `ahead` of them on top of its base. */
 export interface PreparedPr {
   ahead: number
