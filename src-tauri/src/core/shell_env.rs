@@ -181,7 +181,7 @@ mod tests {
             // stdout, not the user's profiles or the startup time of external commands.
             let end = if complete { format!("\\n{END_MARKER}\\n") } else { String::new() };
             let run = format!("printf '\\n{MARKER}\\nPATH=/bin\\000{end}'");
-            let script = format!("#!/bin/sh\n/bin/sleep 10 &\nprintf '%s' \"$!\" > '{}'\n{run}\n", dir.join("child").display());
+            let script = format!("#!/bin/sh\n/bin/sleep 30 &\nprintf '%s' \"$!\" > '{}'\n{run}\n", dir.join("child").display());
             std::fs::write(dir.join("shell"), script).unwrap();
             std::fs::set_permissions(dir.join("shell"), std::fs::Permissions::from_mode(0o755)).unwrap();
             Self(dir)
@@ -205,9 +205,12 @@ mod tests {
     fn completed_environment_does_not_wait_for_background_stdout_to_close() {
         let shell = BackgroundShell::new(true);
         let started = Instant::now();
-        let env = login_env_with_timeout(&shell.shell(), Duration::from_secs(1));
+        // Generous: macOS checks a just-written script on its first run, which alone can take
+        // a second. The point is that it returns long before the background process lets go
+        // of stdout (30 seconds).
+        let env = login_env_with_timeout(&shell.shell(), Duration::from_secs(10));
         assert!(env.is_some_and(|env| env.contains_key("PATH")));
-        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(started.elapsed() < Duration::from_secs(9));
     }
 
     #[test]
