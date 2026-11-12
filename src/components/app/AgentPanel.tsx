@@ -4,28 +4,31 @@ import { GitBranch, History, MessageSquare, RotateCcw, SendHorizontal, Square, X
 import { onAgentChanged } from "@/lib/api"
 import { agentState, canResume, isSaved, resumesDirectly, sessionLabel } from "@/lib/agent-state"
 import { t } from "@/lib/i18n"
+import { keepChats } from "@/lib/agent-chat"
 import { prefs, ui, useStore } from "@/lib/store"
 import { attachTerminal, ensureTerminal, keepTerminals, sendMessage } from "@/lib/terminals"
-import type { AgentSession } from "@/lib/types"
+import type { AgentKind, AgentSession } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAgentKinds, useAgentSessions, useNow } from "@/hooks/agents"
 import { Button, IconButton } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/input"
 import { StateView } from "@/components/ui/state"
 import { notify } from "@/components/ui/toast"
+import { AgentChat } from "./AgentChat"
 import { AgentStateIcon, fallbackLabel, useSessionActions } from "./AgentSessionRow"
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
-/** Keeps one terminal per listed session (made as soon as a session appears) and the list fresh. */
+/** Keeps one terminal per listed terminal session (made as soon as a session appears) and the list fresh. */
 export function AgentTerminals() {
   const qc = useQueryClient()
   const sessions = useAgentSessions().data
   useEffect(() => {
     const ids = new Set((sessions ?? []).map((s) => s.id))
     // A session already a few seconds old that this page has no terminal for: the page was reloaded.
-    sessions?.filter((s) => !isSaved(s)).forEach((s) => ensureTerminal(s.id, s.running && Date.now() - s.startedAt > 5000))
+    sessions?.filter((s) => !isSaved(s) && !s.chat).forEach((s) => ensureTerminal(s.id, s.running && Date.now() - s.startedAt > 5000))
     keepTerminals(ids)
+    keepChats(ids)
     const shown = ui.get().agentSession
     if (shown && !ids.has(shown) && sessions) ui.set({ agentSession: null })
   }, [sessions])
@@ -93,8 +96,8 @@ function MessageBox({ id, agent, disabled }: { id: string; agent: string; disabl
 }
 
 /** What Resume does for this session's agent. */
-function resumeHint(s: AgentSession): string {
-  return resumesDirectly(s)
+function resumeHint(s: AgentSession, kinds: AgentKind[] | undefined): string {
+  return resumesDirectly(s, kinds)
     ? t("Resume reopens this conversation in its worktree; the task isn't sent again.")
     : t("Resume opens the agent's history picker in this worktree. Choose the conversation to continue.")
 }
@@ -125,9 +128,10 @@ function startResize(e: React.PointerEvent, drawer: HTMLElement | null) {
 }
 
 /**
- * The agent terminal floats over the right of the window instead of taking a column: open it
- * from a session row, close it with ✕ or ⌘T (Esc belongs to the terminal). It doesn't block the
- * rest of the window, so the projects list can switch sessions while it is open.
+ * The agent session floats over the right of the window instead of taking a column: open it
+ * from a session row, close it with ✕ or ⌘T (in a terminal, Esc belongs to the agent). It doesn't
+ * block the rest of the window, so the projects list can switch sessions while it is open. A
+ * session is a conversation (an agent that speaks ACP) or the agent's own terminal UI.
  */
 export function AgentDrawer() {
   const open = useStore(ui, (s) => s.agentOpen)
@@ -170,27 +174,33 @@ export function AgentDrawer() {
               </span>
             )}
             <span className="shrink-0 pr-1 text-caption text-faint-foreground">{agentName}</span>
-            <SessionButtons session={s} label={label} />
+            <SessionButtons session={s} label={label} kinds={kinds} />
           </>
         ) : (
           <span className="min-w-0 flex-1 truncate text-caption text-faint-foreground">{t("Agent")}</span>
         )}
-        <IconButton label={showInput ? t("Hide the message box") : t("Show the message box")} size="icon-sm" onClick={() => prefs.set({ agentInput: !showInput })} className={cn(!showInput && "text-faint-foreground")}>
-          <MessageSquare />
-        </IconButton>
+        {s && !s.chat && !isSaved(s) && (
+          <IconButton label={showInput ? t("Hide the message box") : t("Show the message box")} size="icon-sm" onClick={() => prefs.set({ agentInput: !showInput })} className={cn(!showInput && "text-faint-foreground")}>
+            <MessageSquare />
+          </IconButton>
+        )}
         <IconButton label={`${t("Close")}  ⌘T`} size="icon-sm" onClick={() => ui.set({ agentOpen: false })}>
           <X />
         </IconButton>
       </header>
       {s ? (
         <>
-          <div className="min-h-0 flex-1 px-2 pt-1.5">
-            {isSaved(s) ? (
-              <SavedSession session={s} label={label} />
-            ) : (
+          {isSaved(s) ? (
+            <div className="min-h-0 flex-1 px-2 pt-1.5">
+              <SavedSession session={s} label={label} kinds={kinds} />
+            </div>
+          ) : s.chat ? (
+            <AgentChat key={s.id} session={s} agentName={agentName} />
+          ) : (
+            <div className="min-h-0 flex-1 px-2 pt-1.5">
               <TerminalHost id={s.id} />
-            )}
-          </div>
+            </div>
+          )}
           {!s.running && s.exitCode !== null && (
             <p className="shrink-0 border-t px-3 py-2 text-caption text-faint-foreground">
               {s.stopped
@@ -198,10 +208,10 @@ export function AgentDrawer() {
                 : s.exitCode === 0
                   ? t("{agent} has finished.", { agent: agentName })
                   : t("{agent} stopped (exit code {code}).", { agent: agentName, code: s.exitCode ?? "?" })}
-              {canResume(s) && <span className="ml-1">{resumeHint(s)}</span>}
+              {canResume(s) && <span className="ml-1">{resumeHint(s, kinds)}</span>}
             </p>
           )}
-          {showInput && s.running && <MessageBox key={s.id} id={s.id} agent={agentName} disabled={!s.running} />}
+          {showInput && s.running && !s.chat && <MessageBox key={s.id} id={s.id} agent={agentName} disabled={!s.running} />}
         </>
       ) : (
         <StateView size="sm" kind="empty" title={t("No agent session open")} description={t("Start one with + on a project, or press ⌘N.")} />
@@ -211,7 +221,7 @@ export function AgentDrawer() {
 }
 
 /** A session from before Retrace was restarted: its process is gone, its conversation isn't. */
-function SavedSession({ session: s, label }: { session: AgentSession; label: string }) {
+function SavedSession({ session: s, label, kinds }: { session: AgentSession; label: string; kinds: AgentKind[] | undefined }) {
   const { resume, element } = useSessionActions(s, label)
   return (
     <>
@@ -220,10 +230,10 @@ function SavedSession({ session: s, label }: { session: AgentSession; label: str
         kind="empty"
         icon={<History />}
         title={t("Session saved")}
-        description={resumeHint(s)}
+        description={resumeHint(s, kinds)}
         action={
           <Button variant="primary" size="sm" onClick={() => void resume()}>
-            {resumesDirectly(s) ? t("Resume Session") : t("Resume Session…")}
+            {resumesDirectly(s, kinds) ? t("Resume Session") : t("Resume Session…")}
           </Button>
         }
       />
@@ -232,12 +242,12 @@ function SavedSession({ session: s, label }: { session: AgentSession; label: str
   )
 }
 
-function SessionButtons({ session: s, label }: { session: AgentSession; label: string }) {
+function SessionButtons({ session: s, label, kinds }: { session: AgentSession; label: string; kinds: AgentKind[] | undefined }) {
   const { stop, resume, element } = useSessionActions(s, label)
   return (
     <>
       {canResume(s) && (
-        <IconButton label={resumesDirectly(s) ? t("Resume Session") : t("Resume Session…")} size="icon-sm" onClick={() => void resume()}>
+        <IconButton label={resumesDirectly(s, kinds) ? t("Resume Session") : t("Resume Session…")} size="icon-sm" onClick={() => void resume()}>
           <RotateCcw />
         </IconButton>
       )}

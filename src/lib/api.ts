@@ -6,6 +6,7 @@ import type {
   AgentChunk,
   AgentKind,
   AgentSession,
+  AgentTranscript,
   BranchStatus,
   CleanupCandidate,
   PatchText,
@@ -137,7 +138,7 @@ export const api = {
   open: (id: string, path: string, how: "finder" | "terminal" | "editor") => call<null>("open", { id, path, with: how }),
   agentKinds: () => call<AgentKind[]>("agentKinds"),
   /** `tree` null: a new worktree on `branch`, set up with `setup` (remembered for the project). */
-  agentStart: (a: { id: string; agent: string; task: string; tree: string | null; branch: string | null; setup: string | null; cols: number; rows: number }) =>
+  agentStart: (a: { id: string; agent: string; task: string; tree: string | null; branch: string | null; setup: string | null; options: Record<string, string> | null; cols: number; rows: number }) =>
     call<AgentSession>("agentStart", a),
   /** The project's remembered setup command for new worktrees. */
   agentSetup: (id: string) => call<string | null>("agentSetup", { id }),
@@ -146,7 +147,12 @@ export const api = {
   /** `data`: base64 bytes for the terminal's input; `typed`: the user's (not the terminal answering a query). */
   agentWrite: (session: string, data: string, typed: boolean) => call<null>("agentWrite", { session, data, typed }),
   agentResize: (session: string, cols: number, rows: number) => call<null>("agentResize", { session, cols, rows }),
-  agentResume: (session: string) => call<AgentSession>("agentResume", { session }),
+  agentResume: (session: string, options: Record<string, string> | null) => call<AgentSession>("agentResume", { session, options }),
+  agentTranscript: (session: string, after: number) => call<AgentTranscript>("agentTranscript", { session, after }),
+  agentPrompt: (session: string, text: string) => call<null>("agentPrompt", { session, text }),
+  agentCancel: (session: string) => call<null>("agentCancel", { session }),
+  agentAnswer: (session: string, request: number, option: string) => call<null>("agentAnswer", { session, request, option }),
+  agentSetOption: (session: string, option: string, value: string) => call<null>("agentSetOption", { session, option, value }),
   agentStop: (session: string) => call<null>("agentStop", { session }),
   agentClose: (session: string) => call<null>("agentClose", { session }),
 }
@@ -198,4 +204,11 @@ export async function pickFolders(): Promise<string[] | null> {
 
 export async function copyText(text: string) {
   await navigator.clipboard.writeText(text)
+}
+
+/** A conversation has something new (inside the app; the browser polls `agentTranscript` instead). */
+export async function onAgentTranscript(cb: (session: string) => void): Promise<() => void> {
+  if (!inTauri) return () => {}
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<string>("agent-transcript", (e) => cb(e.payload))
 }

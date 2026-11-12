@@ -77,6 +77,11 @@ export interface UiState {
   agentOpen: boolean
   /** The new-session dialog, for this project. */
   newAgent: { projectId: string } | null
+  /**
+   * A file to show once the tab `key` (`<project>\0<tab key>`) is the one on screen: switching
+   * tabs picks that tab's default selection, which would otherwise replace this one.
+   */
+  wanted: { key: string; selection: Selection; file: { path: string; oldPath: string | null }; at: number } | null
 }
 
 export interface Prefs {
@@ -112,6 +117,8 @@ export interface Prefs {
   fileIcons: FileIconTheme
   /** The agent picked last in the new-session dialog. */
   lastAgent: string | null
+  /** What was last picked for an agent's own settings (model, effort): agent id → setting id → value. New sessions start with it. */
+  agentOptions: Record<string, Record<string, string>>
   /** The message box under the agent terminal. */
   agentInput: boolean
   /** Width of the agent drawer in px, once dragged; null = min(60vw, 960). */
@@ -144,6 +151,7 @@ const defaults: Prefs = {
   collapsedGroups: [],
   fileIcons: "color",
   lastAgent: null,
+  agentOptions: {},
   agentInput: true,
   agentWidth: null,
 }
@@ -188,6 +196,7 @@ export const ui = createStore<UiState>({
   agentSession: null,
   agentOpen: false,
   newAgent: null,
+  wanted: null,
 })
 ui.subscribe(() => {
   const id = ui.get().projectId

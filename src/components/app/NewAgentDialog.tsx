@@ -89,11 +89,13 @@ export function NewAgentDialog() {
         tree: where === "current" ? (current?.path ?? null) : null,
         branch: where === "new" ? branch.trim() : null,
         setup: where === "new" ? setup : null,
+        // The model and the like picked last time, for an agent with a conversation.
+        options: prefs.get().agentOptions[agent] ?? null,
         cols: START_COLS,
         rows: START_ROWS,
       })
       // At once, so the agent's first terminal queries get answers.
-      ensureTerminal(s.id)
+      if (!s.chat) ensureTerminal(s.id)
       qc.setQueryData<AgentSession[]>(["agents"], (old) => [...(old ?? []).filter((x) => x.id !== s.id), s])
       void qc.invalidateQueries({ queryKey: ["agents"] })
       void qc.invalidateQueries({ queryKey: ["agentSetup", projectId] })
@@ -134,7 +136,7 @@ export function NewAgentDialog() {
                 }}
               >
                 <FieldGroup>
-                  <Field label={t("Task")} hint={t("Optional: you can also type it in the terminal.")}>
+                  <Field label={t("Task")} hint={installed.find((k) => k.id === agent)?.chat ? t("Optional: you can also say it once the session is open.") : t("Optional: you can also type it in the terminal.")}>
                     <Textarea
                       autoFocus
                       rows={4}

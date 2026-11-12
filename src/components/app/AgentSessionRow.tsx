@@ -4,7 +4,7 @@ import { api } from "@/lib/api"
 import { agentState, canResume, resumesDirectly, sessionLabel, short, STATE_LABEL, stateDetail, type AgentState } from "@/lib/agent-state"
 import { openSession } from "@/lib/commands"
 import { t } from "@/lib/i18n"
-import { ui, useStore } from "@/lib/store"
+import { prefs, ui, useStore } from "@/lib/store"
 import type { AgentKind, AgentSession } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { Spinner } from "@/components/ui/spinner"
@@ -73,7 +73,7 @@ export function useSessionActions(s: AgentSession, label: string) {
   }
   const resume = async () => {
     try {
-      const resumed = await api.agentResume(s.id)
+      const resumed = await api.agentResume(s.id, prefs.get().agentOptions[s.agent] ?? null)
       await refresh()
       openSession(resumed)
     } catch (e) {
@@ -113,7 +113,7 @@ export function AgentSessionRow({ session: s, kinds, now, indent }: { session: A
       {canResume(s) && (
         <Item onSelect={() => void resume()}>
           <RotateCcw />
-          {resumesDirectly(s) ? t("Resume Session") : t("Resume Session…")}
+          {resumesDirectly(s, kinds) ? t("Resume Session") : t("Resume Session…")}
         </Item>
       )}
       {s.running && (

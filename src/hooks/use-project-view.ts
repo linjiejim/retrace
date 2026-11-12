@@ -53,6 +53,9 @@ export function targetOf(sel: Selection | null, tab: Tab | undefined, trunk: Tru
  * tab's HEAD. Lives at the app level because any view can be hidden or moved. Worktree tabs wait
  * for their own status entry, pull request tabs for their commits.
  */
+/** A file asked for along with a tab switch is honoured this long; after that the tab is just a tab. */
+const WANTED_MS = 5000
+
 export function useDefaultSelection() {
   const { projectId, tab, statuses, dirtyFiles, showCompare } = useProjectView()
   const selection = useStore(ui, (s) => s.selection)
@@ -63,6 +66,12 @@ export function useDefaultSelection() {
   useEffect(() => {
     if (!tab || !statusReady) return
     const key = `${projectId}\0${tab.key}`
+    // Something asked for a file in this tab just now (a file an agent changed): that, not the default.
+    const wanted = ui.get().wanted
+    if (wanted && wanted.key === key && Date.now() - wanted.at < WANTED_MS) {
+      owner.current = key
+      return ui.set({ wanted: null, selection: wanted.selection, file: wanted.file, noFile: false, diffOpen: true })
+    }
     // An explicit deselection stays empty until another tab is opened.
     if (owner.current === key && !ui.get().selection) return
     const moved = owner.current !== null && owner.current !== key

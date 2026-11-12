@@ -12,7 +12,7 @@ import { leave } from "./quit"
 import { focusTerminal } from "./terminals"
 import type { AgentSession, Overview, Project } from "./types"
 import { checkForUpdates } from "./updater"
-import { invalidateProject, prKey, summaryQuery } from "@/hooks/queries"
+import { invalidateProject, prKey, summaryQuery, targetKey } from "@/hooks/queries"
 import { notify } from "@/components/ui/toast"
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -97,6 +97,34 @@ export function openSession(s: AgentSession) {
   // A new worktree isn't in the cached overview yet.
   invalidateProject(queryClient, s.project, { git: true, trees: [] })
   requestAnimationFrame(() => requestAnimationFrame(() => focusTerminal(s.id)))
+}
+
+/**
+ * A file an agent changed, in Retrace's own diff: its worktree's uncommitted changes, or, when
+ * the agent has committed it already, everything on the branch since the trunk.
+ */
+export async function openSessionFile(s: AgentSession, path: string) {
+  if (ui.get().projectId !== s.project) selectProject(s.project)
+  const target = { kind: "worktree" as const, tree: s.tree }
+  // Fresh: the agent has just written it.
+  const pending = await queryClient.fetchQuery({ queryKey: ["changes", s.project, targetKey(target)], queryFn: () => api.changes(s.project, target), staleTime: 0 }).catch(() => [])
+  const selection: Selection = pending.some((f) => f.path === path) ? { kind: "worktree" } : { kind: "compare" }
+  const file = { path, oldPath: null }
+  // The diff, not the files browser (which previews a file instead of showing its change).
+  prefs.set({ changesMode: "changes" })
+  ui.set((u) => ({
+    tabs: { ...u.tabs, [s.project]: `tree:${s.tree}` },
+    selection,
+    file,
+    // When this switches tabs, the new tab's default selection would replace the two above.
+    wanted: { key: `${s.project}\0tree:${s.tree}`, selection, file, at: Date.now() },
+    noFile: false,
+    diffOpen: true,
+    focusArea: "changes",
+    focusMode: false,
+    jump: Date.now(),
+  }))
+  invalidateProject(queryClient, s.project, { git: true, trees: [s.tree] })
 }
 
 export function closeDiff() {

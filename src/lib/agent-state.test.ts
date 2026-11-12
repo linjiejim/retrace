@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { canResume, agentState, BOOT_MS, defaultBranch, fromBase64, isTerminalReport, newPart, pasted, QUIET_MS, needsYou, pickSession, resumesDirectly, sessionLabel, slugify, stateDetail, toBase64, worktreePath } from "./agent-state"
+import { canResume, agentState, defaultBranch, fromBase64, isTerminalReport, newPart, pasted, QUIET_MS, needsYou, pickSession, resumesDirectly, sessionLabel, slugify, stateDetail, toBase64, worktreePath } from "./agent-state"
 import type { AgentLive, AgentSession } from "./types"
 
 const base: AgentSession = {
@@ -19,6 +19,7 @@ const base: AgentSession = {
   stopped: false,
   nativeId: null,
   live: null,
+  chat: false,
 }
 
 const live = (state: AgentLive["state"], more: Partial<AgentLive> = {}): AgentLive => ({ state, detail: null, worked: true, since: 0, at: 0, ...more })
@@ -60,14 +61,10 @@ describe("agent state", () => {
     expect(agentState({ ...errored, running: false, exitCode: 0 }, 0)).toBe("done")
   })
 
-  it("doesn't flash waiting while a session with a task is still loading", () => {
-    const loading = { ...base, task: "Fix it", live: live("idle", { worked: false, since: 5000 }) }
-    expect(agentState(loading, 5000 + BOOT_MS - 1)).toBe("working")
-    // The task never started (a dialog in the way): it is the user's move after all.
-    expect(agentState(loading, 5000 + BOOT_MS)).toBe("waiting")
-    // No task: it waits for the first message from the start. A reopened conversation too.
-    expect(agentState({ ...loading, task: "" }, 5001)).toBe("waiting")
-    expect(agentState({ ...loading, nativeId: "ses_1" }, 5001)).toBe("waiting")
+  it("is working from the first moment of a conversation, and waiting once it is open", () => {
+    // The backend reports "busy" while it opens the conversation and sends the task.
+    expect(agentState({ ...base, chat: true, task: "Fix it", live: live("busy", { worked: false }) }, 1)).toBe("working")
+    expect(agentState({ ...base, chat: true, live: live("idle", { worked: false }) }, 1)).toBe("waiting")
   })
 
   it("opens the drawer on the session most likely wanted", () => {
@@ -96,7 +93,7 @@ describe("agent state", () => {
   })
 
   it("labels a session by its task, then its title, then its agent", () => {
-    const kinds = [{ id: "opencode", name: "OpenCode", path: "/x" }]
+    const kinds = [{ id: "opencode", name: "OpenCode", path: "/x", chat: true }]
     const fallback = (name: string) => `${name} session`
     expect(sessionLabel({ ...base, task: "\n  Fix the login page\nand tests" }, kinds, fallback)).toBe("Fix the login page")
     expect(sessionLabel({ ...base, title: "Login" }, kinds, fallback)).toBe("Login")
@@ -164,8 +161,14 @@ it("offers a history picker only for stopped supported providers", () => {
   expect(canResume({ ...base, agent: "claude", running: false })).toBe(true)
   expect(canResume({ ...base, agent: "codex" })).toBe(false)
   expect(canResume({ ...base, running: false })).toBe(true)
-  // OpenCode goes straight back into the conversation; the others show their history picker.
-  expect(resumesDirectly(base)).toBe(true)
-  expect(resumesDirectly({ ...base, agent: "codex" })).toBe(false)
+  // A conversation is reopened as it was; a terminal agent shows its history picker. A session
+  // saved before conversations existed goes by what its agent is now.
+  const kinds = [
+    { id: "opencode", name: "OpenCode", path: "/bin/opencode", chat: true },
+    { id: "codex", name: "Codex", path: "/bin/codex", chat: false },
+  ]
+  expect(resumesDirectly({ ...base, chat: true }, undefined)).toBe(true)
+  expect(resumesDirectly(base, kinds)).toBe(true)
+  expect(resumesDirectly({ ...base, agent: "codex" }, kinds)).toBe(false)
   expect(agentState({ ...base, running: false, exitCode: 0, stopped: true }, 0)).toBe("stopped")
 })

@@ -1,30 +1,24 @@
-// What an agent session is doing, judged from its terminal: output means working, silence or a
-// bell means it waits for you. Plus the small text helpers the new-session dialog and the
-// message box need. No DOM here, so it is all unit-tested.
+// What an agent session is doing. A conversation says so itself; a terminal is judged from its
+// output: output means working, silence or a bell means it waits for you. Plus the small text
+// helpers the new-session dialog and the message box need. No DOM here, so it is all unit-tested.
 
 import type { AgentKind, AgentSession } from "./types"
 
 /**
- * `asking` (a permission or a question) and `errored` (the last turn failed, the agent is still
- * there) are known only for agents Retrace can follow; for the others both look like `waiting`.
+ * `asking` (a permission) and `errored` (the last turn failed, the agent is still there) are
+ * known only for conversations; in a terminal both look like `waiting`.
  */
 export type AgentState = "working" | "waiting" | "asking" | "errored" | "done" | "stopped" | "failed"
 
 /** This long without output and the agent is taken to be waiting (agents animate while they work). */
 export const QUIET_MS = 4000
-/** A session started with a task counts as working this long before its first turn shows up. */
-export const BOOT_MS = 15000
-
 export function agentState(s: AgentSession, now: number): AgentState {
   if (!s.running) return s.stopped ? "stopped" : s.exitCode === 0 ? "done" : "failed"
   if (s.live) {
-    // The agent's own word. It stays "busy" while it waits for a permission, so asking comes first.
+    // The agent's own word.
     if (s.live.state === "asking") return "asking"
     if (s.live.state === "busy") return "working"
-    if (s.live.state === "error") return "errored"
-    // Loaded, the task not picked up yet: don't flash "waiting" before the first turn.
-    const booting = !s.live.worked && !s.nativeId && !!s.task.trim() && now - s.live.since < BOOT_MS
-    return booting ? "working" : "waiting"
+    return s.live.state === "error" ? "errored" : "waiting"
   }
   const rang = s.bellAt !== null && (s.inputAt === null || s.bellAt > s.inputAt)
   if (rang) return "waiting"
@@ -150,7 +144,7 @@ export function canResume(s: AgentSession): boolean {
   return !s.running
 }
 
-/** OpenCode reopens the conversation Retrace followed; Codex and Claude Code show their own history. */
-export function resumesDirectly(s: AgentSession): boolean {
-  return s.agent === "opencode"
+/** A conversation is reopened as it was; a terminal agent (Codex, Claude Code) shows its own history picker. */
+export function resumesDirectly(s: AgentSession, kinds: AgentKind[] | undefined): boolean {
+  return s.chat || !!kinds?.find((k) => k.id === s.agent)?.chat
 }

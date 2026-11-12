@@ -368,9 +368,11 @@ export interface AgentKind {
   id: string
   name: string
   path: string | null
+  /** Its sessions are conversations Retrace draws (over ACP), not terminals. */
+  chat: boolean
 }
 
-/** An agent running in a terminal. Times are milliseconds since the epoch. */
+/** An agent session: a conversation or a terminal. Times are milliseconds since the epoch. */
 export interface AgentSession {
   id: string
   project: string
@@ -390,10 +392,57 @@ export interface AgentSession {
   exitCode: number | null
   /** Ended because the user stopped or closed it. */
   stopped: boolean
-  /** The agent's own id for the conversation (OpenCode): what Resume reopens. */
+  /** The agent's own id for the conversation: what Resume reopens. */
   nativeId: string | null
-  /** What the agent itself reports, while Retrace can follow it (OpenCode); otherwise the terminal's output decides. */
+  /** What the agent itself reports (a conversation); otherwise the terminal's output decides. */
   live: AgentLive | null
+  /** A conversation over ACP, not a terminal. */
+  chat: boolean
+}
+
+export interface AgentDiffStat {
+  /** Relative to the session's worktree when inside it. */
+  path: string
+  added: number
+  removed: number
+}
+
+export interface AgentAskOption {
+  id: string
+  name: string
+  /** `allow_once`, `allow_always`, `reject_once`, `reject_always`. */
+  kind: string
+}
+
+export type AgentItemBody =
+  | { kind: "setup"; command: string; output: string; /** null while it runs. */ code: number | null }
+  | { kind: "user"; text: string }
+  | { kind: "message"; text: string }
+  | { kind: "thought"; text: string }
+  | { kind: "tool"; tool: string; title: string; status: string; paths: string[]; command: string | null; output: string | null; diffs: AgentDiffStat[] }
+  | { kind: "plan"; entries: { text: string; status: string }[] }
+  | { kind: "ask"; request: number; title: string; tool: string; command: string | null; paths: string[]; options: AgentAskOption[]; /** null while it waits; then the option's id, or `cancelled`. */ answer: string | null }
+  | { kind: "error"; text: string }
+  | { kind: "end"; reason: string }
+
+/** One record of a conversation; `rev` is the conversation's revision when it last changed. */
+export type AgentItem = { id: number; rev: number } & AgentItemBody
+
+/** Something the agent lets you choose (model, mode, effort). */
+export interface AgentOption {
+  id: string
+  name: string
+  category: string | null
+  value: string
+  choices: { value: string; name: string; description: string | null; group: string | null }[]
+}
+
+/** The records changed after the revision asked for, and the conversation's current settings. */
+export interface AgentTranscript {
+  rev: number
+  items: AgentItem[]
+  options: AgentOption[]
+  usage: { used: number; size: number } | null
 }
 
 export interface AgentLive {
