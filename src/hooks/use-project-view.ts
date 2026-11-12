@@ -59,6 +59,9 @@ const WANTED_MS = 5000
 export function useDefaultSelection() {
   const { projectId, tab, statuses, dirtyFiles, showCompare } = useProjectView()
   const selection = useStore(ui, (s) => s.selection)
+  // Watched, so a request for the tab already on screen is taken (and cleared) at once instead of
+  // lying in wait for the next change of selection.
+  const wantedNow = useStore(ui, (s) => s.wanted)
   const statusReady = tab?.kind === "pr" ? !!tab.prepared : tab?.kind !== "tree" || (!!tab.status && !statuses.isPlaceholderData)
   // The tab the selection belongs to. If the shown tab changes without the user picking it (an
   // archived worktree was removed, a branch disappeared), the old selection belongs to another tab.
@@ -83,5 +86,5 @@ export function useDefaultSelection() {
       dirtyFiles > 0 ? { kind: "worktree" } : tab.kind === "pr" && showCompare ? { kind: "compare" } : tab.head ? { kind: "commit", hash: tab.head } : null
     // A pull request's whole change starts as its description, with no file picked.
     ui.set({ selection: next, file: null, noFile: next?.kind === "compare" && tab.kind === "pr" })
-  }, [tab?.key, tab?.head, statusReady, dirtyFiles, showCompare, selection === null]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tab?.key, tab?.head, statusReady, dirtyFiles, showCompare, selection === null, wantedNow]) // eslint-disable-line react-hooks/exhaustive-deps
 }
