@@ -19,7 +19,7 @@ agent 会同时在十几棵 worktree 里写代码。Retrace 把所有项目、wo
 - **在这里看 PR。** GitHub 项目的标签行多一个「PR」组，用你本机的 GitHub CLI（`gh`）列出开放中的 PR，Retrace 不碰 token。点一个就像看分支一样看它：先整屏显示 PR 描述，在「改动」里选文件才看 diff（再点一次回到描述）；提交图画出它的提交，整体改动和 GitHub 的 Files changed 一致，描述、审查状态和每一项 CI 检查在 diff 上方。描述里的截图直接显示（私有仓库的也行）；评论、审查意见和带着代码片段的行内评论在侧边抽屉里看，点一下跳到对应文件。有开放中 PR 的 worktree 和分支会标出 PR 编号，它们的「相对 main 的全部改动」那一行能直接跳到 PR。
 - **好读的 diff。** 默认并排、不换行，语法高亮在后台线程里做；可以一个文件一个文件看，也可以连续阅读整个提交。图片改动显示改前改后。
 - **浏览任一版本。** 把「改动」切到「文件」，看选中提交时的整个目录（未提交的改动就是磁盘上的文件）：筛选、折叠，预览代码、图片，Markdown 像 GitHub 一样渲染，相对链接和图片都能用。点开一个文件，提交图就只列改过它的提交，可以逐个看它每次的改动。文件图标有四套主题（设置 → 文件图标）。
-- **在项目上派活。** 项目行悬停点「+」（或 ⌘N），写下任务，选 OpenCode、Codex 或 Claude Code：默认在仓库旁边的 `<仓库名>.worktrees/` 里新开一棵 worktree 和 `agent/…` 分支，先跑你为这个项目记下的准备命令（比如 `pnpm install`），再把 agent 自己的终端界面开起来。会话挂在项目下面，图标说明它在干活、在等你回应、已结束还是出错；点它就切到那棵 worktree，终端从右侧浮出来，提交图和 diff 就是 agent 正在写的改动。收起抽屉后 agent 继续运行。关闭运行中的会话或退出 Retrace 时先确认，再结束进程。重启后保留会话记录：Codex 和 Claude Code 可点「恢复会话…」，在原 worktree 打开原生历史选择器，由你选回对话；不会重跑准备命令或重发原任务。关闭会话会移除它在 Retrace 的记录。Codex 使用 `--no-daemon` 独立运行（需要支持该参数的 CLI，已用 0.162.1 验证）。OpenCode 暂未集成历史恢复。本机找不到 agent 命令行时不显示入口。
+- **在项目上派活。** 项目行悬停点「+」（或 ⌘N），写下任务，选 OpenCode、Codex 或 Claude Code：默认在仓库旁边的 `<仓库名>.worktrees/` 里新开一棵 worktree 和 `agent/…` 分支，先跑你为这个项目记下的准备命令（比如 `pnpm install`），再把 agent 自己的终端界面开起来。会话挂在项目下面，图标说明它在干活、在等你回应、已结束还是出错；OpenCode 的状态取自它自己的事件，所以还分得出「等你确认」（它在要权限或问你问题，悬停能看到是哪条命令）和「报错了」（比如模型额度用完）；点它就切到那棵 worktree，终端从右侧浮出来，提交图和 diff 就是 agent 正在写的改动。收起抽屉后 agent 继续运行。关闭运行中的会话或退出 Retrace 时先确认，再结束进程。重启后保留会话记录，可在原 worktree 里恢复：OpenCode 直接回到原来那段对话，Codex 和 Claude Code 打开它们自己的历史选择器，由你选回对话；不会重跑准备命令或重发原任务。关闭会话会移除它在 Retrace 的记录。Codex 使用 `--no-daemon` 独立运行（需要支持该参数的 CLI，已用 0.162.1 验证）；OpenCode 已用 1.19.5 验证。本机找不到 agent 命令行时不显示入口。
 - **布局随你。** 拖动视图左上角的把手，停靠到别的视图四边或交换位置；每块视图都有最小尺寸，挤不坏。
 - **像样的 Mac App。** 原生菜单栏，键盘优先，浅色 / 深色，中文 / 英文。
 
@@ -41,6 +41,8 @@ Retrace 自己的写操作只有三个：
 - 给 agent 会话新建 worktree 和分支：只在你点「开始会话」时执行，分支或目录已存在就报错，不覆盖。
 
 agent 在它的 worktree 里做的改动是 agent 的，Retrace 只把终端的输入输出转过去。
+
+为了知道 OpenCode 在干什么，Retrace 启动的 OpenCode 会多加载一个小插件（只对这一个进程，通过 `OPENCODE_CONFIG_CONTENT` 加进去，不改你的 OpenCode 配置）：它把会话的状态事件（忙 / 闲、在要哪项权限、报了什么错、对话 id）写进 `~/Library/Caches/me.jimlin.retrace/agents/` 下一个只有你能读的文件，会话结束就删。不写消息内容和工具的输入输出，不开端口，Retrace 也不向 OpenCode 发任何东西。
 
 ## 安装
 
@@ -102,7 +104,7 @@ pnpm tauri build                                  # 产出 Retrace.app 和 dmg
 
 ```text
 src-tauri/src/core/      git 调用（只读环境）、仓库与 worktree、车道算法、历史、改动与文件内容、命令分发、后端提示语言（i18n.rs）
-src-tauri/src/core/agent.rs      agent 会话：伪终端、新建 worktree；shell_env.rs：登录 shell 的 PATH
+src-tauri/src/core/agent.rs      agent 会话：伪终端、新建 worktree；shell_env.rs：登录 shell 的 PATH；opencode.rs + opencode_plugin.js：OpenCode 的状态
 src-tauri/src/watch.rs   监听当前项目的 .git 和工作区；定时 fetch
 src-tauri/src/bin/       开发桥
 src/components/app/      四块视图：项目、改动 / 文件、提交图、diff / 预览
