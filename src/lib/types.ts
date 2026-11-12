@@ -390,6 +390,21 @@ export interface AgentSession {
   exitCode: number | null
   /** Ended because the user stopped or closed it. */
   stopped: boolean
+  /** The agent's own id for the conversation (OpenCode): what Resume reopens. */
+  nativeId: string | null
+  /** What the agent itself reports, while Retrace can follow it (OpenCode); otherwise the terminal's output decides. */
+  live: AgentLive | null
+}
+
+export interface AgentLive {
+  /** `asking`: a permission or a question waits for you; `error`: the last turn failed. */
+  state: "busy" | "idle" | "asking" | "error"
+  /** What is asked, or the error. */
+  detail: string | null
+  /** A turn has run since Retrace started following. */
+  worked: boolean
+  since: number
+  at: number
 }
 
 /** Terminal output from `start` on (base64), and where the stream is now. */

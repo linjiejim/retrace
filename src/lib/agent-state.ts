@@ -4,13 +4,28 @@
 
 import type { AgentKind, AgentSession } from "./types"
 
-export type AgentState = "working" | "waiting" | "done" | "stopped" | "failed"
+/**
+ * `asking` (a permission or a question) and `errored` (the last turn failed, the agent is still
+ * there) are known only for agents Retrace can follow; for the others both look like `waiting`.
+ */
+export type AgentState = "working" | "waiting" | "asking" | "errored" | "done" | "stopped" | "failed"
 
 /** This long without output and the agent is taken to be waiting (agents animate while they work). */
 export const QUIET_MS = 4000
+/** A session started with a task counts as working this long before its first turn shows up. */
+export const BOOT_MS = 15000
 
 export function agentState(s: AgentSession, now: number): AgentState {
   if (!s.running) return s.stopped ? "stopped" : s.exitCode === 0 ? "done" : "failed"
+  if (s.live) {
+    // The agent's own word. It stays "busy" while it waits for a permission, so asking comes first.
+    if (s.live.state === "asking") return "asking"
+    if (s.live.state === "busy") return "working"
+    if (s.live.state === "error") return "errored"
+    // Loaded, the task not picked up yet: don't flash "waiting" before the first turn.
+    const booting = !s.live.worked && !s.nativeId && !!s.task.trim() && now - s.live.since < BOOT_MS
+    return booting ? "working" : "waiting"
+  }
   const rang = s.bellAt !== null && (s.inputAt === null || s.bellAt > s.inputAt)
   if (rang) return "waiting"
   return now - s.lastOutputAt < QUIET_MS ? "working" : "waiting"
@@ -20,6 +35,8 @@ export function agentState(s: AgentSession, now: number): AgentState {
 export const STATE_LABEL: Record<AgentState, string> = {
   working: "Working",
   waiting: "Waiting for you",
+  asking: "Needs your answer",
+  errored: "Hit an error",
   done: "Finished",
   stopped: "Stopped",
   failed: "Stopped with an error",
@@ -104,7 +121,36 @@ export function newPart(offset: number, length: number, next: number): { skip: n
   return { skip: next - offset }
 }
 
-/** Providers whose CLI exposes an interactive history picker. */
+/** The states that are the user's move. */
+export function needsYou(state: AgentState): boolean {
+  return state === "waiting" || state === "asking" || state === "errored"
+}
+
+/**
+ * The session to show when the Agent drawer opens with none chosen: one that is your move
+ * before one that is busy, this project's before the others', the latest first.
+ */
+export function pickSession(sessions: AgentSession[], projectId: string | null, now: number): AgentSession | null {
+  const rank = (s: AgentSession) => (needsYou(agentState(s, now)) ? 0 : s.running ? 1 : 2) + (s.project === projectId ? 0 : 3)
+  return [...sessions].sort((a, b) => rank(a) - rank(b) || b.startedAt - a.startedAt)[0] ?? null
+}
+
+/** What the agent asks or what went wrong, when it says so itself. */
+export function stateDetail(s: AgentSession, state: AgentState): string | null {
+  return state === "asking" || state === "errored" ? (s.live?.detail ?? null) : null
+}
+
+/** Kept from before Retrace was restarted: no process and no terminal contents, only what it was. */
+export function isSaved(s: AgentSession): boolean {
+  return !s.running && s.stopped && s.exitCode === null
+}
+
+/** An ended session can go back into its conversation, in its worktree. */
 export function canResume(s: AgentSession): boolean {
-  return !s.running && (s.agent === "codex" || s.agent === "claude")
+  return !s.running
+}
+
+/** OpenCode reopens the conversation Retrace followed; Codex and Claude Code show their own history. */
+export function resumesDirectly(s: AgentSession): boolean {
+  return s.agent === "opencode"
 }

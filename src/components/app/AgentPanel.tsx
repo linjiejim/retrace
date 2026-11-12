@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { GitBranch, MessageSquare, RotateCcw, SendHorizontal, Square, X } from "lucide-react"
+import { GitBranch, History, MessageSquare, RotateCcw, SendHorizontal, Square, X } from "lucide-react"
 import { onAgentChanged } from "@/lib/api"
-import { agentState, canResume, sessionLabel } from "@/lib/agent-state"
+import { agentState, canResume, isSaved, resumesDirectly, sessionLabel } from "@/lib/agent-state"
 import { t } from "@/lib/i18n"
 import { prefs, ui, useStore } from "@/lib/store"
 import { attachTerminal, ensureTerminal, keepTerminals, sendMessage } from "@/lib/terminals"
 import type { AgentSession } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAgentKinds, useAgentSessions, useNow } from "@/hooks/agents"
-import { IconButton } from "@/components/ui/button"
+import { Button, IconButton } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/input"
 import { StateView } from "@/components/ui/state"
 import { notify } from "@/components/ui/toast"
@@ -23,7 +23,8 @@ export function AgentTerminals() {
   const sessions = useAgentSessions().data
   useEffect(() => {
     const ids = new Set((sessions ?? []).map((s) => s.id))
-    sessions?.filter((s) => s.running || s.exitCode !== null).forEach((s) => ensureTerminal(s.id))
+    // A session already a few seconds old that this page has no terminal for: the page was reloaded.
+    sessions?.filter((s) => !isSaved(s)).forEach((s) => ensureTerminal(s.id, s.running && Date.now() - s.startedAt > 5000))
     keepTerminals(ids)
     const shown = ui.get().agentSession
     if (shown && !ids.has(shown) && sessions) ui.set({ agentSession: null })
@@ -89,6 +90,13 @@ function MessageBox({ id, agent, disabled }: { id: string; agent: string; disabl
       </IconButton>
     </form>
   )
+}
+
+/** What Resume does for this session's agent. */
+function resumeHint(s: AgentSession): string {
+  return resumesDirectly(s)
+    ? t("Resume reopens this conversation in its worktree; the task isn't sent again.")
+    : t("Resume opens the agent's history picker in this worktree. Choose the conversation to continue.")
 }
 
 /** Narrowest the drawer gets, and the room it always leaves on its left. */
@@ -177,9 +185,11 @@ export function AgentDrawer() {
       {s ? (
         <>
           <div className="min-h-0 flex-1 px-2 pt-1.5">
-            {s.stopped && s.exitCode === null ? (
-              <StateView size="sm" kind="empty" title={t("Session saved")} description={canResume(s) ? t("Resume opens the agent's history picker in this worktree. Choose the conversation to continue.") : t("Open this worktree in a terminal to recover the conversation with your agent.")} />
-            ) : <TerminalHost id={s.id} />}
+            {isSaved(s) ? (
+              <SavedSession session={s} label={label} />
+            ) : (
+              <TerminalHost id={s.id} />
+            )}
           </div>
           {!s.running && s.exitCode !== null && (
             <p className="shrink-0 border-t px-3 py-2 text-caption text-faint-foreground">
@@ -188,7 +198,7 @@ export function AgentDrawer() {
                 : s.exitCode === 0
                   ? t("{agent} has finished.", { agent: agentName })
                   : t("{agent} stopped (exit code {code}).", { agent: agentName, code: s.exitCode ?? "?" })}
-              {canResume(s) && <span className="ml-1">{t("Resume opens the agent's history picker in this worktree. Choose the conversation to continue.")}</span>}
+              {canResume(s) && <span className="ml-1">{resumeHint(s)}</span>}
             </p>
           )}
           {showInput && s.running && <MessageBox key={s.id} id={s.id} agent={agentName} disabled={!s.running} />}
@@ -200,12 +210,34 @@ export function AgentDrawer() {
   )
 }
 
+/** A session from before Retrace was restarted: its process is gone, its conversation isn't. */
+function SavedSession({ session: s, label }: { session: AgentSession; label: string }) {
+  const { resume, element } = useSessionActions(s, label)
+  return (
+    <>
+      <StateView
+        size="sm"
+        kind="empty"
+        icon={<History />}
+        title={t("Session saved")}
+        description={resumeHint(s)}
+        action={
+          <Button variant="primary" size="sm" onClick={() => void resume()}>
+            {resumesDirectly(s) ? t("Resume Session") : t("Resume Session…")}
+          </Button>
+        }
+      />
+      {element}
+    </>
+  )
+}
+
 function SessionButtons({ session: s, label }: { session: AgentSession; label: string }) {
   const { stop, resume, element } = useSessionActions(s, label)
   return (
     <>
       {canResume(s) && (
-        <IconButton label={t("Resume Session…")} size="icon-sm" onClick={() => void resume()}>
+        <IconButton label={resumesDirectly(s) ? t("Resume Session") : t("Resume Session…")} size="icon-sm" onClick={() => void resume()}>
           <RotateCcw />
         </IconButton>
       )}

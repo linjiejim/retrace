@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { canResume, agentState, defaultBranch, fromBase64, isTerminalReport, newPart, pasted, QUIET_MS, sessionLabel, slugify, toBase64, worktreePath } from "./agent-state"
-import type { AgentSession } from "./types"
+import { canResume, agentState, BOOT_MS, defaultBranch, fromBase64, isTerminalReport, newPart, pasted, QUIET_MS, needsYou, pickSession, resumesDirectly, sessionLabel, slugify, stateDetail, toBase64, worktreePath } from "./agent-state"
+import type { AgentLive, AgentSession } from "./types"
 
 const base: AgentSession = {
   id: "s1",
@@ -17,7 +17,11 @@ const base: AgentSession = {
   running: true,
   exitCode: null,
   stopped: false,
+  nativeId: null,
+  live: null,
 }
+
+const live = (state: AgentLive["state"], more: Partial<AgentLive> = {}): AgentLive => ({ state, detail: null, worked: true, since: 0, at: 0, ...more })
 
 describe("agent state", () => {
   it("is working while output keeps coming, waiting once it goes quiet", () => {
@@ -33,6 +37,56 @@ describe("agent state", () => {
     expect(agentState({ ...rang, inputAt: 2000, lastOutputAt: 2000 }, 2100)).toBe("working")
   })
 
+  it("takes the agent's own word over the terminal's output when it has one", () => {
+    // Output still streaming, but OpenCode says the turn is over.
+    expect(agentState({ ...base, live: live("idle") }, 1001)).toBe("waiting")
+    // Quiet for a long time, but a turn is in progress (a slow command, a long thought).
+    expect(agentState({ ...base, live: live("busy") }, 1000 + QUIET_MS * 10)).toBe("working")
+    // A bell from an earlier turn doesn't hold a busy agent at "waiting".
+    expect(agentState({ ...base, bellAt: 1500, live: live("busy") }, 1600)).toBe("working")
+  })
+
+  it("knows when the agent asks for a permission or failed a turn", () => {
+    const asking = { ...base, live: live("asking", { detail: "bash: rm -rf build" }) }
+    expect(agentState(asking, 1001)).toBe("asking")
+    expect(stateDetail(asking, "asking")).toBe("bash: rm -rf build")
+    const errored = { ...base, live: live("error", { detail: "insufficient balance (1008)" }) }
+    expect(agentState(errored, 1001)).toBe("errored")
+    expect(stateDetail(errored, "errored")).toBe("insufficient balance (1008)")
+    expect(stateDetail(errored, "waiting")).toBeNull()
+    expect(["waiting", "asking", "errored"].every((s) => needsYou(s as never))).toBe(true)
+    expect(["working", "done", "stopped", "failed"].some((s) => needsYou(s as never))).toBe(false)
+    // The process is gone: its exit decides, whatever was last reported.
+    expect(agentState({ ...errored, running: false, exitCode: 0 }, 0)).toBe("done")
+  })
+
+  it("doesn't flash waiting while a session with a task is still loading", () => {
+    const loading = { ...base, task: "Fix it", live: live("idle", { worked: false, since: 5000 }) }
+    expect(agentState(loading, 5000 + BOOT_MS - 1)).toBe("working")
+    // The task never started (a dialog in the way): it is the user's move after all.
+    expect(agentState(loading, 5000 + BOOT_MS)).toBe("waiting")
+    // No task: it waits for the first message from the start. A reopened conversation too.
+    expect(agentState({ ...loading, task: "" }, 5001)).toBe("waiting")
+    expect(agentState({ ...loading, nativeId: "ses_1" }, 5001)).toBe("waiting")
+  })
+
+  it("opens the drawer on the session most likely wanted", () => {
+    const at = (id: string, more: Partial<AgentSession>) => ({ ...base, id, lastOutputAt: 0, ...more })
+    const busyHere = at("busy-here", { project: "/p", live: live("busy"), startedAt: 5 })
+    const askingHere = at("asking-here", { project: "/p", live: live("asking"), startedAt: 1 })
+    const waitingThere = at("waiting-there", { project: "/q", live: live("idle"), startedAt: 9 })
+    const endedHere = at("ended-here", { project: "/p", running: false, exitCode: 0, startedAt: 8 })
+    // Your move in this project first, even if older.
+    expect(pickSession([busyHere, waitingThere, endedHere, askingHere], "/p", 0)?.id).toBe("asking-here")
+    // Then this project's running one, before another project's.
+    expect(pickSession([waitingThere, endedHere, busyHere], "/p", 0)?.id).toBe("busy-here")
+    expect(pickSession([waitingThere, endedHere], "/p", 0)?.id).toBe("ended-here")
+    expect(pickSession([waitingThere], "/p", 0)?.id).toBe("waiting-there")
+    // The latest among equals.
+    expect(pickSession([at("old", { live: live("idle"), startedAt: 1 }), at("new", { live: live("idle"), startedAt: 2 })], "/p", 0)?.id).toBe("new")
+    expect(pickSession([], "/p", 0)).toBeNull()
+  })
+
   it("tells a clean exit from a failure", () => {
     expect(agentState({ ...base, running: false, exitCode: 0 }, 0)).toBe("done")
     expect(agentState({ ...base, running: false, exitCode: 1 }, 0)).toBe("failed")
@@ -45,7 +99,7 @@ describe("agent state", () => {
     const kinds = [{ id: "opencode", name: "OpenCode", path: "/x" }]
     const fallback = (name: string) => `${name} session`
     expect(sessionLabel({ ...base, task: "\n  Fix the login page\nand tests" }, kinds, fallback)).toBe("Fix the login page")
-    expect(sessionLabel({ ...base, title: "OC | Login" }, kinds, fallback)).toBe("OC | Login")
+    expect(sessionLabel({ ...base, title: "Login" }, kinds, fallback)).toBe("Login")
     expect(sessionLabel(base, kinds, fallback)).toBe("OpenCode session")
   })
 })
@@ -109,6 +163,9 @@ it("offers a history picker only for stopped supported providers", () => {
   expect(canResume({ ...base, agent: "codex", running: false })).toBe(true)
   expect(canResume({ ...base, agent: "claude", running: false })).toBe(true)
   expect(canResume({ ...base, agent: "codex" })).toBe(false)
-  expect(canResume({ ...base, running: false })).toBe(false)
+  expect(canResume({ ...base, running: false })).toBe(true)
+  // OpenCode goes straight back into the conversation; the others show their history picker.
+  expect(resumesDirectly(base)).toBe(true)
+  expect(resumesDirectly({ ...base, agent: "codex" })).toBe(false)
   expect(agentState({ ...base, running: false, exitCode: 0, stopped: true }, 0)).toBe("stopped")
 })

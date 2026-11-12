@@ -25,6 +25,11 @@ interface Handle {
   syncing: boolean
   pending: { offset: number; bytes: Uint8Array }[]
   shown: boolean
+  /**
+   * Filled from the scrollback of a session that was already running (the page reloaded): the
+   * agent drew that for sizes this terminal never had, so ask it to draw again once it is shown.
+   */
+  redraw: boolean
   stop: () => void
 }
 
@@ -132,8 +137,19 @@ function listen(): Promise<() => void> {
   }))
 }
 
-/** The terminal for a session, made on first sight. */
-export function ensureTerminal(id: string): Handle {
+/** A window-size change makes a terminal UI draw everything again; one row less and back is the smallest one. */
+async function askToRedraw(id: string, cols: number, rows: number) {
+  try {
+    await api.agentResize(id, cols, Math.max(5, rows - 1))
+    await new Promise((r) => setTimeout(r, 80))
+    await api.agentResize(id, cols, rows)
+  } catch {
+    // The session ended meanwhile.
+  }
+}
+
+/** The terminal for a session, made on first sight. `replayed`: the session was running before this page knew it. */
+export function ensureTerminal(id: string, replayed = false): Handle {
   const existing = handles.get(id)
   if (existing) return existing
   watchTheme()
@@ -175,6 +191,7 @@ export function ensureTerminal(id: string): Handle {
     syncing: true,
     pending: [],
     shown: false,
+    redraw: replayed,
     stop: () => {
       subs.forEach((s) => s.dispose())
       if (poll) clearInterval(poll)
@@ -214,6 +231,11 @@ export function attachTerminal(id: string, container: HTMLElement): () => void {
       h.fit.fit()
     } catch {
       // Not measurable yet; the next resize fits it.
+      return
+    }
+    if (h.redraw) {
+      h.redraw = false
+      void askToRedraw(id, h.term.cols, h.term.rows)
     }
   }
   const frame = requestAnimationFrame(refit)

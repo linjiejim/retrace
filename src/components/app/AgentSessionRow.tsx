@@ -1,7 +1,7 @@
-import { RotateCcw, CircleAlert, CircleCheck, CircleDot, CircleStop, Code, Ellipsis, FolderOpen, Square, SquareTerminal, X } from "lucide-react"
+import { RotateCcw, CircleAlert, CircleCheck, CircleDot, CircleHelp, CircleStop, Code, Ellipsis, FolderOpen, Square, SquareTerminal, TriangleAlert, X } from "lucide-react"
 import { useQueryClient } from "@tanstack/react-query"
 import { api } from "@/lib/api"
-import { agentState, canResume, sessionLabel, short, STATE_LABEL, type AgentState } from "@/lib/agent-state"
+import { agentState, canResume, resumesDirectly, sessionLabel, short, STATE_LABEL, stateDetail, type AgentState } from "@/lib/agent-state"
 import { openSession } from "@/lib/commands"
 import { t } from "@/lib/i18n"
 import { ui, useStore } from "@/lib/store"
@@ -16,7 +16,7 @@ import { notify } from "@/components/ui/toast"
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
-/** Shape and colour both say the state: spinner, yellow dot (needs you), check, alert. */
+/** Shape and colour both say the state: spinner, yellow dot or question mark (your move), red triangle (the agent hit an error), check, stop, alert. */
 export function AgentStateIcon({ state, className }: { state: AgentState; className?: string }) {
   const label = t(STATE_LABEL[state])
   switch (state) {
@@ -24,6 +24,10 @@ export function AgentStateIcon({ state, className }: { state: AgentState; classN
       return <Spinner label={label} className={cn("size-3.5 text-muted-foreground", className)} />
     case "waiting":
       return <CircleDot role="img" aria-label={label} className={cn("size-3.5 text-warning", className)} />
+    case "asking":
+      return <CircleHelp role="img" aria-label={label} className={cn("size-3.5 text-warning", className)} />
+    case "errored":
+      return <TriangleAlert role="img" aria-label={label} className={cn("size-3.5 text-destructive", className)} />
     case "done":
       return <CircleCheck role="img" aria-label={label} className={cn("size-3.5 text-success", className)} />
     case "stopped":
@@ -54,7 +58,8 @@ export function useSessionActions(s: AgentSession, label: string) {
   const close = async () => {
     const forget = async () => {
       await api.agentClose(s.id)
-      if (ui.get().agentSession === s.id) ui.set({ agentSession: null })
+      // The drawer showed this session: nothing left to show, so it closes too.
+      if (ui.get().agentSession === s.id) ui.set({ agentSession: null, agentOpen: false })
       await refresh()
     }
     if (!s.running) return forget().catch((e) => notify.error(message(e)))
@@ -85,7 +90,8 @@ export function AgentSessionRow({ session: s, kinds, now, indent }: { session: A
   const selected = useStore(ui, (u) => u.agentOpen && u.agentSession === s.id)
   const { stop, close, resume, element } = useSessionActions(s, label)
   const open = (how: "finder" | "terminal" | "editor") => api.open(s.project, s.tree, how).catch((e) => notify.error(message(e)))
-  const tip = [s.task.trim() || label, `${t(STATE_LABEL[state])}${s.exitCode !== null && s.exitCode !== 0 && !s.stopped ? ` (${t("exit code {code}", { code: s.exitCode })})` : ""}`, [agentName, s.branch].filter(Boolean).join(" · ")]
+  const detail = stateDetail(s, state)
+  const tip = [s.task.trim() || label, `${t(STATE_LABEL[state])}${detail ? `: ${detail}` : ""}${s.exitCode !== null && s.exitCode !== 0 && !s.stopped ? ` (${t("exit code {code}", { code: s.exitCode })})` : ""}`, [agentName, s.branch].filter(Boolean).join(" · ")]
     .filter(Boolean)
     .join("\n")
 
@@ -107,7 +113,7 @@ export function AgentSessionRow({ session: s, kinds, now, indent }: { session: A
       {canResume(s) && (
         <Item onSelect={() => void resume()}>
           <RotateCcw />
-          {t("Resume Session…")}
+          {resumesDirectly(s) ? t("Resume Session") : t("Resume Session…")}
         </Item>
       )}
       {s.running && (

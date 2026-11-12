@@ -4,7 +4,7 @@ import { ArrowDown, ArrowUp, Bot, Check, ChevronRight, CircleDot, Code, Ellipsis
 import { api } from "@/lib/api"
 import { openLink, run, selectProject } from "@/lib/commands"
 import { PINNED, groupGaps, moveGroup, buildRows, dropTarget, moveProject, projectRows, sections, sessionsByProject, snapGap, type GroupGap, type DropTarget, type Row } from "@/lib/groups"
-import { agentState } from "@/lib/agent-state"
+import { agentState, needsYou } from "@/lib/agent-state"
 import { prefs, ui, useStore } from "@/lib/store"
 import { ago, tildify } from "@/lib/format"
 import type { Group, Project } from "@/lib/types"
@@ -78,7 +78,7 @@ export function ProjectsPanel() {
     for (const s of sessionList ?? []) {
       const project = all.find((p) => p.id === s.project)
       const group = project?.pinned ? PINNED : project?.group
-      if (group && agentState(s, now) === "waiting") out.add(group)
+      if (group && needsYou(agentState(s, now))) out.add(group)
     }
     return out
   }, [sessionList, all, now])

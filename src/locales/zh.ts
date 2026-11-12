@@ -460,5 +460,8 @@ export const zh: Record<string, string> = {
   "Resume opens the agent's history picker in this worktree. Choose the conversation to continue.": "恢复会打开此 worktree 的历史会话选择器，请选择要继续的对话。",
   "Couldn't check running sessions. Try quitting again.": "无法确认运行中的会话，请重试退出。",
   "Session saved": "会话已保存",
-  "Open this worktree in a terminal to recover the conversation with your agent.": "在终端中打开此 worktree，使用 agent 的历史记录恢复对话。",
+  "Resume Session": "恢复会话",
+  "Resume reopens this conversation in its worktree; the task isn't sent again.": "恢复会在这棵 worktree 里重新打开这段对话，不会重发任务。",
+  "Needs your answer": "等你确认",
+  "Hit an error": "报错了",
 }

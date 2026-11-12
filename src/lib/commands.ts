@@ -7,6 +7,7 @@ import { t } from "./i18n"
 import { DEFAULT_LAYOUT } from "./layout"
 import { queryClient } from "./query"
 import { prefs, selectionKey, ui, type Selection } from "./store"
+import { pickSession } from "./agent-state"
 import { leave } from "./quit"
 import { focusTerminal } from "./terminals"
 import type { AgentSession, Overview, Project } from "./types"
@@ -183,7 +184,15 @@ export const commands = {
     if (!id) return notify.info(t("Pick a project first"))
     ui.set({ newAgent: { projectId: id } })
   },
-  toggleAgent: () => ui.set((u) => ({ agentOpen: !u.agentOpen, focusMode: false })),
+  toggleAgent: () => {
+    const u = ui.get()
+    if (u.agentOpen) return ui.set({ agentOpen: false })
+    // Nothing chosen (or it was closed): open on the session most likely wanted.
+    const sessions = queryClient.getQueryData<AgentSession[]>(["agents"]) ?? []
+    const shown = sessions.find((s) => s.id === u.agentSession) ?? pickSession(sessions, u.projectId, Date.now())
+    ui.set({ agentOpen: true, agentSession: shown?.id ?? null, focusMode: false })
+    if (shown) requestAnimationFrame(() => requestAnimationFrame(() => focusTerminal(shown.id)))
+  },
   quit: () => void leave("quit"),
   checkForUpdates: () => void checkForUpdates(true),
   addProject: () => void addProject(),

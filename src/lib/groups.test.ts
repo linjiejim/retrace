@@ -114,6 +114,8 @@ const session = (id: string, project: string, startedAt: number): AgentSession =
   running: true,
   exitCode: null,
   stopped: false,
+  nativeId: null,
+  live: null,
 })
 
 describe("agent sessions in the projects list", () => {
