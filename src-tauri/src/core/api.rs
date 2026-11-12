@@ -852,7 +852,7 @@ fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 if !known {
                     bail!(tr!("不是这个项目的 worktree：{}", "Not a worktree of this project: {}", saved.tree));
                 }
-                agent::resume_launch(agent::kind(&saved.agent)?, Path::new(&saved.tree), &dir, shell_env::agent_env(), (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))
+                agent::resume_launch(agent::kind(&saved.agent)?, saved.native_id.as_deref(), Path::new(&saved.tree), &dir, shell_env::agent_env(), (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))
             })?)
         }
         "agentSetup" => {

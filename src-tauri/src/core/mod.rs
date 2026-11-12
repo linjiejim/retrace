@@ -10,6 +10,7 @@ pub mod graph;
 pub mod history;
 pub mod i18n;
 pub mod model;
+pub mod opencode;
 pub mod repo;
 pub mod shell_env;
 

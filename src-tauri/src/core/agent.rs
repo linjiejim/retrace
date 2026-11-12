@@ -4,6 +4,7 @@
 //! What Retrace writes here: a new worktree and branch for a session (when asked), nothing else.
 
 use super::git;
+use super::opencode;
 use super::repo;
 use super::shell_env::{self, Env};
 use crate::tr;
@@ -57,12 +58,14 @@ impl Kind {
         }
     }
 
-    /// Let the agent show its native history picker in the session's existing worktree.
-    pub fn resume_args(&self) -> Result<Vec<String>> {
+    /// Back into a conversation in the session's existing worktree, never resubmitting the task.
+    /// OpenCode reopens the one Retrace followed (`native`), or starts clean when there is none;
+    /// Codex and Claude Code show their own history picker.
+    pub fn resume_args(&self, native: Option<&str>) -> Vec<String> {
         match self.id {
-            "codex" => Ok(vec!["--no-daemon".into(), "resume".into()]),
-            "claude" => Ok(vec!["--resume".into()]),
-            _ => bail!(tr!("暂不支持恢复 {} 会话，请在这个 worktree 中打开它的历史记录", "Resuming {} sessions isn't supported yet; open its history in this worktree", self.name)),
+            "codex" => vec!["--no-daemon".into(), "resume".into()],
+            "claude" => vec!["--resume".into()],
+            _ => native.map(|id| vec!["--session".into(), id.into()]).unwrap_or_default(),
         }
     }
 }
@@ -96,6 +99,10 @@ pub struct Launch {
     pub env: Env,
     pub cols: u16,
     pub rows: u16,
+    /// OpenCode writes its events here; Retrace follows them for the session's precise state.
+    pub opencode: Option<opencode::Feed>,
+    /// The agent's own conversation this launch reopens.
+    pub native_id: Option<String>,
 }
 
 /// The agent in `tree`, with the task as its own argument (never spliced into a shell string).
@@ -106,7 +113,12 @@ pub fn launch(kind: &Kind, task: &str, setup: Option<&str>, tree: &Path, main_tr
     let mut env = env.clone();
     env.insert("RETRACE_MAIN_TREE".into(), main_tree.to_string_lossy().into_owned());
     env.insert("RETRACE_WORKTREE".into(), tree.to_string_lossy().into_owned());
-    let agent_args = kind.args(task);
+    launch_with(kind, kind.args(task), None, setup, tree, bin, env, size)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_with(kind: &Kind, agent_args: Vec<String>, native_id: Option<String>, setup: Option<&str>, tree: &Path, bin: PathBuf, mut env: Env, size: (u16, u16)) -> Result<Launch> {
+    let opencode = (kind.id == "opencode").then(|| opencode::Feed::prepare(&mut env)).flatten();
     let (program, args) = match setup.map(str::trim).filter(|s| !s.is_empty()) {
         Some(setup) => {
             let mut args = vec!["-e".to_string(), "-c".to_string(), format!("{setup}\nexec \"$0\" \"$@\"")];
@@ -116,14 +128,22 @@ pub fn launch(kind: &Kind, task: &str, setup: Option<&str>, tree: &Path, main_tr
         }
         None => (bin, agent_args),
     };
-    Ok(Launch { program, args, cwd: tree.to_path_buf(), env, cols: size.0.clamp(20, 500), rows: size.1.clamp(5, 300) })
+    Ok(Launch { program, args, cwd: tree.to_path_buf(), env, cols: size.0.clamp(20, 500), rows: size.1.clamp(5, 300), opencode, native_id })
 }
 
-pub fn resume_launch(kind: &Kind, tree: &Path, main_tree: &Path, env: &Env, size: (u16, u16)) -> Result<Launch> {
-    let args = kind.resume_args()?;
-    let mut launch = launch(kind, "", None, tree, main_tree, env, size)?;
-    launch.args = args;
-    Ok(launch)
+/// Reopen a saved session's conversation. `native` is the agent's own id for it, when Retrace
+/// learned it; for an OpenCode session saved without one, the latest conversation in `tree`.
+pub fn resume_launch(kind: &Kind, native: Option<&str>, tree: &Path, main_tree: &Path, env: &Env, size: (u16, u16)) -> Result<Launch> {
+    let bin = shell_env::which(env, kind.binary)
+        .ok_or_else(|| anyhow!(tr!("找不到 {}：登录 shell 的 PATH 里没有 `{}`", "Can't find {}: `{}` isn't on your login shell's PATH", kind.name, kind.binary)))?;
+    let native = match (kind.id, native) {
+        ("opencode", None) => opencode::last_session(&bin, tree, env),
+        (_, native) => native.map(str::to_string),
+    };
+    let mut env = env.clone();
+    env.insert("RETRACE_MAIN_TREE".into(), main_tree.to_string_lossy().into_owned());
+    env.insert("RETRACE_WORKTREE".into(), tree.to_string_lossy().into_owned());
+    launch_with(kind, kind.resume_args(native.as_deref()), native, None, tree, bin, env, size)
 }
 
 // ---------- new worktree ----------
@@ -281,6 +301,39 @@ pub struct SessionInfo {
     pub exit_code: Option<i32>,
     /// Ended because the user stopped or closed it, not on its own.
     pub stopped: bool,
+    /// The agent's own id for the conversation (OpenCode's session id): what Resume reopens.
+    #[serde(default)]
+    pub native_id: Option<String>,
+    /// What the agent itself reports, while Retrace can follow it (OpenCode). Without it the
+    /// UI judges from the terminal's output.
+    #[serde(default)]
+    pub live: Option<Live>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LiveState {
+    /// A turn is in progress.
+    Busy,
+    /// Nothing in progress: the agent waits for the next message.
+    Idle,
+    /// A permission or a question waits for the user.
+    Asking,
+    /// The last turn failed.
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Live {
+    pub state: LiveState,
+    /// What is asked, or the error.
+    pub detail: Option<String>,
+    /// A turn has run since Retrace started following.
+    pub worked: bool,
+    /// When Retrace started following, and when the state last changed.
+    pub since: i64,
+    pub at: i64,
 }
 
 pub struct Meta {
@@ -387,6 +440,15 @@ fn wait_exit_unreaped(pid: i32) {
     }
 }
 
+/// The terminal title as a name for the session: without the agent's own prefix, and nothing
+/// when it only names the agent or a conversation that has no title yet.
+pub fn clean_title(agent: &str, title: &str) -> Option<String> {
+    let title = title.trim();
+    let title = if agent == "opencode" { title.strip_prefix("OC | ").unwrap_or(title).trim() } else { title };
+    let unnamed = title.is_empty() || KINDS.iter().any(|k| title.eq_ignore_ascii_case(k.name) || title.eq_ignore_ascii_case(k.binary)) || title.starts_with("New session - ");
+    (!unnamed).then(|| title.to_string())
+}
+
 #[derive(Default)]
 pub struct Sessions {
     list: Mutex<Vec<Arc<Session>>>,
@@ -418,6 +480,7 @@ impl Sessions {
             info.running = false;
             info.stopped = true;
             info.exit_code = None;
+            info.live = None;
             list.push(Arc::new(Session {
                 info: Mutex::new(info),
                 buffer: Mutex::new(Buffer { data: VecDeque::new(), start: 0 }),
@@ -506,7 +569,8 @@ impl Sessions {
             bail!(tr!("会话还在运行，先停止它再恢复", "The session is still running; stop it before resuming"));
         }
         let launch = prepare(&original)?;
-        let info = self.spawn_unlocked(launch, Meta { project: original.project, tree: original.tree, branch: original.branch, agent: original.agent, task: original.task })?;
+        let native_id = launch.native_id.clone().or(original.native_id);
+        let info = self.spawn_unlocked(Launch { native_id, ..launch }, Meta { project: original.project, tree: original.tree, branch: original.branch, agent: original.agent, task: original.task })?;
         if let Ok(mut list) = self.list.lock() {
             list.retain(|s| !Arc::ptr_eq(s, &old));
         }
@@ -567,6 +631,8 @@ impl Sessions {
             running: true,
             exit_code: None,
             stopped: false,
+            native_id: launch.native_id.clone(),
+            live: None,
         };
         let session = Arc::new(Session {
             info: Mutex::new(info.clone()),
@@ -603,6 +669,7 @@ impl Sessions {
                     };
                     i.running = false;
                     i.exit_code = Some(code);
+                    i.live = None;
                     i.id.clone()
                 }
                 Err(_) => return,
@@ -613,8 +680,41 @@ impl Sessions {
             me.persist_after_exit();
             me.emit(Event::Changed { session: id });
         });
+        if let Some(feed) = launch.opencode {
+            opencode::watch(self.clone(), info.id.clone(), feed);
+        }
         self.emit(Event::Changed { session: info.id.clone() });
         Ok(info)
+    }
+
+    pub fn is_running(&self, id: &str) -> bool {
+        self.get(id).is_ok_and(|s| s.running())
+    }
+
+    /// What the agent itself says (see `opencode.rs`): its conversation id once known, and its
+    /// live state (none = can't be followed right now).
+    pub fn report(&self, id: &str, native_id: Option<String>, live: Option<Live>) {
+        let Ok(s) = self.get(id) else { return };
+        let (changed, save) = match s.info.lock() {
+            Ok(mut i) => {
+                // Exited meanwhile: the exit code is the state now.
+                let live = live.filter(|_| i.running);
+                let save = native_id.is_some() && i.native_id != native_id;
+                if save {
+                    i.native_id = native_id;
+                }
+                let changed = save || i.live != live;
+                i.live = live;
+                (changed, save)
+            }
+            Err(_) => return,
+        };
+        if save {
+            self.persist_after_exit();
+        }
+        if changed {
+            self.emit(Event::Changed { session: id.to_string() });
+        }
     }
 
     /// Output → scrollback, signals → state, then out to the UI.
@@ -649,11 +749,13 @@ impl Sessions {
                                 i.bell_at = Some(now);
                                 changed = true;
                             }
-                            Signal::Title(t) if i.title.as_deref() != Some(t.as_str()) => {
-                                i.title = Some(t).filter(|t| !t.is_empty());
-                                changed = true;
+                            Signal::Title(t) => {
+                                let title = clean_title(&i.agent, &t);
+                                if i.title != title {
+                                    i.title = title;
+                                    changed = true;
+                                }
                             }
-                            Signal::Title(_) => {}
                         }
                     }
                     (i.id.clone(), changed)

@@ -339,7 +339,7 @@ fn failed_resume_keeps_the_original_record_and_concurrent_resume_starts_only_onc
     let sessions = Arc::new(Sessions::with_path(path.clone()));
     let env = env_with(&bin);
     assert!(sessions.resume("saved", |_| Err(anyhow::anyhow!("validation failed"))).is_err());
-    let mut missing = agent::resume_launch(agent::kind("codex").unwrap(), &tmp.0, &tmp.0, &env, (80, 24)).unwrap();
+    let mut missing = agent::resume_launch(agent::kind("codex").unwrap(), None, &tmp.0, &tmp.0, &env, (80, 24)).unwrap();
     missing.program = tmp.0.join("missing-codex");
     assert!(sessions.resume("saved", |_| Ok(missing)).is_err());
     assert_eq!(sessions.list()[0].id, "saved");
@@ -353,7 +353,7 @@ fn failed_resume_keeps_the_original_record_and_concurrent_resume_starts_only_onc
         let env = env.clone();
         std::thread::spawn(move || {
             barrier.wait();
-            sessions.resume("saved", |_| agent::resume_launch(agent::kind("codex").unwrap(), &tree, &tree, &env, (80, 24)))
+            sessions.resume("saved", |_| agent::resume_launch(agent::kind("codex").unwrap(), None, &tree, &tree, &env, (80, 24)))
         })
     }).collect();
     let results: Vec<_> = jobs.into_iter().map(|job| job.join().unwrap()).collect();
@@ -395,10 +395,120 @@ fn quitting_prevents_pending_launches_and_resumes_from_starting_after_the_shutdo
 }
 
 #[test]
-fn resume_templates_use_native_history_without_resubmitting_tasks_or_guessing_opencode_flags() {
-    assert_eq!(agent::kind("codex").unwrap().resume_args().unwrap(), vec!["--no-daemon", "resume"]);
-    assert_eq!(agent::kind("claude").unwrap().resume_args().unwrap(), vec!["--resume"]);
-    assert!(agent::kind("opencode").unwrap().resume_args().unwrap_err().to_string().contains("OpenCode"));
+fn resume_templates_reopen_a_conversation_without_resubmitting_the_task() {
+    assert_eq!(agent::kind("codex").unwrap().resume_args(None), vec!["--no-daemon", "resume"]);
+    assert_eq!(agent::kind("claude").unwrap().resume_args(None), vec!["--resume"]);
+    assert_eq!(agent::kind("opencode").unwrap().resume_args(Some("ses_1")), vec!["--session", "ses_1"]);
+    // Nothing to reopen: a clean OpenCode in the same worktree.
+    assert!(agent::kind("opencode").unwrap().resume_args(None).is_empty());
+}
+
+/// A stand-in OpenCode: `session list` prints two conversations in this folder and one in
+/// another; anything else prints its arguments and waits.
+fn fake_opencode(dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let script = r#"#!/bin/sh
+if [ "$1" = session ]; then
+  printf '[{"id":"ses_old","updated":10,"directory":"%s"},{"id":"ses_latest","updated":30,"directory":"%s"},{"id":"ses_other_tree","updated":99,"directory":"/elsewhere"}]' "$PWD" "$PWD"
+  exit 0
+fi
+printf 'agent args:[%s]\n' "$*"
+printf 'plugin:%s\n' "$OPENCODE_CONFIG_CONTENT"
+read line
+"#;
+    std::fs::write(bin.join("opencode"), script).unwrap();
+    std::fs::set_permissions(bin.join("opencode"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+#[test]
+fn opencode_resumes_the_conversation_it_was_on_or_the_latest_in_its_worktree() {
+    let tmp = temp("oc-resume");
+    let env = env_with(&fake_opencode(&tmp.0));
+    let kind = agent::kind("opencode").unwrap();
+    // Retrace followed the session and knows its conversation.
+    let known = agent::resume_launch(kind, Some("ses_known"), &tmp.0, &tmp.0, &env, (80, 24)).unwrap();
+    assert_eq!(known.args, ["--session", "ses_known"]);
+    assert_eq!(known.native_id.as_deref(), Some("ses_known"));
+    // Saved without one: the latest conversation in this folder, not another worktree's.
+    let found = agent::resume_launch(kind, None, &tmp.0, &tmp.0, &env, (80, 24)).unwrap();
+    assert_eq!(found.args, ["--session", "ses_latest"]);
+
+    let path = tmp.0.join("agent-sessions.json");
+    let mut record = saved_record(&tmp.0, &tmp.0);
+    record["agent"] = json!("opencode");
+    record["nativeId"] = json!("ses_known");
+    std::fs::write(&path, serde_json::to_vec(&vec![record]).unwrap()).unwrap();
+    let sessions = Arc::new(Sessions::with_path(path.clone()));
+    assert_eq!(sessions.list()[0].native_id.as_deref(), Some("ses_known"));
+    let info = sessions.resume("saved", |saved| agent::resume_launch(kind, saved.native_id.as_deref(), &tmp.0, &tmp.0, &env, (80, 24))).unwrap();
+    wait_for("the conversation reopened", || output(&sessions, &info.id).contains("plugin:{"));
+    let text = output(&sessions, &info.id);
+    // Only the conversation: the task isn't sent again. Retrace's plugin is loaded this time too.
+    assert!(text.contains("agent args:[--session ses_known]"), "{text}");
+    assert!(text.contains("opencode-plugin-") && !text.contains("original task"), "{text}");
+    assert_eq!(Sessions::with_path(path).list()[0].native_id.as_deref(), Some("ses_known"));
+    sessions.stop_all();
+}
+
+#[test]
+fn an_opencode_session_reports_what_opencode_itself_says() {
+    use agent::LiveState;
+    use std::io::Write;
+    let tmp = temp("oc-live");
+    let path = tmp.0.join("agent-sessions.json");
+    let sessions = Arc::new(Sessions::with_path(path.clone()));
+    let launch = agent::launch(agent::kind("opencode").unwrap(), "", None, &tmp.0, &tmp.0, &env_with(&fake_opencode(&tmp.0)), (80, 24)).unwrap();
+    // What the plugin inside OpenCode would append, line by line.
+    let feed = launch.opencode.as_ref().expect("a feed for OpenCode").events.clone();
+    let say = |lines: &[serde_json::Value]| {
+        let mut file = std::fs::OpenOptions::new().append(true).open(&feed).unwrap();
+        for line in lines {
+            writeln!(file, "{line}").unwrap();
+        }
+    };
+    let info = sessions.spawn(launch, meta(&tmp.0)).unwrap();
+    let live = || sessions.list()[0].live.clone();
+    let state = || live().map(|l| (l.state, l.detail));
+
+    // Nothing from the plugin yet (an OpenCode too old for it never says anything): no claim.
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(live(), None);
+    say(&[json!({ "type": "retrace.ready" })]);
+    // Loaded, nothing in progress: it waits for the first message.
+    wait_for("idle", || state() == Some((LiveState::Idle, None)));
+    assert!(!live().unwrap().worked);
+    assert_eq!(sessions.list()[0].native_id, None);
+
+    say(&[
+        json!({ "type": "session.created", "properties": { "sessionID": "ses_live", "info": { "id": "ses_live", "parentID": null } } }),
+        json!({ "type": "session.status", "properties": { "sessionID": "ses_live", "status": { "type": "busy" } } }),
+    ]);
+    wait_for("busy", || state() == Some((LiveState::Busy, None)));
+    // The conversation it opened is remembered, on disk too, for Resume.
+    assert_eq!(sessions.list()[0].native_id.as_deref(), Some("ses_live"));
+    wait_for("saved", || Sessions::with_path(path.clone()).list()[0].native_id.as_deref() == Some("ses_live"));
+
+    // Still busy for OpenCode, but it is the user it waits for.
+    say(&[json!({ "type": "permission.asked", "properties": { "id": "per_1", "sessionID": "ses_live", "permission": "bash", "patterns": ["rm -rf build"] } })]);
+    wait_for("asking", || state() == Some((LiveState::Asking, Some("bash: rm -rf build".into()))));
+    say(&[json!({ "type": "permission.replied", "properties": { "sessionID": "ses_live", "requestID": "per_1", "reply": "once" } })]);
+    wait_for("busy again", || state() == Some((LiveState::Busy, None)));
+    say(&[
+        json!({ "type": "session.error", "properties": { "sessionID": "ses_live", "error": { "name": "APIError", "data": { "message": "insufficient balance (1008)" } } } }),
+        json!({ "type": "session.status", "properties": { "sessionID": "ses_live", "status": { "type": "idle" } } }),
+    ]);
+    wait_for("error", || state() == Some((LiveState::Error, Some("insufficient balance (1008)".into()))));
+    assert!(live().unwrap().worked);
+
+    // Once the process is gone, the exit says what happened, and the feed is cleared away.
+    sessions.stop(&info.id).unwrap();
+    wait_for("exit", || !sessions.list()[0].running);
+    assert_eq!(sessions.list()[0].live, None);
+    assert!(Sessions::with_path(path).list()[0].live.is_none());
+    wait_for("feed removed", || !feed.exists());
 }
 
 #[test]
