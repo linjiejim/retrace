@@ -7,7 +7,9 @@ import { t } from "./i18n"
 import { DEFAULT_LAYOUT } from "./layout"
 import { queryClient } from "./query"
 import { prefs, selectionKey, ui, type Selection } from "./store"
-import type { Overview, Project } from "./types"
+import { leave } from "./quit"
+import { focusTerminal } from "./terminals"
+import type { AgentSession, Overview, Project } from "./types"
 import { checkForUpdates } from "./updater"
 import { invalidateProject, prKey, summaryQuery } from "@/hooks/queries"
 import { notify } from "@/components/ui/toast"
@@ -85,6 +87,15 @@ export function openPullRequest(n: number) {
     focusMode: false,
     diffOpen: true,
   }))
+}
+
+/** Show a session: its project, its worktree's tab, and its terminal (focused). */
+export function openSession(s: AgentSession) {
+  if (ui.get().projectId !== s.project) selectProject(s.project)
+  ui.set((u) => ({ tabs: { ...u.tabs, [s.project]: `tree:${s.tree}` }, agentSession: s.id, agentOpen: true, focusMode: false }))
+  // A new worktree isn't in the cached overview yet.
+  invalidateProject(queryClient, s.project, { git: true, trees: [] })
+  requestAnimationFrame(() => requestAnimationFrame(() => focusTerminal(s.id)))
 }
 
 export function closeDiff() {
@@ -167,6 +178,13 @@ async function refresh() {
 
 export const commands = {
   settings: () => ui.set({ settingsOpen: true }),
+  newAgent: () => {
+    const id = ui.get().projectId
+    if (!id) return notify.info(t("Pick a project first"))
+    ui.set({ newAgent: { projectId: id } })
+  },
+  toggleAgent: () => ui.set((u) => ({ agentOpen: !u.agentOpen, focusMode: false })),
+  quit: () => void leave("quit"),
   checkForUpdates: () => void checkForUpdates(true),
   addProject: () => void addProject(),
   refresh: () => void refresh(),

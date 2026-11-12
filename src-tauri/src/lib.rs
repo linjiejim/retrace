@@ -29,6 +29,7 @@ fn watch_project(app: tauri::AppHandle, watcher: tauri::State<'_, watch::Watcher
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state = core::State::load();
+    let exiting = state.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -37,6 +38,8 @@ pub fn run() {
         .manage(watch::Watcher::default())
         .setup(move |app| {
             watch::start_auto_fetch(app.handle().clone(), state.clone());
+            relay_agent_events(app.handle().clone(), &state);
+            core::shell_env::prefetch();
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
             }
@@ -48,6 +51,26 @@ pub fn run() {
                 let _ = window.emit("app-focused", ());
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(move |_, event| {
+            // Agents die with the app; the page has already asked before a normal quit.
+            if let tauri::RunEvent::Exit = event {
+                exiting.agents.stop_all();
+            }
+        });
+}
+
+/// Agent output and state changes, pushed to the page as events (the dev bridge polls instead).
+fn relay_agent_events(app: tauri::AppHandle, state: &Arc<core::State>) {
+    use base64::Engine;
+    state.agents.set_notify(Arc::new(move |event| match event {
+        core::agent::Event::Output { session, offset, data } => {
+            let data = base64::engine::general_purpose::STANDARD.encode(data);
+            let _ = app.emit("agent-output", serde_json::json!({ "session": session, "offset": offset, "data": data }));
+        }
+        core::agent::Event::Changed { session } => {
+            let _ = app.emit("agent-changed", session);
+        }
+    }));
 }
