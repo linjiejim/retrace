@@ -796,6 +796,8 @@ fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 tree: Option<String>,
                 branch: Option<String>,
                 setup: Option<String>,
+                /// The user's last choices of model and the like, for an agent with a conversation.
+                options: Option<std::collections::BTreeMap<String, String>>,
                 cols: Option<u16>,
                 rows: Option<u16>,
             }
@@ -832,17 +834,19 @@ fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
                     (path, Some(branch), setup)
                 }
             };
-            let launch = agent::launch(kind, &a.task, setup.as_deref(), Path::new(&tree), &dir, env, (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))?;
+            let launch = agent::launch(kind, &a.task, setup.as_deref(), chosen(a.options), Path::new(&tree), &dir, env, (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))?;
             json!(sessions.spawn(launch, agent::Meta { project: a.id, tree, branch, agent: kind.id.into(), task: a.task.trim().to_string() })?)
         }
         "agentResume" => {
             #[derive(Deserialize)]
             struct A {
                 session: String,
+                options: Option<std::collections::BTreeMap<String, String>>,
                 cols: Option<u16>,
                 rows: Option<u16>,
             }
             let a: A = args(a)?;
+            let options = chosen(a.options);
             json!(sessions.resume(&a.session, |saved| {
                 let dir = project_dir(state, &saved.project)?;
                 if !Path::new(&saved.tree).is_dir() {
@@ -852,7 +856,7 @@ fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
                 if !known {
                     bail!(tr!("不是这个项目的 worktree：{}", "Not a worktree of this project: {}", saved.tree));
                 }
-                agent::resume_launch(agent::kind(&saved.agent)?, saved.native_id.as_deref(), Path::new(&saved.tree), &dir, shell_env::agent_env(), (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))
+                agent::resume_launch(agent::kind(&saved.agent)?, saved.native_id.as_deref(), options, Path::new(&saved.tree), &dir, shell_env::agent_env(), (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))
             })?)
         }
         "agentSetup" => {
@@ -896,6 +900,53 @@ fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
             sessions.resize(&session, cols, rows)?;
             Value::Null
         }
+        "agentTranscript" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                #[serde(default)]
+                after: u64,
+            }
+            let A { session, after } = args(a)?;
+            json!(sessions.chat(&session)?.transcript(after)?)
+        }
+        "agentPrompt" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                text: String,
+            }
+            let A { session, text } = args(a)?;
+            sessions.chat(&session)?.prompt(&text)?;
+            Value::Null
+        }
+        "agentCancel" => {
+            let SessionId { session } = args(a)?;
+            sessions.chat(&session)?.cancel()?;
+            Value::Null
+        }
+        "agentAnswer" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                request: u64,
+                option: String,
+            }
+            let A { session, request, option } = args(a)?;
+            sessions.chat(&session)?.answer(request, &option)?;
+            Value::Null
+        }
+        "agentSetOption" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                option: String,
+                value: String,
+            }
+            let A { session, option, value } = args(a)?;
+            sessions.chat(&session)?.set_option(&option, &value)?;
+            Value::Null
+        }
         "agentStop" => {
             let SessionId { session } = args(a)?;
             sessions.stop(&session)?;
@@ -908,6 +959,14 @@ fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
         }
         _ => bail!(tr!("未知命令：{cmd}", "Unknown command: {cmd}")),
     })
+}
+
+/// Remembered config choices in the order to apply them: the model first, since what else an
+/// agent offers (effort levels) can depend on it.
+fn chosen(options: Option<std::collections::BTreeMap<String, String>>) -> Vec<(String, String)> {
+    let mut list: Vec<(String, String)> = options.unwrap_or_default().into_iter().collect();
+    list.sort_by_key(|(id, _)| id != "model");
+    list
 }
 
 /// Undo can bring back only what was recorded here.

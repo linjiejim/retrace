@@ -72,5 +72,8 @@ fn relay_agent_events(app: tauri::AppHandle, state: &Arc<core::State>) {
         core::agent::Event::Changed { session } => {
             let _ = app.emit("agent-changed", session);
         }
+        core::agent::Event::Chat { session } => {
+            let _ = app.emit("agent-transcript", session);
+        }
     }));
 }

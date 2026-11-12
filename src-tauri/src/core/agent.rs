@@ -1,10 +1,12 @@
-//! Agent sessions: a coding agent's own terminal UI running in a pseudo-terminal, kept alive in
-//! the background while Retrace is open. Retrace only relays bytes; the agent does the work.
+//! Agent sessions, kept alive in the background while Retrace is open. An agent that speaks ACP
+//! (OpenCode) is a conversation Retrace draws itself (see `acp.rs`); the others run their own
+//! terminal UI in a pseudo-terminal and Retrace only relays bytes. Either way the agent is a
+//! program installed on this machine, and it does the work.
 //!
 //! What Retrace writes here: a new worktree and branch for a session (when asked), nothing else.
 
+use super::acp;
 use super::git;
-use super::opencode;
 use super::repo;
 use super::shell_env::{self, Env};
 use crate::tr;
@@ -24,13 +26,16 @@ pub struct Kind {
     pub id: &'static str,
     pub name: &'static str,
     binary: &'static str,
+    /// Arguments that make it speak ACP on its standard input and output; empty = it only has a
+    /// terminal UI.
+    acp: &'static [&'static str],
 }
 
-/// Built-in agents. Each is just how to start its terminal UI with a task.
+/// Built-in agents. Each is just how to start it: as an ACP agent, or its terminal UI with a task.
 pub const KINDS: &[Kind] = &[
-    Kind { id: "opencode", name: "OpenCode", binary: "opencode" },
-    Kind { id: "codex", name: "Codex", binary: "codex" },
-    Kind { id: "claude", name: "Claude Code", binary: "claude" },
+    Kind { id: "opencode", name: "OpenCode", binary: "opencode", acp: &["acp"] },
+    Kind { id: "codex", name: "Codex", binary: "codex", acp: &[] },
+    Kind { id: "claude", name: "Claude Code", binary: "claude", acp: &[] },
 ];
 
 impl Kind {
@@ -38,7 +43,12 @@ impl Kind {
         self.binary
     }
 
-    /// Arguments that start the UI with `task` already submitted (none for an empty task).
+    /// Shown as a conversation (over ACP) instead of a terminal.
+    pub fn chat(&self) -> bool {
+        !self.acp.is_empty()
+    }
+
+    /// Arguments that start the terminal UI with `task` already submitted (none for an empty task).
     pub fn args(&self, task: &str) -> Vec<String> {
         let task = task.trim();
         // Own this session's runtime; quitting its TUI must not leave a task in a shared daemon.
@@ -52,20 +62,17 @@ impl Kind {
         if task.is_empty() {
             return vec![];
         }
-        match self.id {
-            "opencode" => vec!["--prompt".into(), task.into()],
-            _ => vec![task.into()],
-        }
+        vec![task.into()]
     }
 
-    /// Back into a conversation in the session's existing worktree, never resubmitting the task.
-    /// OpenCode reopens the one Retrace followed (`native`), or starts clean when there is none;
-    /// Codex and Claude Code show their own history picker.
-    pub fn resume_args(&self, native: Option<&str>) -> Vec<String> {
+    /// Back into a conversation in the session's existing worktree, never resubmitting the task:
+    /// Codex and Claude Code show their own history picker. (An ACP agent reopens the
+    /// conversation over the protocol instead.)
+    pub fn resume_args(&self) -> Vec<String> {
         match self.id {
             "codex" => vec!["--no-daemon".into(), "resume".into()],
             "claude" => vec!["--resume".into()],
-            _ => native.map(|id| vec!["--session".into(), id.into()]).unwrap_or_default(),
+            _ => vec![],
         }
     }
 }
@@ -81,12 +88,14 @@ pub struct KindInfo {
     pub name: String,
     /// Where it is installed; none when it isn't on the login shell's PATH.
     pub path: Option<String>,
+    /// Its sessions are conversations, not terminals.
+    pub chat: bool,
 }
 
 pub fn kinds(env: &Env) -> Vec<KindInfo> {
     KINDS
         .iter()
-        .map(|k| KindInfo { id: k.id.into(), name: k.name.into(), path: shell_env::which(env, k.binary).map(|p| p.to_string_lossy().into_owned()) })
+        .map(|k| KindInfo { id: k.id.into(), name: k.name.into(), path: shell_env::which(env, k.binary).map(|p| p.to_string_lossy().into_owned()), chat: k.chat() })
         .collect()
 }
 
@@ -99,51 +108,64 @@ pub struct Launch {
     pub env: Env,
     pub cols: u16,
     pub rows: u16,
-    /// OpenCode writes its events here; Retrace follows them for the session's precise state.
-    pub opencode: Option<opencode::Feed>,
+    /// The conversation to open over ACP; none = a terminal session.
+    pub chat: Option<acp::Plan>,
     /// The agent's own conversation this launch reopens.
     pub native_id: Option<String>,
 }
 
-/// The agent in `tree`, with the task as its own argument (never spliced into a shell string).
-/// A setup command runs first in `/bin/sh -e`; the agent starts only if it succeeds.
-pub fn launch(kind: &Kind, task: &str, setup: Option<&str>, tree: &Path, main_tree: &Path, env: &Env, size: (u16, u16)) -> Result<Launch> {
+fn located(kind: &Kind, tree: &Path, main_tree: &Path, env: &Env) -> Result<(PathBuf, Env)> {
     let bin = shell_env::which(env, kind.binary)
         .ok_or_else(|| anyhow!(tr!("找不到 {}：登录 shell 的 PATH 里没有 `{}`", "Can't find {}: `{}` isn't on your login shell's PATH", kind.name, kind.binary)))?;
     let mut env = env.clone();
     env.insert("RETRACE_MAIN_TREE".into(), main_tree.to_string_lossy().into_owned());
     env.insert("RETRACE_WORKTREE".into(), tree.to_string_lossy().into_owned());
-    launch_with(kind, kind.args(task), None, setup, tree, bin, env, size)
+    Ok((bin, env))
+}
+
+/// The agent in `tree`. For a terminal agent the task is its own argument (never spliced into a
+/// shell string); an ACP agent gets it as its first message. A setup command runs first in
+/// `/bin/sh -e`; the agent starts only if it succeeds. `options`: the user's last choices of
+/// model and the like, for an ACP agent.
+#[allow(clippy::too_many_arguments)]
+pub fn launch(kind: &Kind, task: &str, setup: Option<&str>, options: Vec<(String, String)>, tree: &Path, main_tree: &Path, env: &Env, size: (u16, u16)) -> Result<Launch> {
+    let (bin, env) = located(kind, tree, main_tree, env)?;
+    let setup = setup.map(str::trim).filter(|s| !s.is_empty());
+    if kind.chat() {
+        let plan = acp::Plan { cwd: tree.to_path_buf(), open: acp::Open::New, task: task.trim().to_string(), options, setup: setup.map(str::to_string) };
+        return Ok(launch_with(kind.acp.iter().map(|a| a.to_string()).collect(), None, setup, Some(plan), tree, bin, env, size));
+    }
+    Ok(launch_with(kind.args(task), None, setup, None, tree, bin, env, size))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn launch_with(kind: &Kind, agent_args: Vec<String>, native_id: Option<String>, setup: Option<&str>, tree: &Path, bin: PathBuf, mut env: Env, size: (u16, u16)) -> Result<Launch> {
-    let opencode = (kind.id == "opencode").then(|| opencode::Feed::prepare(&mut env)).flatten();
-    let (program, args) = match setup.map(str::trim).filter(|s| !s.is_empty()) {
+fn launch_with(agent_args: Vec<String>, native_id: Option<String>, setup: Option<&str>, chat: Option<acp::Plan>, tree: &Path, bin: PathBuf, env: Env, size: (u16, u16)) -> Launch {
+    let (program, args) = match setup {
         Some(setup) => {
-            let mut args = vec!["-e".to_string(), "-c".to_string(), format!("{setup}\nexec \"$0\" \"$@\"")];
+            // An ACP agent talks on stdin and stdout: the setup command gets neither (its output
+            // goes to stderr, where Retrace shows it), and both are handed back for the agent.
+            let script = if chat.is_some() { format!("exec 3>&1 4<&0 1>&2 </dev/null\n{setup}\nexec 1>&3 0<&4 3>&- 4<&-\nexec \"$0\" \"$@\"") } else { format!("{setup}\nexec \"$0\" \"$@\"") };
+            let mut args = vec!["-e".to_string(), "-c".to_string(), script];
             args.push(bin.to_string_lossy().into_owned());
             args.extend(agent_args);
             (PathBuf::from("/bin/sh"), args)
         }
         None => (bin, agent_args),
     };
-    Ok(Launch { program, args, cwd: tree.to_path_buf(), env, cols: size.0.clamp(20, 500), rows: size.1.clamp(5, 300), opencode, native_id })
+    Launch { program, args, cwd: tree.to_path_buf(), env, cols: size.0.clamp(20, 500), rows: size.1.clamp(5, 300), chat, native_id }
 }
 
 /// Reopen a saved session's conversation. `native` is the agent's own id for it, when Retrace
-/// learned it; for an OpenCode session saved without one, the latest conversation in `tree`.
-pub fn resume_launch(kind: &Kind, native: Option<&str>, tree: &Path, main_tree: &Path, env: &Env, size: (u16, u16)) -> Result<Launch> {
-    let bin = shell_env::which(env, kind.binary)
-        .ok_or_else(|| anyhow!(tr!("找不到 {}：登录 shell 的 PATH 里没有 `{}`", "Can't find {}: `{}` isn't on your login shell's PATH", kind.name, kind.binary)))?;
-    let native = match (kind.id, native) {
-        ("opencode", None) => opencode::last_session(&bin, tree, env),
-        (_, native) => native.map(str::to_string),
-    };
-    let mut env = env.clone();
-    env.insert("RETRACE_MAIN_TREE".into(), main_tree.to_string_lossy().into_owned());
-    env.insert("RETRACE_WORKTREE".into(), tree.to_string_lossy().into_owned());
-    launch_with(kind, kind.resume_args(native.as_deref()), native, None, tree, bin, env, size)
+/// learned it; an ACP agent saved without one reopens the latest conversation in `tree`.
+pub fn resume_launch(kind: &Kind, native: Option<&str>, options: Vec<(String, String)>, tree: &Path, main_tree: &Path, env: &Env, size: (u16, u16)) -> Result<Launch> {
+    let (bin, env) = located(kind, tree, main_tree, env)?;
+    let native = native.map(str::to_string);
+    if kind.chat() {
+        let open = native.clone().map(acp::Open::Id).unwrap_or(acp::Open::Latest);
+        let plan = acp::Plan { cwd: tree.to_path_buf(), open, task: String::new(), options, setup: None };
+        return Ok(launch_with(kind.acp.iter().map(|a| a.to_string()).collect(), native, None, Some(plan), tree, bin, env, size));
+    }
+    Ok(launch_with(kind.resume_args(), native, None, None, tree, bin, env, size))
 }
 
 // ---------- new worktree ----------
@@ -301,13 +323,16 @@ pub struct SessionInfo {
     pub exit_code: Option<i32>,
     /// Ended because the user stopped or closed it, not on its own.
     pub stopped: bool,
-    /// The agent's own id for the conversation (OpenCode's session id): what Resume reopens.
+    /// The agent's own id for the conversation (its ACP session id): what Resume reopens.
     #[serde(default)]
     pub native_id: Option<String>,
-    /// What the agent itself reports, while Retrace can follow it (OpenCode). Without it the
-    /// UI judges from the terminal's output.
+    /// What the agent itself reports (an ACP agent). Without it the UI judges from the
+    /// terminal's output.
     #[serde(default)]
     pub live: Option<Live>,
+    /// A conversation over ACP, not a terminal.
+    #[serde(default)]
+    pub chat: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,6 +372,8 @@ pub struct Meta {
 pub enum Event {
     Output { session: String, offset: u64, data: Vec<u8> },
     Changed { session: String },
+    /// The conversation of an ACP session has something new.
+    Chat { session: String },
 }
 
 pub type Notify = Arc<dyn Fn(Event) + Send + Sync>;
@@ -389,6 +416,8 @@ struct Session {
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     killer: Mutex<Option<Box<dyn ChildKiller + Send + Sync>>>,
     pid: Option<u32>,
+    /// The conversation, for an ACP session (it has no terminal: the three above are empty).
+    chat: Option<Arc<acp::Conn>>,
 }
 
 impl Session {
@@ -440,11 +469,10 @@ fn wait_exit_unreaped(pid: i32) {
     }
 }
 
-/// The terminal title as a name for the session: without the agent's own prefix, and nothing
-/// when it only names the agent or a conversation that has no title yet.
-pub fn clean_title(agent: &str, title: &str) -> Option<String> {
+/// What the agent calls the conversation (its terminal title, or its own name for it) as a name
+/// for the session: nothing when it only names the agent or a conversation with no title yet.
+pub fn clean_title(title: &str) -> Option<String> {
     let title = title.trim();
-    let title = if agent == "opencode" { title.strip_prefix("OC | ").unwrap_or(title).trim() } else { title };
     let unnamed = title.is_empty() || KINDS.iter().any(|k| title.eq_ignore_ascii_case(k.name) || title.eq_ignore_ascii_case(k.binary)) || title.starts_with("New session - ");
     (!unnamed).then(|| title.to_string())
 }
@@ -488,6 +516,7 @@ impl Sessions {
                 master: Mutex::new(None),
                 killer: Mutex::new(None),
                 pid: None,
+                chat: None,
             }));
         }
         Self { list: Mutex::new(list), path: Some(path), ..Default::default() }
@@ -590,24 +619,7 @@ impl Sessions {
     }
 
     fn spawn_unlocked(self: &Arc<Self>, launch: Launch, meta: Meta) -> Result<SessionInfo> {
-        let pty = native_pty_system();
-        let pair = pty
-            .openpty(PtySize { rows: launch.rows, cols: launch.cols, pixel_width: 0, pixel_height: 0 })
-            .map_err(|e| anyhow!(tr!("无法打开终端：{e}", "Can't open a terminal: {e}")))?;
-        let mut cmd = CommandBuilder::new(&launch.program);
-        cmd.args(&launch.args);
-        cmd.cwd(&launch.cwd);
-        cmd.env_clear();
-        for (k, v) in &launch.env {
-            cmd.env(k, v);
-        }
-        let mut child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| anyhow!(tr!("无法启动 {}：{e}", "Can't start {}: {e}", launch.program.display())))?;
-        drop(pair.slave);
-        let reader = pair.master.try_clone_reader().map_err(|e| anyhow!("{e}"))?;
-        let writer = pair.master.take_writer().map_err(|e| anyhow!("{e}"))?;
+        let Launch { program, args, cwd, env, cols, rows, chat, native_id } = launch;
         let now = now_ms();
         let id = loop {
             let n = self.next.fetch_add(1, Ordering::Relaxed);
@@ -631,29 +643,102 @@ impl Sessions {
             running: true,
             exit_code: None,
             stopped: false,
-            native_id: launch.native_id.clone(),
-            live: None,
+            native_id,
+            // A conversation is being opened from the first moment.
+            live: chat.is_some().then_some(Live { state: LiveState::Busy, detail: None, worked: false, since: now, at: now }),
+            chat: chat.is_some(),
         };
-        let session = Arc::new(Session {
-            info: Mutex::new(info.clone()),
-            buffer: Mutex::new(Buffer { data: VecDeque::new(), start: 0 }),
-            writer: Mutex::new(Some(writer)),
-            killer: Mutex::new(Some(child.clone_killer())),
-            pid: child.process_id(),
-            master: Mutex::new(Some(pair.master)),
-        });
-        self.list.lock().map_err(|_| anyhow!("sessions"))?.push(session.clone());
+        let cant_start = |e: &dyn std::fmt::Display| anyhow!(tr!("无法启动 {}：{e}", "Can't start {}: {e}", program.display()));
+        match chat {
+            Some(plan) => {
+                use std::os::unix::process::CommandExt;
+                use std::process::Stdio;
+                // Its own process group, so stopping it also stops what it started.
+                let mut child = std::process::Command::new(&program)
+                    .args(&args)
+                    .current_dir(&cwd)
+                    .env_clear()
+                    .envs(&env)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .process_group(0)
+                    .spawn()
+                    .map_err(|e| cant_start(&e))?;
+                let (Some(stdin), Some(stdout), Some(stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take()) else {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(cant_start(&"pipes"));
+                };
+                let (sessions, session_id) = (Arc::downgrade(self), info.id.clone());
+                let conn = acp::Conn::start(stdin, stdout, stderr, plan, move |conn: &acp::Conn| {
+                    let Some(sessions) = sessions.upgrade() else { return };
+                    sessions.report(&session_id, conn.native_id(), Some(conn.live()), conn.title());
+                    sessions.emit(Event::Chat { session: session_id.clone() });
+                });
+                let session = Arc::new(Session {
+                    info: Mutex::new(info.clone()),
+                    buffer: Mutex::new(Buffer { data: VecDeque::new(), start: 0 }),
+                    writer: Mutex::new(None),
+                    master: Mutex::new(None),
+                    killer: Mutex::new(None),
+                    pid: Some(child.id()),
+                    chat: Some(conn),
+                });
+                self.list.lock().map_err(|_| anyhow!("sessions"))?.push(session.clone());
+                self.watch_exit(session, move || match child.wait() {
+                    Ok(status) if status.success() => 0,
+                    Ok(status) => status.code().unwrap_or(1).max(1),
+                    Err(_) => -1,
+                });
+            }
+            None => {
+                let pty = native_pty_system();
+                let pair = pty.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| anyhow!(tr!("无法打开终端：{e}", "Can't open a terminal: {e}")))?;
+                let mut cmd = CommandBuilder::new(&program);
+                cmd.args(&args);
+                cmd.cwd(&cwd);
+                cmd.env_clear();
+                for (k, v) in &env {
+                    cmd.env(k, v);
+                }
+                let mut child = pair.slave.spawn_command(cmd).map_err(|e| cant_start(&e))?;
+                drop(pair.slave);
+                let reader = pair.master.try_clone_reader().map_err(|e| anyhow!("{e}"))?;
+                let writer = pair.master.take_writer().map_err(|e| anyhow!("{e}"))?;
+                let session = Arc::new(Session {
+                    info: Mutex::new(info.clone()),
+                    buffer: Mutex::new(Buffer { data: VecDeque::new(), start: 0 }),
+                    writer: Mutex::new(Some(writer)),
+                    killer: Mutex::new(Some(child.clone_killer())),
+                    pid: child.process_id(),
+                    master: Mutex::new(Some(pair.master)),
+                    chat: None,
+                });
+                self.list.lock().map_err(|_| anyhow!("sessions"))?.push(session.clone());
+                let (me, s) = (self.clone(), session.clone());
+                std::thread::spawn(move || me.pump(s, reader));
+                self.watch_exit(session, move || match child.wait() {
+                    Ok(status) if status.success() => 0,
+                    Ok(status) => status.exit_code().max(1) as i32,
+                    Err(_) => -1,
+                });
+            }
+        }
+        self.emit(Event::Changed { session: info.id.clone() });
+        Ok(info)
+    }
 
-        let (me, s) = (self.clone(), session.clone());
-        std::thread::spawn(move || me.pump(s, reader));
-        let (me, s) = (self.clone(), session);
-        let pid = child.process_id().map(|p| p as i32).filter(|p| *p > 1);
+    /// Wait for the session's process, then record how it ended. `reap` collects its exit code.
+    fn watch_exit(self: &Arc<Self>, s: Arc<Session>, reap: impl FnOnce() -> i32 + Send + 'static) {
+        let me = self.clone();
+        let pid = s.pid.map(|p| p as i32).filter(|p| *p > 1);
         std::thread::spawn(move || {
             if let Some(pid) = pid {
                 wait_exit_unreaped(pid);
             }
             // Keep signals excluded until the reaped pid is marked no longer running.
-            let id = match s.info.lock() {
+            let (id, code, stopped) = match s.info.lock() {
                 Ok(mut i) => {
                     // Stopped by the user: whatever the agent left in its group goes too, while
                     // the unreaped agent still holds the group id.
@@ -662,46 +747,46 @@ impl Sessions {
                             libc::killpg(pid, libc::SIGKILL);
                         }
                     }
-                    let code = match child.wait() {
-                        Ok(status) if status.success() => 0,
-                        Ok(status) => status.exit_code().max(1) as i32,
-                        Err(_) => -1,
-                    };
+                    let code = reap();
                     i.running = false;
                     i.exit_code = Some(code);
                     i.live = None;
-                    i.id.clone()
+                    (i.id.clone(), code, i.stopped)
                 }
                 Err(_) => return,
             };
+            if let Some(chat) = &s.chat {
+                chat.exited(code, stopped);
+            }
             if let Ok(mut closing) = me.closing.lock() {
                 closing.retain(|x| !Arc::ptr_eq(x, &s));
             }
             me.persist_after_exit();
             me.emit(Event::Changed { session: id });
         });
-        if let Some(feed) = launch.opencode {
-            opencode::watch(self.clone(), info.id.clone(), feed);
-        }
-        self.emit(Event::Changed { session: info.id.clone() });
-        Ok(info)
     }
 
-    pub fn is_running(&self, id: &str) -> bool {
-        self.get(id).is_ok_and(|s| s.running())
+    /// The conversation of an ACP session; it stays readable after the agent has exited.
+    pub fn chat(&self, id: &str) -> Result<Arc<acp::Conn>> {
+        self.get(id)?.chat.clone().ok_or_else(|| anyhow!(tr!("这个会话是终端，不是对话", "This session is a terminal, not a conversation")))
     }
 
-    /// What the agent itself says (see `opencode.rs`): its conversation id once known, and its
-    /// live state (none = can't be followed right now).
-    pub fn report(&self, id: &str, native_id: Option<String>, live: Option<Live>) {
+    /// What the agent itself says (see `acp.rs`): its id and its name for the conversation once
+    /// known, and its live state.
+    pub fn report(&self, id: &str, native_id: Option<String>, live: Option<Live>, title: Option<String>) {
         let Ok(s) = self.get(id) else { return };
         let (changed, save) = match s.info.lock() {
             Ok(mut i) => {
                 // Exited meanwhile: the exit code is the state now.
                 let live = live.filter(|_| i.running);
-                let save = native_id.is_some() && i.native_id != native_id;
+                let title = title.and_then(|t| clean_title(&t));
+                let mut save = native_id.is_some() && i.native_id != native_id;
                 if save {
                     i.native_id = native_id;
+                }
+                if title.is_some() && i.title != title {
+                    i.title = title;
+                    save = true;
                 }
                 let changed = save || i.live != live;
                 i.live = live;
@@ -750,7 +835,7 @@ impl Sessions {
                                 changed = true;
                             }
                             Signal::Title(t) => {
-                                let title = clean_title(&i.agent, &t);
+                                let title = clean_title(&t);
                                 if i.title != title {
                                     i.title = title;
                                     changed = true;
@@ -948,8 +1033,8 @@ mod tests {
 
     #[test]
     fn task_is_its_own_argument() {
-        let k = kind("opencode").unwrap();
-        assert_eq!(k.args("  fix `rm -rf` \"quotes\"; $(x) "), vec!["--prompt".to_string(), "fix `rm -rf` \"quotes\"; $(x)".to_string()]);
+        let k = kind("claude").unwrap();
+        assert_eq!(k.args("  fix `rm -rf` \"quotes\"; $(x) "), vec!["fix `rm -rf` \"quotes\"; $(x)".to_string()]);
         assert!(k.args("  ").is_empty());
         assert_eq!(kind("codex").unwrap().args("go"), vec!["--no-daemon".to_string(), "--".to_string(), "go".to_string()]);
         assert_eq!(kind("codex").unwrap().args(""), vec!["--no-daemon".to_string()]);
