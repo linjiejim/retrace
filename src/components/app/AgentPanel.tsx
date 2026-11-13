@@ -129,7 +129,8 @@ function startResize(e: React.PointerEvent, drawer: HTMLElement | null) {
 
 /**
  * The agent session floats over the right of the window instead of taking a column: open it
- * from a session row, close it with ✕ or ⌘T (in a terminal, Esc belongs to the agent). It doesn't
+ * from a session row, close it with ✕, ⌘T, Esc or by clicking its row again (in a terminal, Esc
+ * belongs to the agent). It doesn't
  * block the rest of the window, so the projects list can switch sessions while it is open. A
  * session is a conversation (an agent that speaks ACP) or the agent's own terminal UI.
  */
@@ -151,6 +152,7 @@ export function AgentDrawer() {
     <aside
       ref={drawer}
       aria-label={t("Agent")}
+      data-agent-drawer
       className="absolute inset-y-0 right-0 z-40 flex max-w-[calc(100%-240px)] animate-slide-in-right flex-col border-l bg-background shadow-overlay"
       style={{ width: width ?? "min(60vw, 960px)", minWidth: MIN_WIDTH }}
     >
@@ -184,7 +186,7 @@ export function AgentDrawer() {
             <MessageSquare />
           </IconButton>
         )}
-        <IconButton label={`${t("Close")}  ⌘T`} size="icon-sm" onClick={() => ui.set({ agentOpen: false })}>
+        <IconButton label={`${t("Close")}  Esc`} size="icon-sm" onClick={() => ui.set({ agentOpen: false })}>
           <X />
         </IconButton>
       </header>

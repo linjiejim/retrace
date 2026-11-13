@@ -115,6 +115,21 @@ export function newPart(offset: number, length: number, next: number): { skip: n
   return { skip: next - offset }
 }
 
+/** Most urgent first: what a folded project shows of its sessions. */
+const URGENCY: AgentState[] = ["asking", "errored", "waiting", "failed", "working", "done", "stopped"]
+/** The states a folded project shows; finished and stopped sessions need nothing from you. */
+const SHOWN_FOLDED: ReadonlySet<AgentState> = new Set(["asking", "errored", "waiting", "failed", "working"])
+
+/** A folded project's sessions as `[state, how many]`, most urgent first, leaving out the quiet ones. */
+export function foldedStates(sessions: AgentSession[], now: number): [AgentState, number][] {
+  const counts = new Map<AgentState, number>()
+  for (const s of sessions) {
+    const state = agentState(s, now)
+    if (SHOWN_FOLDED.has(state)) counts.set(state, (counts.get(state) ?? 0) + 1)
+  }
+  return URGENCY.filter((s) => counts.has(s)).map((s) => [s, counts.get(s)!])
+}
+
 /** The states that are the user's move. */
 export function needsYou(state: AgentState): boolean {
   return state === "waiting" || state === "asking" || state === "errored"

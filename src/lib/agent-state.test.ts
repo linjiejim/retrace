@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { canResume, agentState, defaultBranch, fromBase64, isTerminalReport, newPart, pasted, QUIET_MS, needsYou, pickSession, resumesDirectly, sessionLabel, slugify, stateDetail, toBase64, worktreePath } from "./agent-state"
+import { canResume, agentState, defaultBranch, foldedStates, fromBase64, isTerminalReport, newPart, pasted, QUIET_MS, needsYou, pickSession, resumesDirectly, sessionLabel, slugify, stateDetail, toBase64, worktreePath } from "./agent-state"
 import type { AgentLive, AgentSession } from "./types"
 
 const base: AgentSession = {
@@ -171,4 +171,20 @@ it("offers a history picker only for stopped supported providers", () => {
   expect(resumesDirectly(base, kinds)).toBe(true)
   expect(resumesDirectly({ ...base, agent: "codex" }, kinds)).toBe(false)
   expect(agentState({ ...base, running: false, exitCode: 0, stopped: true }, 0)).toBe("stopped")
+})
+
+it("sums up a folded project's sessions, most urgent first, without the quiet ones", () => {
+  const live = (state: AgentLive["state"]): AgentLive => ({ state, detail: null, worked: true, since: 0, at: 0 })
+  const sessions = [
+    { ...base, id: "a", live: live("busy") },
+    { ...base, id: "b", live: live("busy") },
+    { ...base, id: "c", live: live("asking") },
+    { ...base, id: "d", running: false, stopped: true },
+    { ...base, id: "e", running: false, exitCode: 0 },
+  ]
+  expect(foldedStates(sessions, 0)).toEqual([
+    ["asking", 1],
+    ["working", 2],
+  ])
+  expect(foldedStates([{ ...base, running: false, stopped: true }], 0)).toEqual([])
 })

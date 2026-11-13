@@ -155,3 +155,19 @@ describe("sessions combined with pinned projects and group dragging", () => {
     expect(buildRows(projects, groups, new Set([PINNED]), sessions).filter(r => r.kind === "session").map(r => r.session.id)).toEqual(["sb", "sc"])
   })
 })
+
+describe("folding a project's agent sessions", () => {
+  const p = (id: string): Project => ({ id, name: id, path: id, group: null, pinned: false }) as unknown as Project
+  const s = (id: string, project: string, startedAt: number): AgentSession => ({ id, project, startedAt }) as unknown as AgentSession
+
+  it("hides the sessions under a folded project, and marks the last one of an open project", () => {
+    const sessions = sessionsByProject([s("s1", "a", 1), s("s2", "a", 2), s("s3", "b", 3)])
+    const rows = buildRows([p("a"), p("b")], [], new Set(), sessions, new Set(["b"]))
+    expect(rows.map((r) => (r.kind === "session" ? `${r.session.id}${r.last ? "." : ""}` : r.kind === "project" ? `${r.project.id}${r.folded ? "+" : ""}:${r.sessions.length}` : r.kind))).toEqual(["a:2", "s1", "s2.", "b+:1"])
+  })
+
+  it("doesn't call a project without sessions folded", () => {
+    const rows = buildRows([p("a")], [], new Set(), sessionsByProject([]), new Set(["a"]))
+    expect(rows).toEqual([{ kind: "project", project: p("a"), group: null, sessions: [], folded: false }])
+  })
+})

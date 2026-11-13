@@ -83,7 +83,11 @@ export function useSessionActions(s: AgentSession, label: string) {
   return { stop, close, resume, element }
 }
 
-export function AgentSessionRow({ session: s, kinds, now, indent }: { session: AgentSession; kinds: AgentKind[] | undefined; now: number; indent: number }) {
+/**
+ * `guide`: where its project's tree line runs (the middle of the project's fold arrow); `indent`:
+ * where the row's own content starts; `last`: the last session, where that line ends.
+ */
+export function AgentSessionRow({ session: s, kinds, now, guide, indent, last }: { session: AgentSession; kinds: AgentKind[] | undefined; now: number; guide: number; indent: number; last: boolean }) {
   const state = agentState(s, now)
   const label = sessionLabel(s, kinds, fallbackLabel)
   const agentName = kinds?.find((k) => k.id === s.agent)?.name ?? s.agent
@@ -135,14 +139,18 @@ export function AgentSessionRow({ session: s, kinds, now, indent }: { session: A
         <ContextMenuTrigger asChild>
           <li
             className={cn(
-              "group flex h-7 cursor-default select-none items-center gap-1.5 rounded-sm pr-1 text-small text-muted-foreground hover:bg-accent",
+              "group relative flex h-7 cursor-default select-none items-center gap-1.5 rounded-sm pr-1 text-small text-muted-foreground hover:bg-accent",
               selected && "bg-pressed text-foreground hover:bg-pressed",
             )}
             style={{ paddingLeft: indent }}
-            onClick={() => openSession(s)}
+            // The one already open: clicking it again puts the drawer away.
+            onClick={() => (ui.get().agentOpen && ui.get().agentSession === s.id ? ui.set({ agentOpen: false }) : openSession(s))}
           >
+            {/* The tree line from the project down to this session (ending here if it's the last), and its branch. */}
+            <span aria-hidden className={cn("pointer-events-none absolute top-0 w-px bg-border", last ? "h-1/2" : "bottom-0")} style={{ left: guide }} />
+            <span aria-hidden className="pointer-events-none absolute top-1/2 h-px bg-border" style={{ left: guide, width: indent - guide - 2 }} />
             <AgentStateIcon state={state} className="shrink-0" />
-            <Tooltip content={<span className="whitespace-pre-line">{tip}</span>} side="right" delayDuration={700}>
+            <Tooltip content={<span className="whitespace-pre-line">{tip}</span>} side="right">
               <span className="min-w-0 flex-1 truncate">{label}</span>
             </Tooltip>
             <span className="shrink-0 text-caption text-faint-foreground group-hover:hidden">{agentName}</span>

@@ -108,8 +108,13 @@ export default function App() {
       const typing = e.target instanceof HTMLElement && e.target.closest("input, textarea, [contenteditable]")
       const s = ui.get()
       if (e.key === "Escape") {
-        if (typing) return (e.target as HTMLElement).blur()
+        // An input method uses Esc to cancel what it is composing.
+        if (e.isComposing) return
+        const inDrawer = e.target instanceof HTMLElement && !!e.target.closest("[data-agent-drawer]")
+        if (typing && !inDrawer) return (e.target as HTMLElement).blur()
         if (document.querySelector("[role=dialog], [data-radix-popper-content-wrapper]")) return
+        // The drawer floats over everything else: it is the first layer Esc takes away.
+        if (s.agentOpen) return ui.set({ agentOpen: false })
         if (s.focusMode) return ui.set({ focusMode: false })
         if (s.diffOpen) return closeDiff()
         if (s.query) return ui.set({ query: "" })

@@ -70,7 +70,7 @@ After that Retrace keeps itself up to date from GitHub Releases: at launch and e
 | ⌘\\ | Show / hide the projects |
 | ⌘O | Add a project |
 | ⌘N | New agent session in the current project |
-| ⌘T | Show / hide the agent session (while a terminal has focus, every key but ⌘ shortcuts goes to the agent, Esc included) |
+| ⌘T / Esc | Show / hide the agent session; clicking its row again also hides it (while a terminal has focus, every key but ⌘ shortcuts goes to the agent, Esc included) |
 | ⇧⌘F / ⌃\` / ⇧⌘A | Open the current worktree in Finder / Terminal / your editor |
 | ⌘, | Settings |
 

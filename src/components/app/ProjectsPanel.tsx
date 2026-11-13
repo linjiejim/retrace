@@ -1,25 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useQueryClient } from "@tanstack/react-query"
-import { ArrowDown, ArrowUp, Bot, Check, ChevronRight, CircleDot, Code, Ellipsis, ExternalLink, FolderInput, FolderMinus, FolderOpen, FolderPlus, GitBranch, PanelLeftClose, Pencil, Pin, PinOff, Plus, Search, SquareTerminal, Trash2, X } from "lucide-react"
+import { useQueries, useQueryClient } from "@tanstack/react-query"
+import { ArrowDown, ArrowUp, Bot, Check, ChevronRight, CircleDot, Code, Ellipsis, ExternalLink, FolderInput, FolderMinus, FolderOpen, FolderPlus, GitBranch, ListFilter, PanelLeftClose, Pencil, Pin, PinOff, Plus, Search, SquareTerminal, Trash2, X } from "lucide-react"
 import { api } from "@/lib/api"
 import { openLink, run, selectProject } from "@/lib/commands"
 import { PINNED, groupGaps, moveGroup, buildRows, dropTarget, moveProject, projectRows, sections, sessionsByProject, snapGap, type GroupGap, type DropTarget, type Row } from "@/lib/groups"
-import { agentState, needsYou } from "@/lib/agent-state"
+import { agentState, foldedStates, needsYou, STATE_LABEL } from "@/lib/agent-state"
 import { prefs, ui, useStore } from "@/lib/store"
 import { ago, tildify } from "@/lib/format"
-import type { Group, Project } from "@/lib/types"
+import type { AgentSession, Group, Project } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { t, tp } from "@/lib/i18n"
 import { s as kit } from "@/lib/strings"
-import { useGroups, useProjects, useSummary } from "@/hooks/queries"
+import { summaryQuery, useGroups, useProjects, useSummary } from "@/hooks/queries"
 import { useAgentKinds, useAgentSessions, useInstalledAgents, useNow } from "@/hooks/agents"
-import { AgentSessionRow } from "./AgentSessionRow"
+import { AgentSessionRow, AgentStateIcon } from "./AgentSessionRow"
 import { useDelayedFlag } from "@/hooks/use-delayed-flag"
 import { Button, IconButton } from "@/components/ui/button"
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader } from "@/components/ui/dialog"
 import { Field } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Tooltip } from "@/components/ui/tooltip"
+import { Tooltip, TooltipProvider } from "@/components/ui/tooltip"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, dropdownMenuParts, type MenuParts } from "@/components/ui/dropdown-menu"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger, contextMenuParts } from "@/components/ui/context-menu"
 import { StateView } from "@/components/ui/state"
@@ -28,8 +30,13 @@ import { notify } from "@/components/ui/toast"
 import { PanelHeader } from "@/components/layout/LayoutView"
 
 const ROW = 28
-/** Left padding of a project inside a group: its name lines up with the group's. */
+/** Left padding of a row at the top level, and of a project inside a group (where its fold arrow lines up with the group's name). */
+const TOP = 6
 const NESTED = 24
+/** One level of the tree: the fold arrow (14px) and the gap after it. */
+const LEVEL = 18
+/** Sidebar tooltips wait this long, each new row waits again, and one closes as soon as the pointer leaves its row: moving down the list doesn't flash them. */
+const TIP_DELAY = 500
 const NO_GROUPS: Group[] = []
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -51,6 +58,10 @@ export function ProjectsPanel() {
   const collapsedList = useStore(prefs, (s) => s.collapsedGroups)
   const collapsed = useMemo(() => new Set(collapsedList), [collapsedList])
   const [filter, setFilter] = useState("")
+  /** Show only projects with an agent session running, and/or with uncommitted changes (both: both). */
+  const [only, setOnly] = useState({ running: false, changes: false })
+  const foldedList = useStore(prefs, (s) => s.foldedSessions)
+  const folded = useMemo(() => new Set(foldedList), [foldedList])
   const [drag, setDrag] = useState<Drag | null>(null)
   /** A group being dragged, and the gap it would land in. */
   const [groupDrag, setGroupDrag] = useState<{ id: string; gap: GroupGap } | null>(null)
@@ -65,13 +76,27 @@ export function ProjectsPanel() {
   const kinds = useAgentKinds().data
   const canStartAgents = useInstalledAgents().length > 0
   const now = useNow(!!sessionList?.some((x) => x.running))
+  // The same queries each project row reads: shared, so this costs nothing extra.
+  const summaries = useQueries({ queries: all.map((p) => summaryQuery(p.id)) })
+  const dirty = useMemo(() => new Set(all.filter((_, i) => !!summaries[i]?.data?.dirtyTrees).map((p) => p.id)), [all, summaries])
+  const narrowed = !!filter || only.running || only.changes
   const rows: Row[] = useMemo(() => {
-    if (filter) {
+    if (narrowed) {
       const q = filter.toLowerCase()
-      return all.filter((p) => p.name.toLowerCase().includes(q)).flatMap((project) => projectRows(project, null, sessions))
+      return all
+        .filter((p) => p.name.toLowerCase().includes(q))
+        .filter((p) => !only.running || (sessions.get(p.id) ?? []).some((s) => s.running))
+        .filter((p) => !only.changes || dirty.has(p.id))
+        .flatMap((project) => projectRows(project, null, sessions, folded))
     }
-    return buildRows(all, groups, collapsed, sessions)
-  }, [all, groups, collapsed, filter, sessions])
+    return buildRows(all, groups, collapsed, sessions, folded)
+  }, [all, groups, collapsed, filter, only, narrowed, dirty, sessions, folded])
+  const clearFilters = () => {
+    setFilter("")
+    setOnly({ running: false, changes: false })
+  }
+  const toggleSessions = (id: string) =>
+    prefs.set((s) => ({ foldedSessions: s.foldedSessions.includes(id) ? s.foldedSessions.filter((x) => x !== id) : [...s.foldedSessions, id] }))
   /** Folded groups with an agent waiting inside: their header shows it. */
   const waitingGroups = useMemo(() => {
     const out = new Set<string>()
@@ -189,7 +214,7 @@ export function ProjectsPanel() {
   function pressRow(e: React.PointerEvent, p: Project) {
     if (e.button !== 0) return
     // Filtered lists don't reorder; a press just selects.
-    if (filter) return selectProject(p.id)
+    if (narrowed) return selectProject(p.id)
     const startX = e.clientX
     const startY = e.clientY
     const nestedAtStart = rows.some((r) => r.kind === "project" && r.project.id === p.id && r.group !== null)
@@ -244,7 +269,7 @@ export function ProjectsPanel() {
     if (e.button !== 0) return
     const startX = e.clientX
     const startY = e.clientY
-    const gaps = filter || g.id === PINNED || groups.length < 2 ? [] : groupGaps(rows)
+    const gaps = narrowed || g.id === PINNED || groups.length < 2 ? [] : groupGaps(rows)
     let dragging = false
     const where = (ev: PointerEvent): GroupGap => {
       const top = list.current?.getBoundingClientRect().top ?? 0
@@ -302,8 +327,16 @@ export function ProjectsPanel() {
             </button>
           )}
         </label>
+        <FilterMenu only={only} onChange={setOnly} />
       </div>
+      {(only.running || only.changes) && (
+        <div className="flex shrink-0 flex-wrap gap-1 px-2 pb-1.5">
+          {only.running && <FilterChip label={t("Agent running")} onClear={() => setOnly((o) => ({ ...o, running: false }))} />}
+          {only.changes && <FilterChip label={t("Has changes")} onClear={() => setOnly((o) => ({ ...o, changes: false }))} />}
+        </div>
+      )}
 
+      <TooltipProvider delayDuration={TIP_DELAY} skipDelayDuration={0} disableHoverableContent>
       <ul ref={list} className="relative min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {showSkeleton &&
           Array.from({ length: 6 }, (_, i) => (
@@ -326,7 +359,14 @@ export function ProjectsPanel() {
             }
           />
         )}
-        {filter && all.length > 0 && projectCount === 0 && <li className="px-2 py-3 text-caption text-faint-foreground">{t("No matching projects")}</li>}
+        {narrowed && all.length > 0 && projectCount === 0 && (
+          <li className="flex items-center gap-2 px-2 py-3 text-caption text-faint-foreground">
+            {t("No matching projects")}
+            <Button size="sm" variant="link" onClick={clearFilters}>
+              {t("Clear filters")}
+            </Button>
+          </li>
+        )}
         {rows.map((r) =>
           r.kind === "group" ? (
             <GroupRow
@@ -350,7 +390,7 @@ export function ProjectsPanel() {
               onDelete={() => deleteGroup(r.group)}
             />
           ) : r.kind === "session" ? (
-            <AgentSessionRow key={"s:" + r.session.id} session={r.session} kinds={kinds} now={now} indent={(r.group !== null && !filter ? NESTED : 8) + 10} />
+            <AgentSessionRow key={"s:" + r.session.id} session={r.session} kinds={kinds} now={now} guide={(r.group !== null && !narrowed ? NESTED : TOP) + 7} indent={(r.group !== null && !narrowed ? NESTED : TOP) + LEVEL} last={r.last} />
           ) : r.kind === "empty" ? (
             <li key={"e:" + r.group} className="flex h-7 items-center truncate pr-2 text-caption text-faint-foreground" style={{ paddingLeft: NESTED }}>
               {t("Drag projects here")}
@@ -359,9 +399,13 @@ export function ProjectsPanel() {
             <ProjectRow
               key={r.project.id}
               project={r.project}
-              nested={r.group !== null}
+              indent={r.group !== null && !narrowed ? NESTED : TOP}
+              sessions={r.sessions}
+              folded={r.folded}
+              now={now}
+              onToggleSessions={() => toggleSessions(r.project.id)}
               groups={groups}
-              groupLabel={filter && r.project.group ? groupName.get(r.project.group) : undefined}
+              groupLabel={narrowed && r.project.group ? groupName.get(r.project.group) : undefined}
               selected={r.project.id === selected}
               lifted={drag?.id === r.project.id}
               onPress={(e) => pressRow(e, r.project)}
@@ -383,6 +427,7 @@ export function ProjectsPanel() {
         )}
         {groupDrag && <li aria-hidden className="pointer-events-none absolute left-3 right-3 h-0.5 rounded-full bg-primary" style={{ top: groupDrag.gap.row * ROW - 1 }} />}
       </ul>
+      </TooltipProvider>
       {naming && <NewGroupDialog onCreate={(name) => createGroup(name, naming)} onClose={() => setNaming(null)} />}
     </section>
   )
@@ -579,7 +624,11 @@ function RenameInput({ initial, onDone }: { initial: string; onDone: (name: stri
 
 function ProjectRow({
   project,
-  nested,
+  indent,
+  sessions,
+  folded,
+  now,
+  onToggleSessions,
   groups,
   groupLabel,
   selected,
@@ -593,7 +642,13 @@ function ProjectRow({
   onNewAgent,
 }: {
   project: Project
-  nested: boolean
+  /** Left padding: where its fold arrow sits. */
+  indent: number
+  sessions: AgentSession[]
+  /** Its sessions are hidden under it: the row shows what they are doing. */
+  folded: boolean
+  now: number
+  onToggleSessions: () => void
   groups: Group[]
   /** Shown after the name while filtering, where groups aren't drawn. */
   groupLabel?: string
@@ -693,21 +748,34 @@ function ProjectRow({
       <ContextMenuTrigger asChild>
         <li
           className={cn(
-            "group flex h-7 select-none items-center gap-1.5 rounded-sm pr-1 text-small text-muted-foreground hover:bg-accent",
-            !nested && "pl-2",
+            "group flex h-7 select-none items-center gap-1 rounded-sm pr-1 text-small text-muted-foreground hover:bg-accent",
             selected && "bg-pressed font-medium text-foreground hover:bg-pressed",
             s?.missing && "text-faint-foreground line-through",
             lifted && "opacity-50",
           )}
-          style={nested ? { paddingLeft: NESTED } : undefined}
+          style={{ paddingLeft: indent }}
           onPointerDown={onPress}
         >
-          <Tooltip content={<span className="whitespace-pre-line">{tip}</span>} side="right" delayDuration={700}>
+          {sessions.length > 0 ? (
+            <button
+              aria-label={folded ? t("Show agent sessions") : t("Hide agent sessions")}
+              aria-expanded={!folded}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={onToggleSessions}
+              className="-my-1 inline-flex size-3.5 shrink-0 items-center justify-center rounded-xs text-faint-foreground hover:text-foreground"
+            >
+              <ChevronRight className={cn("size-3.5 transition-transform duration-(--duration-fast)", !folded && "rotate-90")} />
+            </button>
+          ) : (
+            <span aria-hidden className="size-3.5 shrink-0" />
+          )}
+          <Tooltip content={<span className="whitespace-pre-line">{tip}</span>} side="right">
             <span className="min-w-0 flex-1 truncate">
               {project.name}
               {groupLabel && <span className="ml-1.5 text-caption font-normal text-faint-foreground">{groupLabel}</span>}
             </span>
           </Tooltip>
+          {folded && <FoldedSessions sessions={sessions} now={now} />}
           {!!s?.linkedTrees && (
             <span className="inline-flex shrink-0 items-center gap-0.5 text-caption font-normal text-faint-foreground group-hover:hidden">
               <GitBranch className="size-3" />
@@ -745,5 +813,69 @@ function ProjectRow({
       </ContextMenuTrigger>
       <ContextMenuContent onCloseAutoFocus={onMenuClosed}>{menu(contextMenuParts)}</ContextMenuContent>
     </ContextMenu>
+  )
+}
+
+/** What a project's folded sessions are doing: one icon per state that matters, most urgent first, with a count when there are several. */
+function FoldedSessions({ sessions, now }: { sessions: AgentSession[]; now: number }) {
+  const states = foldedStates(sessions, now)
+  if (!states.length) return null
+  const tip = states.map(([state, n]) => tp("{n} session: {state}", "{n} sessions: {state}", n, { state: t(STATE_LABEL[state]) })).join("\n")
+  return (
+    <Tooltip content={<span className="whitespace-pre-line">{tip}</span>} side="right">
+      <span className="inline-flex shrink-0 items-center gap-1.5 group-hover:hidden">
+        {states.slice(0, 3).map(([state, n]) => (
+          <span key={state} className="inline-flex items-center gap-0.5 text-caption font-normal text-faint-foreground">
+            <AgentStateIcon state={state} className="size-3" />
+            {n > 1 && <span className="tabular">{n}</span>}
+          </span>
+        ))}
+      </span>
+    </Tooltip>
+  )
+}
+
+/** The two ways to narrow the list besides the name: checked together, both must hold. */
+function FilterMenu({ only, onChange }: { only: { running: boolean; changes: boolean }; onChange: (next: { running: boolean; changes: boolean }) => void }) {
+  const active = Number(only.running) + Number(only.changes)
+  const options: { key: keyof typeof only; label: string }[] = [
+    { key: "running", label: t("Only projects with an agent session running") },
+    { key: "changes", label: t("Only projects with uncommitted changes") },
+  ]
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          aria-label={active ? t("Filters ({n} on)", { n: active }) : t("Filters")}
+          className={cn(
+            "ml-1 inline-flex h-7 shrink-0 items-center gap-0.5 rounded-md px-1.5 text-faint-foreground hover:bg-accent hover:text-foreground data-[state=open]:bg-accent",
+            active > 0 && "bg-selected text-foreground",
+          )}
+        >
+          <ListFilter className="size-3.5" />
+          {active > 0 && <span className="text-caption tabular">{active}</span>}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-64 p-1.5">
+        {options.map((o) => (
+          <label key={o.key} className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-small hover:bg-accent">
+            <Checkbox checked={only[o.key]} onCheckedChange={(v) => onChange({ ...only, [o.key]: v === true })} />
+            {o.label}
+          </label>
+        ))}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/** A condition that is on, with ✕ to take it off: no filter hides behind the menu. */
+function FilterChip({ label, onClear }: { label: string; onClear: () => void }) {
+  return (
+    <span className="inline-flex h-6 items-center gap-1 rounded-sm bg-selected pl-2 pr-1 text-caption text-foreground">
+      {label}
+      <button aria-label={t("Remove filter {name}", { name: label })} onClick={onClear} className="inline-flex size-4 items-center justify-center rounded-xs text-faint-foreground hover:text-foreground">
+        <X className="size-3" />
+      </button>
+    </span>
   )
 }

@@ -93,6 +93,8 @@ export function openPullRequest(n: number) {
 /** Show a session: its project, its worktree's tab, and its terminal (focused). */
 export function openSession(s: AgentSession) {
   if (ui.get().projectId !== s.project) selectProject(s.project)
+  // Shown in the list too: a folded project unfolds to the session.
+  if (prefs.get().foldedSessions.includes(s.project)) prefs.set((p) => ({ foldedSessions: p.foldedSessions.filter((id) => id !== s.project) }))
   ui.set((u) => ({ tabs: { ...u.tabs, [s.project]: `tree:${s.tree}` }, agentSession: s.id, agentOpen: true, focusMode: false }))
   // A new worktree isn't in the cached overview yet.
   invalidateProject(queryClient, s.project, { git: true, trees: [] })

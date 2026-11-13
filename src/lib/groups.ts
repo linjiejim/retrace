@@ -16,13 +16,15 @@ export interface Section {
 
 export type Row =
   | { kind: "group"; group: Group; count: number; collapsed: boolean }
-  | { kind: "project"; project: Project; group: string | null }
+  /** `sessions`: how many agent sessions it has; `folded`: they are hidden under it. */
+  | { kind: "project"; project: Project; group: string | null; sessions: AgentSession[]; folded: boolean }
   /** An open group with nothing in it yet. */
   | { kind: "empty"; group: string }
-  /** An agent session, under its project. */
-  | { kind: "session"; session: AgentSession; group: string | null }
+  /** An agent session, under its project; `last`: the last of them (where the tree line ends). */
+  | { kind: "session"; session: AgentSession; group: string | null; last: boolean }
 
 const NO_SESSIONS: ReadonlyMap<string, AgentSession[]> = new Map()
+const NONE: ReadonlySet<string> = new Set()
 
 /** Each project's sessions, in the order they started. */
 export function sessionsByProject(sessions: AgentSession[] | undefined): Map<string, AgentSession[]> {
@@ -35,9 +37,14 @@ export function sessionsByProject(sessions: AgentSession[] | undefined): Map<str
   return out
 }
 
-/** The project row, then its session rows. */
-export function projectRows(project: Project, group: string | null, sessions: ReadonlyMap<string, AgentSession[]> = NO_SESSIONS): Row[] {
-  return [{ kind: "project", project, group }, ...(sessions.get(project.id) ?? []).map((session) => ({ kind: "session" as const, session, group }))]
+/** The project row, then its session rows unless they are folded (`folded`: project ids). */
+export function projectRows(project: Project, group: string | null, sessions: ReadonlyMap<string, AgentSession[]> = NO_SESSIONS, folded: ReadonlySet<string> = NONE): Row[] {
+  const own = sessions.get(project.id) ?? []
+  const fold = own.length > 0 && folded.has(project.id)
+  return [
+    { kind: "project", project, group, sessions: own, folded: fold },
+    ...(fold ? [] : own.map((session, i) => ({ kind: "session" as const, session, group, last: i === own.length - 1 }))),
+  ]
 }
 
 /**
@@ -88,7 +95,7 @@ export function moveGroup(order: string[], id: string, gap: GroupGap): string[] 
   return rest
 }
 
-export function buildRows(projects: Project[], groups: Group[], collapsed: ReadonlySet<string>, sessions: ReadonlyMap<string, AgentSession[]> = NO_SESSIONS): Row[] {
+export function buildRows(projects: Project[], groups: Group[], collapsed: ReadonlySet<string>, sessions: ReadonlyMap<string, AgentSession[]> = NO_SESSIONS, folded: ReadonlySet<string> = NONE): Row[] {
   const byId = new Map(projects.map((p) => [p.id, p]))
   const rows: Row[] = []
   for (const s of sections(projects, groups)) {
@@ -99,7 +106,7 @@ export function buildRows(projects: Project[], groups: Group[], collapsed: Reado
       if (folded) continue
       if (s.ids.length === 0) rows.push({ kind: "empty", group: group.id })
     }
-    for (const id of s.ids) rows.push(...projectRows(byId.get(id)!, s.group, sessions))
+    for (const id of s.ids) rows.push(...projectRows(byId.get(id)!, s.group, sessions, folded))
   }
   return rows
 }

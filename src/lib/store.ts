@@ -113,6 +113,8 @@ export interface Prefs {
   autoUpdate: boolean
   /** Groups folded in the projects list. */
   collapsedGroups: string[]
+  /** Projects whose agent sessions are folded under them. */
+  foldedSessions: string[]
   /** Icons in the changes and files lists. */
   fileIcons: FileIconTheme
   /** The agent picked last in the new-session dialog. */
@@ -149,6 +151,7 @@ const defaults: Prefs = {
   searchBodies: false,
   autoUpdate: true,
   collapsedGroups: [],
+  foldedSessions: [],
   fileIcons: "color",
   lastAgent: null,
   agentOptions: {},
