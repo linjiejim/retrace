@@ -396,8 +396,10 @@ export interface AgentSession {
   nativeId: string | null
   /** What the agent itself reports (a conversation); otherwise the terminal's output decides. */
   live: AgentLive | null
-  /** A conversation over ACP, not a terminal. */
+  /** A conversation, not a terminal. */
   chat: boolean
+  /** Runs on OpenCode's own server: it goes on while Retrace is closed and is picked up again. */
+  background: boolean
 }
 
 export interface AgentDiffStat {

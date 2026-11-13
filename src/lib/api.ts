@@ -154,6 +154,8 @@ export const api = {
   agentAnswer: (session: string, request: number, option: string) => call<null>("agentAnswer", { session, request, option }),
   agentSetOption: (session: string, option: string, value: string) => call<null>("agentSetOption", { session, option, value }),
   agentStop: (session: string) => call<null>("agentStop", { session }),
+  /** Stop every session running on OpenCode's server, and the server. */
+  agentStopBackground: () => call<null>("agentStopBackground"),
   agentClose: (session: string) => call<null>("agentClose", { session }),
 }
 

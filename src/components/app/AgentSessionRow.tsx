@@ -47,7 +47,7 @@ export function useSessionActions(s: AgentSession, label: string) {
   const stop = () =>
     void confirm({
       title: t("Stop “{name}”?", { name: short(label) }),
-      description: t("The agent's process ends. Its worktree and changes stay."),
+      description: s.background ? t("The turn in progress stops. The conversation stays in OpenCode and can be resumed; the worktree and changes stay.") : t("The agent's process ends. Its worktree and changes stay."),
       confirmLabel: t("Stop Agent"),
       tone: "danger",
       onConfirm: async () => {
@@ -65,7 +65,7 @@ export function useSessionActions(s: AgentSession, label: string) {
     if (!s.running) return forget().catch((e) => notify.error(message(e)))
     await confirm({
       title: t("Close “{name}”?", { name: short(label) }),
-      description: t("The agent is still running; closing the session ends it. Its worktree and changes stay."),
+      description: s.background ? t("Closing stops the turn in progress and removes the session from the list. The conversation stays in OpenCode; the worktree and changes stay.") : t("The agent is still running; closing the session ends it. Its worktree and changes stay."),
       confirmLabel: t("End and Close"),
       tone: "danger",
       onConfirm: forget,

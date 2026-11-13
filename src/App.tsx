@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { inTauri, onAppFocused, onRepoChanged, watchProject } from "@/lib/api"
 import { addPaths, closeDiff, run, selectProject } from "@/lib/commands"
@@ -21,6 +21,10 @@ import { AddProjectsDialog } from "@/components/app/AddProjectsDialog"
 import { AgentDrawer, AgentTerminals } from "@/components/app/AgentPanel"
 import { NewAgentDialog } from "@/components/app/NewAgentDialog"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
+import { Button } from "@/components/ui/button"
+import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader } from "@/components/ui/dialog"
+import { notify } from "@/components/ui/toast"
+import { s as kit } from "@/lib/strings"
 
 /** Focus mode: just the file list and the diff, side by side. */
 const FOCUS_LAYOUT: Node = {
@@ -177,20 +181,65 @@ export default function App() {
   )
 }
 
-/** "Agents are still running" before quitting or restarting. */
+/**
+ * "Agents are still at work" before quitting or restarting. Terminal sessions end with Retrace;
+ * background ones keep going unless the user stops them here.
+ */
 function QuitGuard() {
   const ask = useStore(leaving, (s) => s.ask)
-  const running = useStore(leaving, (s) => s.running)
+  const ending = useStore(leaving, (s) => s.ending)
+  const continuing = useStore(leaving, (s) => s.continuing)
+  const [pending, setPending] = useState<"keep" | "stop" | null>(null)
   const restart = ask === "restart"
+  const close = () => leaving.set({ ask: null })
+  const go = async (how: "keep" | "stop") => {
+    setPending(how)
+    try {
+      await leave(restart ? "restart" : "quit", true, how === "stop")
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPending(null)
+    }
+  }
+  if (continuing === 0) {
+    return (
+      <ConfirmDialog
+        open={!!ask}
+        onOpenChange={(o) => !o && close()}
+        title={restart ? t("Restart Retrace?") : t("Quit Retrace?")}
+        description={tp("{n} agent session is still running. It ends with Retrace; its worktree and changes stay.", "{n} agent sessions are still running. They end with Retrace; their worktrees and changes stay.", ending)}
+        confirmLabel={restart ? t("End Sessions and Restart") : t("End Sessions and Quit")}
+        tone="danger"
+        onConfirm={() => leave(restart ? "restart" : "quit", true)}
+      />
+    )
+  }
+  const lines = [
+    tp("{n} OpenCode session is working or waiting for you. It goes on in the background; open Retrace again to pick it up.", "{n} OpenCode sessions are working or waiting for you. They go on in the background; open Retrace again to pick them up.", continuing),
+    ending > 0 ? tp("{n} terminal session ends with Retrace.", "{n} terminal sessions end with Retrace.", ending) : null,
+  ].filter(Boolean)
   return (
-    <ConfirmDialog
-      open={!!ask}
-      onOpenChange={(o) => !o && leaving.set({ ask: null })}
-      title={restart ? t("Restart Retrace?") : t("Quit Retrace?")}
-      description={tp("{n} agent session is still running. It ends with Retrace; its worktree and changes stay.", "{n} agent sessions are still running. They end with Retrace; their worktrees and changes stay.", running)}
-      confirmLabel={restart ? t("End Sessions and Restart") : t("End Sessions and Quit")}
-      tone="danger"
-      onConfirm={() => leave(restart ? "restart" : "quit", true)}
-    />
+    <Dialog open={!!ask} onOpenChange={(o) => !o && !pending && close()}>
+      <DialogContent size="sm">
+        <DialogHeader title={restart ? t("Restart Retrace?") : t("Quit Retrace?")} />
+        <DialogBody className="flex flex-col gap-2 text-body text-muted-foreground">
+          {lines.map((l) => (
+            <p key={l}>{l}</p>
+          ))}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="ghost" onClick={close} disabled={!!pending}>
+            {kit().cancel}
+          </Button>
+          <Button variant="secondary" onClick={() => void go("stop")} loading={pending === "stop"} disabled={!!pending}>
+            {restart ? t("Stop All and Restart") : t("Stop All and Quit")}
+          </Button>
+          <Button variant="primary" onClick={() => void go("keep")} loading={pending === "keep"} disabled={!!pending}>
+            {restart ? t("Restart, Keep Running") : t("Quit, Keep Running")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

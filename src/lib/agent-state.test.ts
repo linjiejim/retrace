@@ -20,6 +20,7 @@ const base: AgentSession = {
   nativeId: null,
   live: null,
   chat: false,
+  background: false,
 }
 
 const live = (state: AgentLive["state"], more: Partial<AgentLive> = {}): AgentLive => ({ state, detail: null, worked: true, since: 0, at: 0, ...more })

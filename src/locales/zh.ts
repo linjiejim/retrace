@@ -524,4 +524,12 @@ export const zh: Record<string, string> = {
   "Filters ({n} on)": "筛选（{n} 项生效）",
   "Filters": "筛选",
   "Remove filter {name}": "去掉筛选「{name}」",
+  "The turn in progress stops. The conversation stays in OpenCode and can be resumed; the worktree and changes stay.": "正在进行的这一轮会停下。对话留在 OpenCode 里，可以恢复；worktree 和改动都留着。",
+  "Closing stops the turn in progress and removes the session from the list. The conversation stays in OpenCode; the worktree and changes stay.": "关闭会停下正在进行的这一轮，并从列表里移除；对话留在 OpenCode 里，worktree 和改动都留着。",
+  "{n} OpenCode sessions are working or waiting for you. They go on in the background; open Retrace again to pick them up.": "{n} 个 OpenCode 会话还在干活或在等你。它们会在后台继续，下次打开 Retrace 接着看。",
+  "{n} terminal sessions end with Retrace.": "{n} 个终端会话会随 Retrace 一起结束。",
+  "Stop All and Restart": "全部停止并重启",
+  "Stop All and Quit": "全部停止并退出",
+  "Restart, Keep Running": "重启，后台继续",
+  "Quit, Keep Running": "退出，后台继续",
 }
