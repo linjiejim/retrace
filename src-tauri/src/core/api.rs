@@ -4,7 +4,7 @@
 use crate::tr;
 use super::config::{self, GroupEntry, Prefs, ProjectEntry};
 use super::model::*;
-use super::{agent, cleanup, diff, files, git, github, history, repo, shell_env, State};
+use super::{acp, agent, cleanup, diff, files, git, github, history, opencode_server, repo, shell_env, State};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -804,7 +804,7 @@ fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let a: A = args(a)?;
             let dir = project_dir(state, &a.id)?;
             let kind = agent::kind(&a.agent)?;
-            let env = shell_env::agent_env();
+            let env = &agent_env(state);
             // Before touching git: an agent that isn't installed shouldn't leave a worktree behind.
             if shell_env::which(env, kind.binary_name()).is_none() {
                 bail!(tr!("找不到 {}：登录 shell 的 PATH 里没有它", "Can't find {}: it isn't on your login shell's PATH", kind.name));
@@ -834,7 +834,12 @@ fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
                     (path, Some(branch), setup)
                 }
             };
-            let launch = agent::launch(kind, &a.task, setup.as_deref(), chosen(a.options), Path::new(&tree), &dir, env, (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))?;
+            let options = chosen(a.options);
+            // On OpenCode's own server when it can (the session then outlives Retrace), else a process of Retrace's.
+            let launch = match agent::background_launch(kind, acp::Open::New, &a.task, setup.as_deref(), options.clone(), Path::new(&tree), &dir, env, &state.opencode)? {
+                Some(launch) => launch,
+                None => agent::launch(kind, &a.task, setup.as_deref(), options, Path::new(&tree), &dir, env, (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))?,
+            };
             json!(sessions.spawn(launch, agent::Meta { project: a.id, tree, branch, agent: kind.id.into(), task: a.task.trim().to_string() })?)
         }
         "agentResume" => {
@@ -847,17 +852,7 @@ fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
             }
             let a: A = args(a)?;
             let options = chosen(a.options);
-            json!(sessions.resume(&a.session, |saved| {
-                let dir = project_dir(state, &saved.project)?;
-                if !Path::new(&saved.tree).is_dir() {
-                    bail!(tr!("会话的 worktree 目录不存在：{}", "The session's worktree folder no longer exists: {}", saved.tree));
-                }
-                let known = repo::worktrees(&dir)?.into_iter().any(|t| t.path == saved.tree && !t.bare);
-                if !known {
-                    bail!(tr!("不是这个项目的 worktree：{}", "Not a worktree of this project: {}", saved.tree));
-                }
-                agent::resume_launch(agent::kind(&saved.agent)?, saved.native_id.as_deref(), options, Path::new(&saved.tree), &dir, shell_env::agent_env(), (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))
-            })?)
+            json!(sessions.resume(&a.session, |saved| resume_launch(state, saved, options, (a.cols.unwrap_or(120), a.rows.unwrap_or(36))))?)
         }
         "agentSetup" => {
             let Id { id } = args(a)?;
@@ -947,6 +942,10 @@ fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
             sessions.chat(&session)?.set_option(&option, &value)?;
             Value::Null
         }
+        "agentStopBackground" => {
+            sessions.stop_background(&state.opencode);
+            Value::Null
+        }
         "agentStop" => {
             let SessionId { session } = args(a)?;
             sessions.stop(&session)?;
@@ -959,6 +958,55 @@ fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
         }
         _ => bail!(tr!("未知命令：{cmd}", "Unknown command: {cmd}")),
     })
+}
+
+/// The environment agents start with: the login shell's (or one given to the state, in tests).
+fn agent_env(state: &State) -> shell_env::Env {
+    state.agent_env.clone().unwrap_or_else(|| shell_env::agent_env().clone())
+}
+
+/// How a saved session goes on: in its own worktree of its project, back on OpenCode's server when
+/// it can, else as a process of Retrace's.
+fn resume_launch(state: &State, saved: &agent::SessionInfo, options: Vec<(String, String)>, size: (u16, u16)) -> Result<agent::Launch> {
+    let dir = project_dir(state, &saved.project)?;
+    if !Path::new(&saved.tree).is_dir() {
+        bail!(tr!("会话的 worktree 目录不存在：{}", "The session's worktree folder no longer exists: {}", saved.tree));
+    }
+    let known = repo::worktrees(&dir)?.into_iter().any(|t| t.path == saved.tree && !t.bare);
+    if !known {
+        bail!(tr!("不是这个项目的 worktree：{}", "Not a worktree of this project: {}", saved.tree));
+    }
+    let kind = agent::kind(&saved.agent)?;
+    let env = &agent_env(state);
+    let open = saved.native_id.clone().map(acp::Open::Id).unwrap_or(acp::Open::Latest);
+    if let Some(launch) = agent::background_launch(kind, open, "", None, options.clone(), Path::new(&saved.tree), &dir, env, &state.opencode)? {
+        return Ok(launch);
+    }
+    agent::resume_launch(kind, saved.native_id.as_deref(), options, Path::new(&saved.tree), &dir, env, size)
+}
+
+/// At startup: pick up the background sessions whose conversations are still on a running
+/// OpenCode server (left there when Retrace last quit). Never starts a server for them.
+pub fn reattach_background(state: std::sync::Arc<State>) {
+    if !state.agents_allowed.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let saved: Vec<agent::SessionInfo> = state.agents.list().into_iter().filter(|s| s.background && !s.running && s.native_id.is_some()).collect();
+        if saved.is_empty() {
+            return;
+        }
+        let Some(ep) = state.opencode.find() else { return };
+        for s in saved {
+            let Some(native) = s.native_id.as_deref() else { continue };
+            if !Path::new(&s.tree).is_dir() || !opencode_server::Conn::exists(&ep, Path::new(&s.tree), native) {
+                continue;
+            }
+            if let Err(e) = state.agents.resume(&s.id, |saved| resume_launch(&state, saved, vec![], (120, 36))) {
+                eprintln!("{e:#}");
+            }
+        }
+    });
 }
 
 /// Remembered config choices in the order to apply them: the model first, since what else an

@@ -7,6 +7,7 @@
 
 use super::acp;
 use super::git;
+use super::opencode_server;
 use super::repo;
 use super::shell_env::{self, Env};
 use crate::tr;
@@ -29,13 +30,15 @@ pub struct Kind {
     /// Arguments that make it speak ACP on its standard input and output; empty = it only has a
     /// terminal UI.
     acp: &'static [&'static str],
+    /// Its own server can run turns without Retrace (`opencode_server.rs`).
+    background: bool,
 }
 
 /// Built-in agents. Each is just how to start it: as an ACP agent, or its terminal UI with a task.
 pub const KINDS: &[Kind] = &[
-    Kind { id: "opencode", name: "OpenCode", binary: "opencode", acp: &["acp"] },
-    Kind { id: "codex", name: "Codex", binary: "codex", acp: &[] },
-    Kind { id: "claude", name: "Claude Code", binary: "claude", acp: &[] },
+    Kind { id: "opencode", name: "OpenCode", binary: "opencode", acp: &["acp"], background: true },
+    Kind { id: "codex", name: "Codex", binary: "codex", acp: &[], background: false },
+    Kind { id: "claude", name: "Claude Code", binary: "claude", acp: &[], background: false },
 ];
 
 impl Kind {
@@ -110,6 +113,8 @@ pub struct Launch {
     pub rows: u16,
     /// The conversation to open over ACP; none = a terminal session.
     pub chat: Option<acp::Plan>,
+    /// The conversation to run on the machine's OpenCode server instead (it outlives Retrace).
+    pub server: Option<opencode_server::Plan>,
     /// The agent's own conversation this launch reopens.
     pub native_id: Option<String>,
 }
@@ -152,7 +157,28 @@ fn launch_with(agent_args: Vec<String>, native_id: Option<String>, setup: Option
         }
         None => (bin, agent_args),
     };
-    Launch { program, args, cwd: tree.to_path_buf(), env, cols: size.0.clamp(20, 500), rows: size.1.clamp(5, 300), chat, native_id }
+    Launch { program, args, cwd: tree.to_path_buf(), env, cols: size.0.clamp(20, 500), rows: size.1.clamp(5, 300), chat, server: None, native_id }
+}
+
+/// A conversation run by the machine's OpenCode server rather than by a process of Retrace's
+/// own, so it goes on while Retrace is closed. None when this agent (or its version) can't.
+/// `open` says which conversation; `task` is sent only for a new one.
+#[allow(clippy::too_many_arguments)]
+pub fn background_launch(kind: &Kind, open: acp::Open, task: &str, setup: Option<&str>, options: Vec<(String, String)>, tree: &Path, main_tree: &Path, env: &Env, host: &Arc<opencode_server::Host>) -> Result<Option<Launch>> {
+    if !kind.background {
+        return Ok(None);
+    }
+    let (bin, env) = located(kind, tree, main_tree, env)?;
+    if !opencode_server::supported(&bin, &env) {
+        return Ok(None);
+    }
+    let native_id = match &open {
+        acp::Open::Id(id) => Some(id.clone()),
+        _ => None,
+    };
+    let setup = setup.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let plan = opencode_server::Plan { host: host.clone(), bin, env: env.clone(), cwd: tree.to_path_buf(), open, task: task.trim().to_string(), options, setup };
+    Ok(Some(Launch { program: PathBuf::new(), args: vec![], cwd: tree.to_path_buf(), env, cols: 0, rows: 0, chat: None, server: Some(plan), native_id }))
 }
 
 /// Reopen a saved session's conversation. `native` is the agent's own id for it, when Retrace
@@ -333,6 +359,9 @@ pub struct SessionInfo {
     /// A conversation over ACP, not a terminal.
     #[serde(default)]
     pub chat: bool,
+    /// Run by the machine's OpenCode server: it goes on without Retrace, and is picked up again.
+    #[serde(default)]
+    pub background: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -418,6 +447,48 @@ struct Session {
     pid: Option<u32>,
     /// The conversation, for an ACP session (it has no terminal: the three above are empty).
     chat: Option<Arc<acp::Conn>>,
+    /// The conversation on the OpenCode server, for a background session (no process of its own).
+    server: Option<Arc<opencode_server::Conn>>,
+}
+
+/// A conversation, however it runs.
+#[derive(Clone)]
+pub enum Talk {
+    Acp(Arc<acp::Conn>),
+    Server(Arc<opencode_server::Conn>),
+}
+
+impl Talk {
+    pub fn transcript(&self, after: u64) -> Result<acp::Transcript> {
+        match self {
+            Talk::Acp(c) => c.transcript(after),
+            Talk::Server(c) => c.transcript(after),
+        }
+    }
+    pub fn prompt(&self, text: &str) -> Result<()> {
+        match self {
+            Talk::Acp(c) => c.prompt(text),
+            Talk::Server(c) => c.prompt(text),
+        }
+    }
+    pub fn cancel(&self) -> Result<()> {
+        match self {
+            Talk::Acp(c) => c.cancel(),
+            Talk::Server(c) => c.cancel(),
+        }
+    }
+    pub fn answer(&self, request: u64, option: &str) -> Result<()> {
+        match self {
+            Talk::Acp(c) => c.answer(request, option),
+            Talk::Server(c) => c.answer(request, option),
+        }
+    }
+    pub fn set_option(&self, option: &str, value: &str) -> Result<()> {
+        match self {
+            Talk::Acp(c) => c.set_option(option, value),
+            Talk::Server(c) => c.set_option(option, value),
+        }
+    }
 }
 
 impl Session {
@@ -517,6 +588,7 @@ impl Sessions {
                 killer: Mutex::new(None),
                 pid: None,
                 chat: None,
+                server: None,
             }));
         }
         Self { list: Mutex::new(list), path: Some(path), ..Default::default() }
@@ -619,7 +691,7 @@ impl Sessions {
     }
 
     fn spawn_unlocked(self: &Arc<Self>, launch: Launch, meta: Meta) -> Result<SessionInfo> {
-        let Launch { program, args, cwd, env, cols, rows, chat, native_id } = launch;
+        let Launch { program, args, cwd, env, cols, rows, chat, server, native_id } = launch;
         let now = now_ms();
         let id = loop {
             let n = self.next.fetch_add(1, Ordering::Relaxed);
@@ -645,9 +717,40 @@ impl Sessions {
             stopped: false,
             native_id,
             // A conversation is being opened from the first moment.
-            live: chat.is_some().then_some(Live { state: LiveState::Busy, detail: None, worked: false, since: now, at: now }),
-            chat: chat.is_some(),
+            live: (chat.is_some() || server.is_some()).then_some(Live { state: LiveState::Busy, detail: None, worked: false, since: now, at: now }),
+            chat: chat.is_some() || server.is_some(),
+            background: server.is_some(),
         };
+        if let Some(plan) = server {
+            let (sessions, session_id) = (Arc::downgrade(self), info.id.clone());
+            let (ended_sessions, ended_id) = (Arc::downgrade(self), info.id.clone());
+            let conn = opencode_server::Conn::start(
+                plan,
+                move |conn: &opencode_server::Conn| {
+                    let Some(sessions) = sessions.upgrade() else { return };
+                    sessions.report(&session_id, conn.native_id(), Some(conn.live()), conn.title());
+                    sessions.emit(Event::Chat { session: session_id.clone() });
+                },
+                move |code, stopped| {
+                    if let Some(sessions) = ended_sessions.upgrade() {
+                        sessions.finish(&ended_id, code, stopped);
+                    }
+                },
+            );
+            let session = Arc::new(Session {
+                info: Mutex::new(info.clone()),
+                buffer: Mutex::new(Buffer { data: VecDeque::new(), start: 0 }),
+                writer: Mutex::new(None),
+                master: Mutex::new(None),
+                killer: Mutex::new(None),
+                pid: None,
+                chat: None,
+                server: Some(conn),
+            });
+            self.list.lock().map_err(|_| anyhow!("sessions"))?.push(session);
+            self.emit(Event::Changed { session: info.id.clone() });
+            return Ok(info);
+        }
         let cant_start = |e: &dyn std::fmt::Display| anyhow!(tr!("无法启动 {}：{e}", "Can't start {}: {e}", program.display()));
         match chat {
             Some(plan) => {
@@ -684,6 +787,7 @@ impl Sessions {
                     killer: Mutex::new(None),
                     pid: Some(child.id()),
                     chat: Some(conn),
+                    server: None,
                 });
                 self.list.lock().map_err(|_| anyhow!("sessions"))?.push(session.clone());
                 self.watch_exit(session, move || match child.wait() {
@@ -714,6 +818,7 @@ impl Sessions {
                     pid: child.process_id(),
                     master: Mutex::new(Some(pair.master)),
                     chat: None,
+                    server: None,
                 });
                 self.list.lock().map_err(|_| anyhow!("sessions"))?.push(session.clone());
                 let (me, s) = (self.clone(), session.clone());
@@ -766,9 +871,30 @@ impl Sessions {
         });
     }
 
-    /// The conversation of an ACP session; it stays readable after the agent has exited.
-    pub fn chat(&self, id: &str) -> Result<Arc<acp::Conn>> {
-        self.get(id)?.chat.clone().ok_or_else(|| anyhow!(tr!("这个会话是终端，不是对话", "This session is a terminal, not a conversation")))
+    /// The conversation of a session; it stays readable after the agent has exited.
+    pub fn chat(&self, id: &str) -> Result<Talk> {
+        let s = self.get(id)?;
+        if let Some(c) = &s.server {
+            return Ok(Talk::Server(c.clone()));
+        }
+        s.chat.clone().map(Talk::Acp).ok_or_else(|| anyhow!(tr!("这个会话是终端，不是对话", "This session is a terminal, not a conversation")))
+    }
+
+    /// A background session is no longer followed: ended on its own (`stopped` false: its setup
+    /// command failed, its server went away) or by the user.
+    pub fn finish(&self, id: &str, code: i32, stopped: bool) {
+        let Ok(s) = self.get(id) else { return };
+        if let Ok(mut i) = s.info.lock() {
+            if !i.running {
+                return;
+            }
+            i.running = false;
+            i.exit_code = Some(code);
+            i.stopped |= stopped;
+            i.live = None;
+        }
+        self.persist_after_exit();
+        self.emit(Event::Changed { session: id.to_string() });
     }
 
     /// What the agent itself says (see `acp.rs`): its id and its name for the conversation once
@@ -897,6 +1023,14 @@ impl Sessions {
 
     pub fn stop(&self, id: &str) -> Result<()> {
         let s = self.get(id)?;
+        if let Some(c) = &s.server {
+            // The turn stops; the conversation stays in OpenCode, to be picked up again.
+            if s.running() {
+                c.stop()?;
+                self.finish(id, 0, true);
+            }
+            return Ok(());
+        }
         if s.running() {
             s.hang_up();
         }
@@ -911,6 +1045,14 @@ impl Sessions {
 
     fn close_unlocked(&self, id: &str) -> Result<()> {
         let s = self.get(id)?;
+        if let Some(c) = &s.server {
+            if s.running() {
+                c.stop()?;
+            }
+            if let Ok(mut i) = s.info.lock() {
+                i.running = false;
+            }
+        }
         if s.running() {
             s.hang_up();
         }
@@ -928,6 +1070,59 @@ impl Sessions {
         }
         self.emit(Event::Changed { session: id.to_string() });
         self.persist()
+    }
+
+    /// Quitting the app: background sessions are let go, everything else stops (`stop_all`).
+    /// `host`, the machine's OpenCode server, is stopped as well when nothing in it is at work.
+    pub fn quit(&self, host: &Arc<opencode_server::Host>) {
+        self.shut_down(Some(host));
+    }
+
+    /// Background sessions are let go, their turns left running. A server is stopped only when it
+    /// says nothing is running or waiting for an answer in any folder a background session has
+    /// used (sessions still being picked up again count: Retrace may not have heard from them yet).
+    fn release(&self, extra: Option<&Arc<opencode_server::Host>>) {
+        let list = self.list.lock().map(|l| l.clone()).unwrap_or_default();
+        let mut hosts: Vec<Arc<opencode_server::Host>> = extra.into_iter().cloned().collect();
+        let mut trees: Vec<PathBuf> = Vec::new();
+        for s in &list {
+            let Ok(info) = s.info.lock().map(|i| i.clone()) else { continue };
+            if info.background && !trees.iter().any(|t| t == Path::new(&info.tree)) {
+                trees.push(PathBuf::from(&info.tree));
+            }
+            let Some(c) = &s.server else { continue };
+            let host = c.host();
+            if !hosts.iter().any(|h| Arc::ptr_eq(h, &host)) {
+                hosts.push(host);
+            }
+            if !info.running {
+                continue;
+            }
+            c.detach();
+            if let Ok(mut i) = s.info.lock() {
+                i.running = false;
+                i.stopped = true;
+                i.live = None;
+            }
+        }
+        for h in hosts {
+            h.stop_if_idle(&trees);
+        }
+    }
+
+    /// Stop every background session's turn and the server with them (quitting with "Stop All").
+    pub fn stop_background(&self, host: &opencode_server::Host) {
+        let list = self.list.lock().map(|l| l.clone()).unwrap_or_default();
+        for s in &list {
+            let Some(c) = &s.server else { continue };
+            let id = s.info.lock().map(|i| i.id.clone()).unwrap_or_default();
+            // The server stops below in any case, and its turns with it.
+            if s.running() {
+                let _ = c.stop();
+                self.finish(&id, 0, true);
+            }
+        }
+        host.shutdown();
     }
 
     pub fn running_count(&self) -> usize {
@@ -959,8 +1154,15 @@ impl Sessions {
     /// The app is quitting. Finish cleanup here: threads spawned by `hang_up` cannot be relied
     /// on once the app exits. All sessions share one grace period, regardless of their count.
     pub fn stop_all(&self) {
+        self.shut_down(None);
+    }
+
+    /// Nothing new starts (under the same guard as starting); background sessions are let go,
+    /// the rest stopped.
+    fn shut_down(&self, host: Option<&Arc<opencode_server::Host>>) {
         let Ok(_mutation) = self.mutation.lock() else { return };
         self.shutting_down.store(true, Ordering::Relaxed);
+        self.release(host);
         let mut list = self.list.lock().map(|l| l.clone()).unwrap_or_default();
         if let Ok(closing) = self.closing.lock() {
             list.extend(closing.iter().cloned());

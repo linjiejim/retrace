@@ -5,10 +5,11 @@
 
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// The end of a command's output kept in its record.
-const OUTPUT_MAX: usize = 8 * 1024;
+pub(crate) const OUTPUT_MAX: usize = 8 * 1024;
 /// The setup command's output kept.
 const SETUP_MAX: usize = 64 * 1024;
 
@@ -107,6 +108,8 @@ struct Entry {
 
 pub struct Chat {
     entries: Vec<Entry>,
+    /// Where each keyed record is in `entries`.
+    index: HashMap<String, usize>,
     rev: u64,
     options: Vec<ConfigOption>,
     usage: Option<Usage>,
@@ -114,12 +117,12 @@ pub struct Chat {
     roots: Vec<PathBuf>,
 }
 
-fn text_of(v: &Value, key: &str) -> Option<String> {
+pub(crate) fn text_of(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 /// Keep the end of `text`, on a character boundary.
-fn tail(text: &mut String, max: usize) {
+pub(crate) fn tail(text: &mut String, max: usize) {
     if text.len() <= max {
         return;
     }
@@ -163,23 +166,26 @@ impl Chat {
                 roots.push(real);
             }
         }
-        Self { entries: Vec::new(), rev: 0, options: Vec::new(), usage: None, roots }
+        Self { entries: Vec::new(), index: HashMap::new(), rev: 0, options: Vec::new(), usage: None, roots }
     }
 
-    fn relative(&self, path: &str) -> String {
+    pub(crate) fn relative(&self, path: &str) -> String {
         let p = Path::new(path);
         self.roots.iter().find_map(|root| p.strip_prefix(root).ok()).filter(|rest| !rest.as_os_str().is_empty()).map(|rest| rest.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
     }
 
     /// Paths to show for a step: relative, and without the worktree itself (a command's working
     /// directory says nothing).
-    fn shown(&self, paths: &[String]) -> Vec<String> {
+    pub(crate) fn shown(&self, paths: &[String]) -> Vec<String> {
         paths.iter().filter(|p| !self.roots.iter().any(|root| Path::new(p.as_str()) == root)).map(|p| self.relative(p)).collect()
     }
 
     fn push(&mut self, body: Body, key: Option<String>) -> usize {
         self.rev += 1;
         let id = self.entries.len() as u64 + 1;
+        if let Some(k) = &key {
+            self.index.insert(k.clone(), self.entries.len());
+        }
         self.entries.push(Entry { item: Item { id, rev: self.rev, body }, key });
         self.entries.len() - 1
     }
@@ -187,6 +193,36 @@ impl Chat {
     fn touch(&mut self, index: usize) {
         self.rev += 1;
         self.entries[index].item.rev = self.rev;
+    }
+
+    /// Records made from the agent's own account of the conversation (OpenCode's messages), each
+    /// under its own key: a new key goes at the end, a known one is replaced when it changed.
+    /// Nothing is removed. Returns whether anything changed.
+    pub fn sync(&mut self, records: Vec<(String, Body)>) -> bool {
+        let before = self.rev;
+        for (key, body) in records {
+            match self.index.get(&key).copied() {
+                Some(i) if self.entries[i].item.body == body => {}
+                Some(i) => {
+                    self.entries[i].item.body = body;
+                    self.touch(i);
+                }
+                None => {
+                    self.push(body, Some(key));
+                }
+            }
+        }
+        self.rev != before
+    }
+
+    /// Replace the usage figures; returns whether they changed.
+    pub fn set_usage(&mut self, usage: Option<Usage>) -> bool {
+        if usage == self.usage {
+            return false;
+        }
+        self.usage = usage;
+        self.rev += 1;
+        true
     }
 
     pub fn rev(&self) -> u64 {

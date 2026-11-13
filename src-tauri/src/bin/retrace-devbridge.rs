@@ -12,6 +12,7 @@ fn main() {
     // Agents start processes; the bridge runs them only when asked to (for working on their UI).
     let agents = std::env::var("RETRACE_DEVBRIDGE_AGENTS").is_ok_and(|v| v == "1");
     state.agents_allowed.store(agents, std::sync::atomic::Ordering::Relaxed);
+    retrace_lib::core::api::reattach_background(state.clone());
     let server = Server::http("127.0.0.1:5198").expect("port 5198 is busy");
     eprintln!("retrace-devbridge listening on http://127.0.0.1:5198 (config: {}, agents: {})", state.config_path.display(), if agents { "on" } else { "off" });
     for mut request in server.incoming_requests() {

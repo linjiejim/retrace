@@ -39,6 +39,7 @@ pub fn run() {
         .setup(move |app| {
             watch::start_auto_fetch(app.handle().clone(), state.clone());
             relay_agent_events(app.handle().clone(), &state);
+            core::api::reattach_background(state.clone());
             core::shell_env::prefetch();
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
@@ -56,7 +57,7 @@ pub fn run() {
         .run(move |_, event| {
             // Agents die with the app; the page has already asked before a normal quit.
             if let tauri::RunEvent::Exit = event {
-                exiting.agents.stop_all();
+                exiting.agents.quit(&exiting.opencode);
             }
         });
 }
