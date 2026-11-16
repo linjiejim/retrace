@@ -1,10 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { CircleAlert, Info } from "lucide-react"
+import { CircleAlert } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { s } from "@/lib/strings"
-import { Tooltip } from "@/components/ui/tooltip"
+import { Info } from "@/components/ui/info"
 
 type FieldCtx = { id: string; describedBy?: string; invalid: boolean; required: boolean }
 const FieldContext = React.createContext<FieldCtx | null>(null)
@@ -78,17 +77,7 @@ export function Field({
               </span>
             )}
           </label>
-          {info && (
-            <Tooltip content={info}>
-              <button
-                type="button"
-                aria-label={s().moreInfo}
-                className="inline-grid size-4 place-items-center rounded-full text-faint-foreground hover:text-foreground [&_svg]:size-3.5"
-              >
-                <Info />
-              </button>
-            </Tooltip>
-          )}
+          {info && <Info>{info}</Info>}
         </div>
         {children}
         {note && (

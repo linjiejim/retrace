@@ -3,6 +3,7 @@ import { AlertDialog as AlertPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
 import { s } from "@/lib/strings"
 import { Button } from "@/components/ui/button"
+import { Callout } from "@/components/ui/callout"
 
 /*
  * Only for irreversible or costly actions. Reversible ones (archive, remove
@@ -70,9 +71,9 @@ export function ConfirmDialog({
             <AlertPrimitive.Description className="sr-only">{title}</AlertPrimitive.Description>
           )}
           {error && (
-            <p role="alert" className="mt-3 rounded-md bg-destructive-subtle px-3 py-2 text-small text-destructive">
+            <Callout tone="danger" className="mt-3">
               {error}
-            </p>
+            </Callout>
           )}
           <div className="mt-5 flex justify-end gap-2 max-sm:[&>*]:flex-1">
             <AlertPrimitive.Cancel asChild>

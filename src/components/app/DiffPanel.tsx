@@ -1,6 +1,5 @@
 import { lazy, Suspense } from "react"
-import { ChevronDown, ChevronRight, ChevronUp, Columns2, Copy, ExternalLink, FileText, Files, GitCompareArrows, GitPullRequest, History, Maximize2, Minimize2, Rows2, WrapText, X } from "lucide-react"
-import { copyText } from "@/lib/api"
+import { ChevronDown, ChevronRight, ChevronUp, Columns2, ExternalLink, FileText, Files, GitCompareArrows, GitPullRequest, History, Maximize2, Minimize2, Rows2, WrapText, X } from "lucide-react"
 import { closeDiff, openFile, openLink, openPullRequest, showFileHistory } from "@/lib/commands"
 import { prNumber, prUrl } from "@/lib/github"
 import { isImage, isMarkdown, isSvg } from "@/lib/filetype"
@@ -14,10 +13,10 @@ import { t, tp } from "@/lib/i18n"
 import { useCachedPullRequests, useChanges, useCommit, useOverview } from "@/hooks/queries"
 import { targetOf, useProjectView } from "@/hooks/use-project-view"
 import { Button, IconButton } from "@/components/ui/button"
+import { CopyButton } from "@/components/ui/copy-button"
 import { Segmented } from "@/components/ui/segmented"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tooltip } from "@/components/ui/tooltip"
-import { notify } from "@/components/ui/toast"
 import { PanelHeader } from "@/components/layout/LayoutView"
 import { STATUS_TONE } from "./ChangesPanel"
 import { RefPills } from "./GraphPanel"
@@ -350,15 +349,11 @@ function CommitInfo({ projectId, hash, trunk, fill }: { projectId: string; hash:
             )}
           </div>
           <div className="flex flex-wrap items-center gap-x-1.5 text-caption text-faint-foreground">
-            <Tooltip content={t("Copy the full hash")}>
-              <button
-                onClick={() => copyText(c.hash).then(() => notify.success(t("Copied {hash}", { hash: shortHash(c.hash) })))}
-                className="inline-flex items-center gap-1 rounded-xs px-0.5 font-mono text-muted-foreground hover:bg-accent hover:text-foreground"
-              >
-                {shortHash(c.hash)}
-                <Copy className="size-3" />
-              </button>
-            </Tooltip>
+            <span className="inline-flex items-center gap-0.5">
+              <span className="selectable px-0.5 font-mono text-muted-foreground">{shortHash(c.hash)}</span>
+              {/* The button itself says it copied: no toast. */}
+              <CopyButton iconOnly value={c.hash} label={t("Copy the full hash")} className="-my-1 size-5 text-faint-foreground [&_svg]:size-3" />
+            </span>
             <span>·</span>
             <Tooltip content={c.email}>
               <span>{c.author}</span>

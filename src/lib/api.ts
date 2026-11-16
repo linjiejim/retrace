@@ -164,7 +164,3 @@ export async function pickFolders(): Promise<string[] | null> {
   if (!picked) return []
   return Array.isArray(picked) ? picked : [picked]
 }
-
-export async function copyText(text: string) {
-  await navigator.clipboard.writeText(text)
-}
