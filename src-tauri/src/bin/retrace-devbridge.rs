@@ -2,7 +2,9 @@
 //! worked on in a normal browser (`pnpm dev`, Vite proxies `/api`). Not part of the app bundle.
 //!
 //! Requests must carry `X-Retrace: 1`; browsers can't add that header cross-site without a
-//! preflight, which this server never approves. Agent sessions answer only with
+//! preflight, which this server never approves. They must also name this machine (Host, and
+//! Origin when there is one): a page whose own name was pointed at 127.0.0.1 is same-origin to
+//! the bridge, but still says its name. Agent sessions answer only with
 //! `RETRACE_DEVBRIDGE_AGENTS=1`.
 
 use tiny_http::{Header, Method, Response, Server};
@@ -19,8 +21,9 @@ fn main() {
         let state = state.clone();
         std::thread::spawn(move || {
             let json = Header::from_bytes("Content-Type", "application/json").unwrap();
-            let allowed = request.method() == &Method::Post
-                && request.headers().iter().any(|h| h.field.equiv("X-Retrace") && h.value.as_str() == "1");
+            let header = |name: &'static str| request.headers().iter().find(|h| h.field.equiv(name)).map(|h| h.value.as_str().to_string());
+            let from_here = header("Host").is_some_and(|h| local(&h)) && header("Origin").is_none_or(|o| o.split_once("://").is_some_and(|(_, at)| local(at)));
+            let allowed = request.method() == &Method::Post && header("X-Retrace").as_deref() == Some("1") && from_here;
             let Some(cmd) = request.url().strip_prefix("/api/").map(str::to_string).filter(|_| allowed) else {
                 let _ = request.respond(Response::from_string("forbidden").with_status_code(403));
                 return;
@@ -35,4 +38,13 @@ fn main() {
             let _ = request.respond(Response::from_string(payload.to_string()).with_status_code(status).with_header(json));
         });
     }
+}
+
+/// This machine by name (`localhost`, `127.0.0.1`, `[::1]`), with or without a port.
+fn local(host: &str) -> bool {
+    let name = match host.rsplit_once(':') {
+        Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => name,
+        _ => host,
+    };
+    matches!(name, "localhost" | "127.0.0.1" | "[::1]")
 }
