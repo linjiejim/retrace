@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { inTauri, onAppFocused, onRepoChanged, watchProject } from "@/lib/api"
 import { addPaths, closeDiff, run, selectProject } from "@/lib/commands"
-import { keyNav } from "@/lib/keys"
+import { isImeKey, keyNav } from "@/lib/keys"
 import type { Node, PanelId } from "@/lib/layout"
 import { installMenu } from "@/lib/menu"
 import { prefs, ui, useStore } from "@/lib/store"
 import { scheduleUpdateChecks } from "@/lib/updater"
+import { guardWindowClose, leave, leaving } from "@/lib/quit"
+import { t, tp } from "@/lib/i18n"
 import { invalidateProject, useOverview } from "@/hooks/queries"
 import { useDefaultSelection } from "@/hooks/use-project-view"
 import { LayoutView } from "@/components/layout/LayoutView"
@@ -16,6 +18,13 @@ import { ChangesPanel } from "@/components/app/ChangesPanel"
 import { DiffPanel } from "@/components/app/DiffPanel"
 import { SettingsDialog } from "@/components/app/SettingsDialog"
 import { AddProjectsDialog } from "@/components/app/AddProjectsDialog"
+import { AgentDrawer, AgentTerminals } from "@/components/app/AgentPanel"
+import { NewAgentDialog } from "@/components/app/NewAgentDialog"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
+import { Button } from "@/components/ui/button"
+import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader } from "@/components/ui/dialog"
+import { notify } from "@/components/ui/toast"
+import { s as kit } from "@/lib/strings"
 
 /** Focus mode: just the file list and the diff, side by side. */
 const FOCUS_LAYOUT: Node = {
@@ -53,6 +62,11 @@ export default function App() {
 
   useEffect(() => scheduleUpdateChecks(), [])
 
+  useEffect(() => {
+    const off = guardWindowClose()
+    return () => void off.then((f) => f())
+  }, [])
+
   // Watch the selected project (again whenever its worktrees change); refresh on file-system and fetch events.
   const overview = useOverview(projectId)
   const treesKey = overview.data?.trees.map((t) => t.path).join("\n") ?? ""
@@ -67,6 +81,8 @@ export default function App() {
         if (id) invalidateProject(qc, id, { git: true, trees: [] })
         // Other projects' dots: only the ones older than their stale time.
         qc.refetchQueries({ queryKey: ["summary"], stale: true, type: "active" })
+        // An agent installed while Retrace was in the background.
+        qc.invalidateQueries({ queryKey: ["agentKinds"] })
       }),
     ]
     return () => offs.forEach((p) => p.then((off) => off()))
@@ -86,27 +102,39 @@ export default function App() {
       r: "refresh",
       ",": "settings",
       j: "toggleDiff",
+      n: "newAgent",
+      t: "toggleAgent",
       o: "addProject",
     }
     const onKey = (e: KeyboardEvent) => {
+      // An agent terminal gets every key, Esc included (it interrupts the agent); ⌘ keys still reach the menu.
+      if (e.target instanceof HTMLElement && e.target.closest(".xterm")) return
       const typing = e.target instanceof HTMLElement && e.target.closest("input, textarea, [contenteditable]")
+      const inDrawer = e.target instanceof HTMLElement && !!e.target.closest("[data-agent-drawer]")
       const s = ui.get()
       if (e.key === "Escape") {
-        if (typing) return (e.target as HTMLElement).blur()
-        if (document.querySelector("[role=dialog], [data-radix-popper-content-wrapper]")) return
+        // Already used: a confirm, menu or popover closed itself with it.
+        if (e.defaultPrevented) return
+        // An input method uses Esc to cancel what it is composing.
+        if (isImeKey(e)) return
+        if (typing && !inDrawer) return (e.target as HTMLElement).blur()
+        if (document.querySelector("[role=dialog], [role=alertdialog], [data-radix-popper-content-wrapper]")) return
+        // The drawer floats over everything else: it is the first layer Esc takes away.
+        if (s.agentOpen) return ui.set({ agentOpen: false })
         if (s.focusMode) return ui.set({ focusMode: false })
         if (s.diffOpen) return closeDiff()
         if (s.query) return ui.set({ query: "" })
         return
       }
-      if (typing || document.querySelector("[role=dialog]")) return
+      if (typing || document.querySelector("[role=dialog], [role=alertdialog]")) return
       const mod = e.metaKey || e.ctrlKey
       const command = mod && !e.shiftKey && !e.altKey ? MOD[e.key.toLowerCase()] : undefined
       if (command) {
         e.preventDefault()
         return run(command)
       }
-      if (mod || e.altKey) return
+      // The drawer's own buttons take the rest (Enter on "Allow Once"); the graph behind it doesn't move.
+      if (mod || e.altKey || inDrawer) return
       if (e.key.toLowerCase() === "f") return run("toggleFocus")
       const dir = e.key === "ArrowDown" || e.key === "j" ? 1 : e.key === "ArrowUp" || e.key === "k" ? -1 : 0
       if (dir) {
@@ -144,10 +172,77 @@ export default function App() {
   const hidden = useMemo(() => [...(collapsed ? (["projects"] as const) : []), ...(diffOpen ? [] : (["diff"] as const))], [collapsed, diffOpen])
 
   return (
-    <div className="h-full overflow-hidden">
+    <div className="relative h-full overflow-hidden">
       {focusMode ? <LayoutView layout={FOCUS_LAYOUT} hidden={NONE} editable={false} render={render} /> : <LayoutView layout={layout} hidden={hidden} render={render} />}
       <SettingsDialog open={settingsOpen} onOpenChange={(o) => ui.set({ settingsOpen: o })} />
       {adding && <AddProjectsDialog state={adding} onClose={() => ui.set({ adding: null })} onAddPaths={addPaths} onAdded={selectProject} />}
+      <AgentDrawer />
+      <NewAgentDialog />
+      <AgentTerminals />
+      <QuitGuard />
     </div>
+  )
+}
+
+/**
+ * "Agents are still at work" before quitting or restarting. Terminal sessions end with Retrace;
+ * background ones keep going unless the user stops them here.
+ */
+function QuitGuard() {
+  const ask = useStore(leaving, (s) => s.ask)
+  const ending = useStore(leaving, (s) => s.ending)
+  const continuing = useStore(leaving, (s) => s.continuing)
+  const [pending, setPending] = useState<"keep" | "stop" | null>(null)
+  const restart = ask === "restart"
+  const close = () => leaving.set({ ask: null })
+  const go = async (how: "keep" | "stop") => {
+    setPending(how)
+    try {
+      await leave(restart ? "restart" : "quit", true, how === "stop")
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPending(null)
+    }
+  }
+  if (continuing === 0) {
+    return (
+      <ConfirmDialog
+        open={!!ask}
+        onOpenChange={(o) => !o && close()}
+        title={restart ? t("Restart Retrace?") : t("Quit Retrace?")}
+        description={tp("{n} agent session is still running. It ends with Retrace; its worktree and changes stay.", "{n} agent sessions are still running. They end with Retrace; their worktrees and changes stay.", ending)}
+        confirmLabel={restart ? t("End Sessions and Restart") : t("End Sessions and Quit")}
+        tone="danger"
+        onConfirm={() => leave(restart ? "restart" : "quit", true)}
+      />
+    )
+  }
+  const lines = [
+    tp("{n} OpenCode session is working or waiting for you. It goes on in the background; open Retrace again to pick it up.", "{n} OpenCode sessions are working or waiting for you. They go on in the background; open Retrace again to pick them up.", continuing),
+    ending > 0 ? tp("{n} terminal session ends with Retrace.", "{n} terminal sessions end with Retrace.", ending) : null,
+  ].filter(Boolean)
+  return (
+    <Dialog open={!!ask} onOpenChange={(o) => !o && !pending && close()}>
+      <DialogContent size="sm">
+        <DialogHeader title={restart ? t("Restart Retrace?") : t("Quit Retrace?")} />
+        <DialogBody className="flex flex-col gap-2 text-body text-muted-foreground">
+          {lines.map((l) => (
+            <p key={l}>{l}</p>
+          ))}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="ghost" onClick={close} disabled={!!pending}>
+            {kit().cancel}
+          </Button>
+          <Button variant="secondary" onClick={() => void go("stop")} loading={pending === "stop"} disabled={!!pending}>
+            {restart ? t("Stop All and Restart") : t("Stop All and Quit")}
+          </Button>
+          <Button variant="primary" onClick={() => void go("keep")} loading={pending === "keep"} disabled={!!pending}>
+            {restart ? t("Restart, Keep Running") : t("Quit, Keep Running")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

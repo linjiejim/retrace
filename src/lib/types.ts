@@ -362,3 +362,105 @@ export interface PrDiscussion {
 export interface PreparedPr {
   ahead: number
 }
+
+/** A coding agent Retrace knows how to start; `path` is null when it isn't installed. */
+export interface AgentKind {
+  id: string
+  name: string
+  path: string | null
+  /** Its sessions are conversations Retrace draws (over ACP), not terminals. */
+  chat: boolean
+}
+
+/** An agent session: a conversation or a terminal. Times are milliseconds since the epoch. */
+export interface AgentSession {
+  id: string
+  project: string
+  tree: string
+  branch: string | null
+  agent: string
+  task: string
+  /** What the agent put in the terminal title. */
+  title: string | null
+  startedAt: number
+  lastOutputAt: number
+  /** The last bell or desktop notification from the agent. */
+  bellAt: number | null
+  /** The last time the user typed or sent something. */
+  inputAt: number | null
+  running: boolean
+  exitCode: number | null
+  /** Ended because the user stopped or closed it. */
+  stopped: boolean
+  /** The agent's own id for the conversation: what Resume reopens. */
+  nativeId: string | null
+  /** What the agent itself reports (a conversation); otherwise the terminal's output decides. */
+  live: AgentLive | null
+  /** A conversation, not a terminal. */
+  chat: boolean
+  /** Runs on OpenCode's own server: it goes on while Retrace is closed and is picked up again. */
+  background: boolean
+}
+
+export interface AgentDiffStat {
+  /** Relative to the session's worktree when inside it. */
+  path: string
+  added: number
+  removed: number
+}
+
+export interface AgentAskOption {
+  id: string
+  name: string
+  /** `allow_once`, `allow_always`, `reject_once`, `reject_always`. */
+  kind: string
+}
+
+export type AgentItemBody =
+  | { kind: "setup"; command: string; output: string; /** null while it runs. */ code: number | null }
+  | { kind: "user"; text: string }
+  | { kind: "message"; text: string }
+  | { kind: "thought"; text: string }
+  | { kind: "tool"; tool: string; title: string; status: string; paths: string[]; command: string | null; output: string | null; diffs: AgentDiffStat[] }
+  | { kind: "plan"; entries: { text: string; status: string }[] }
+  | { kind: "ask"; request: number; title: string; tool: string; command: string | null; paths: string[]; options: AgentAskOption[]; /** null while it waits; then the option's id, or `cancelled`. */ answer: string | null }
+  | { kind: "error"; text: string }
+  | { kind: "end"; reason: string }
+
+/** One record of a conversation; `rev` is the conversation's revision when it last changed. */
+export type AgentItem = { id: number; rev: number } & AgentItemBody
+
+/** Something the agent lets you choose (model, mode, effort). */
+export interface AgentOption {
+  id: string
+  name: string
+  category: string | null
+  value: string
+  choices: { value: string; name: string; description: string | null; group: string | null }[]
+}
+
+/** The records changed after the revision asked for, and the conversation's current settings. */
+export interface AgentTranscript {
+  rev: number
+  items: AgentItem[]
+  options: AgentOption[]
+  usage: { used: number; size: number } | null
+}
+
+export interface AgentLive {
+  /** `asking`: a permission or a question waits for you; `error`: the last turn failed. */
+  state: "busy" | "idle" | "asking" | "error"
+  /** What is asked, or the error. */
+  detail: string | null
+  /** A turn has run since Retrace started following. */
+  worked: boolean
+  since: number
+  at: number
+}
+
+/** Terminal output from `start` on (base64), and where the stream is now. */
+export interface AgentChunk {
+  data: string
+  start: number
+  next: number
+}

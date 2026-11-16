@@ -4,7 +4,7 @@
 use crate::tr;
 use super::config::{self, GroupEntry, Prefs, ProjectEntry};
 use super::model::*;
-use super::{cleanup, diff, files, git, github, history, repo, State};
+use super::{acp, agent, cleanup, diff, files, git, github, history, opencode_server, repo, shell_env, State};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -615,7 +615,11 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let dir = project_dir(state, &id)?;
             let (trunk, trees) = trunk_and_trees(state, &id, &dir)?;
             match trunk {
-                Some(trunk) => json!(cleanup::candidates(&dir, &trunk, &trees, &state.integration)),
+                Some(trunk) => {
+                    let mut candidates = cleanup::candidates(&dir, &trunk, &trees, &state.integration);
+                    candidates.retain(|c| !state.agents.tree_in_use(&c.path));
+                    json!(candidates)
+                }
                 None => json!(Vec::<CleanupCandidate>::new()),
             }
         }
@@ -636,7 +640,9 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             let dir = project_dir(state, &id)?;
             let (trunk, _) = trunk_and_trees(state, &id, &dir)?;
             let trunk = trunk.ok_or_else(|| anyhow!(tr!("没有找到集成分支", "No integration branch found")))?;
-            let outcome = cleanup::remove(&dir, &trunk, &path, &head, &acknowledged_ignored, delete_branch, delete_remote, &kept_branches(state, &id)?, &state.integration)?;
+            let outcome = state.agents.with_idle_tree(&path, || {
+                cleanup::remove(&dir, &trunk, &path, &head, &acknowledged_ignored, delete_branch, delete_remote, &kept_branches(state, &id)?, &state.integration)
+            })?;
             if let Some(deleted) = outcome.deleted.clone() {
                 remember_deleted(state, &id, deleted);
             }
@@ -750,8 +756,266 @@ pub fn dispatch(state: &State, cmd: &str, a: Value) -> Result<Value> {
             open_with(state, &target.to_string_lossy(), &with)?;
             Value::Null
         }
+        cmd if cmd.starts_with("agent") => agent_command(state, cmd, a)?,
         _ => bail!(tr!("未知命令：{cmd}", "Unknown command: {cmd}")),
     })
+}
+
+#[derive(Deserialize)]
+struct SessionId {
+    session: String,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn b64() -> base64::engine::GeneralPurpose {
+    base64::engine::general_purpose::STANDARD
+}
+
+/// Agent sessions (see `agent.rs`). The dev bridge answers these only when started with
+/// `RETRACE_DEVBRIDGE_AGENTS=1`: a development tool shouldn't start processes by default.
+fn agent_command(state: &State, cmd: &str, a: Value) -> Result<Value> {
+    use base64::Engine;
+    if !state.agents_allowed.load(std::sync::atomic::Ordering::Relaxed) {
+        bail!(tr!("开发桥默认不启动 agent：设 RETRACE_DEVBRIDGE_AGENTS=1 再启动它", "The dev bridge doesn't run agents unless started with RETRACE_DEVBRIDGE_AGENTS=1"));
+    }
+    let sessions = &state.agents;
+    Ok(match cmd {
+        "agentKinds" => json!(agent::kinds(shell_env::agent_env())),
+        "agentStart" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct A {
+                id: String,
+                agent: String,
+                #[serde(default)]
+                task: String,
+                /// An existing worktree; none = a new one on `branch`.
+                tree: Option<String>,
+                branch: Option<String>,
+                setup: Option<String>,
+                /// The user's last choices of model and the like, for an agent with a conversation.
+                options: Option<std::collections::BTreeMap<String, String>>,
+                cols: Option<u16>,
+                rows: Option<u16>,
+            }
+            let a: A = args(a)?;
+            let dir = project_dir(state, &a.id)?;
+            let kind = agent::kind(&a.agent)?;
+            let env = &agent_env(state);
+            // Before touching git: an agent that isn't installed shouldn't leave a worktree behind.
+            if shell_env::which(env, kind.binary_name()).is_none() {
+                bail!(tr!("找不到 {}：登录 shell 的 PATH 里没有它", "Can't find {}: it isn't on your login shell's PATH", kind.name));
+            }
+            let (tree, branch, setup) = match a.tree {
+                Some(tree) => {
+                    let found = repo::worktrees(&dir)?.into_iter().find(|t| t.path == tree && !t.bare);
+                    let Some(found) = found else {
+                        bail!(tr!("不是这个项目的 worktree：{tree}", "Not a worktree of this project: {tree}"));
+                    };
+                    (found.path, found.branch, None)
+                }
+                None => {
+                    let branch = a.branch.as_deref().map(str::trim).filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("新 worktree 需要一个分支名", "A new worktree needs a branch name")))?.to_string();
+                    let (trunk, _) = trunk_and_trees(state, &a.id, &dir)?;
+                    let trunk = trunk.ok_or_else(|| anyhow!(tr!("这个项目还没有集成分支，没法新建 worktree", "This project has no integration branch to start a worktree from")))?;
+                    let setup = a.setup.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                    // Remembered per project, whatever happens next.
+                    {
+                        let mut cfg = state.config.write().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+                        if let Some(p) = cfg.projects.iter_mut().find(|p| p.path == a.id) {
+                            p.setup = setup.clone();
+                        }
+                    }
+                    save(state)?;
+                    let path = agent::create_worktree(&dir, &branch, &trunk.tip)?;
+                    (path, Some(branch), setup)
+                }
+            };
+            let options = chosen(a.options);
+            // On OpenCode's own server when it can (the session then outlives Retrace), else a process of Retrace's.
+            let launch = match agent::background_launch(kind, acp::Open::New, &a.task, setup.as_deref(), options.clone(), Path::new(&tree), &dir, env, &state.opencode)? {
+                Some(launch) => launch,
+                None => agent::launch(kind, &a.task, setup.as_deref(), options, Path::new(&tree), &dir, env, (a.cols.unwrap_or(120), a.rows.unwrap_or(36)))?,
+            };
+            json!(sessions.spawn(launch, agent::Meta { project: a.id, tree, branch, agent: kind.id.into(), task: a.task.trim().to_string() })?)
+        }
+        "agentResume" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                options: Option<std::collections::BTreeMap<String, String>>,
+                cols: Option<u16>,
+                rows: Option<u16>,
+            }
+            let a: A = args(a)?;
+            let options = chosen(a.options);
+            json!(sessions.resume(&a.session, |saved| resume_launch(state, saved, options, (a.cols.unwrap_or(120), a.rows.unwrap_or(36))))?)
+        }
+        "agentSetup" => {
+            let Id { id } = args(a)?;
+            let cfg = state.config.read().map_err(|_| anyhow!(tr!("配置不可用", "Settings are unavailable")))?;
+            json!(cfg.projects.iter().find(|p| p.path == id).and_then(|p| p.setup.clone()))
+        }
+        "agentSessions" => json!(sessions.list()),
+        "agentRead" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                from: u64,
+            }
+            let A { session, from } = args(a)?;
+            let (data, start, next) = sessions.read(&session, from)?;
+            json!({ "data": b64().encode(data), "start": start, "next": next })
+        }
+        "agentWrite" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                data: String,
+                /// Typed by the user (answers a bell); false for the terminal's own replies.
+                #[serde(default = "yes")]
+                typed: bool,
+            }
+            let A { session, data, typed } = args(a)?;
+            let bytes = b64().decode(data.as_bytes()).map_err(|_| anyhow!(tr!("参数格式不对", "Malformed arguments")))?;
+            sessions.write(&session, &bytes, typed)?;
+            Value::Null
+        }
+        "agentResize" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                cols: u16,
+                rows: u16,
+            }
+            let A { session, cols, rows } = args(a)?;
+            sessions.resize(&session, cols, rows)?;
+            Value::Null
+        }
+        "agentTranscript" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                #[serde(default)]
+                after: u64,
+            }
+            let A { session, after } = args(a)?;
+            json!(sessions.chat(&session)?.transcript(after)?)
+        }
+        "agentPrompt" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                text: String,
+            }
+            let A { session, text } = args(a)?;
+            sessions.chat(&session)?.prompt(&text)?;
+            Value::Null
+        }
+        "agentCancel" => {
+            let SessionId { session } = args(a)?;
+            sessions.chat(&session)?.cancel()?;
+            Value::Null
+        }
+        "agentAnswer" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                request: u64,
+                option: String,
+            }
+            let A { session, request, option } = args(a)?;
+            sessions.chat(&session)?.answer(request, &option)?;
+            Value::Null
+        }
+        "agentSetOption" => {
+            #[derive(Deserialize)]
+            struct A {
+                session: String,
+                option: String,
+                value: String,
+            }
+            let A { session, option, value } = args(a)?;
+            sessions.chat(&session)?.set_option(&option, &value)?;
+            Value::Null
+        }
+        "agentStopBackground" => {
+            sessions.stop_background(&state.opencode);
+            Value::Null
+        }
+        "agentStop" => {
+            let SessionId { session } = args(a)?;
+            sessions.stop(&session)?;
+            Value::Null
+        }
+        "agentClose" => {
+            let SessionId { session } = args(a)?;
+            sessions.close(&session)?;
+            Value::Null
+        }
+        _ => bail!(tr!("未知命令：{cmd}", "Unknown command: {cmd}")),
+    })
+}
+
+/// The environment agents start with: the login shell's (or one given to the state, in tests).
+fn agent_env(state: &State) -> shell_env::Env {
+    state.agent_env.clone().unwrap_or_else(|| shell_env::agent_env().clone())
+}
+
+/// How a saved session goes on: in its own worktree of its project, back on OpenCode's server when
+/// it can, else as a process of Retrace's.
+fn resume_launch(state: &State, saved: &agent::SessionInfo, options: Vec<(String, String)>, size: (u16, u16)) -> Result<agent::Launch> {
+    let dir = project_dir(state, &saved.project)?;
+    if !Path::new(&saved.tree).is_dir() {
+        bail!(tr!("会话的 worktree 目录不存在：{}", "The session's worktree folder no longer exists: {}", saved.tree));
+    }
+    let known = repo::worktrees(&dir)?.into_iter().any(|t| t.path == saved.tree && !t.bare);
+    if !known {
+        bail!(tr!("不是这个项目的 worktree：{}", "Not a worktree of this project: {}", saved.tree));
+    }
+    let kind = agent::kind(&saved.agent)?;
+    let env = &agent_env(state);
+    let open = saved.native_id.clone().map(acp::Open::Id).unwrap_or(acp::Open::Latest);
+    if let Some(launch) = agent::background_launch(kind, open, "", None, options.clone(), Path::new(&saved.tree), &dir, env, &state.opencode)? {
+        return Ok(launch);
+    }
+    agent::resume_launch(kind, saved.native_id.as_deref(), options, Path::new(&saved.tree), &dir, env, size)
+}
+
+/// At startup: pick up the background sessions whose conversations are still on a running
+/// OpenCode server (left there when Retrace last quit). Never starts a server for them.
+pub fn reattach_background(state: std::sync::Arc<State>) {
+    if !state.agents_allowed.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    std::thread::spawn(move || {
+        // Only what Retrace let go of while it ran: a session the user stopped stays stopped.
+        let saved: Vec<agent::SessionInfo> = state.agents.list().into_iter().filter(|s| s.background && s.left_running && !s.running && s.native_id.is_some()).collect();
+        if saved.is_empty() {
+            return;
+        }
+        let Some(ep) = state.opencode.find() else { return };
+        for s in saved {
+            let Some(native) = s.native_id.as_deref() else { continue };
+            if !Path::new(&s.tree).is_dir() || !opencode_server::Conn::exists(&ep, Path::new(&s.tree), native) {
+                continue;
+            }
+            if let Err(e) = state.agents.resume(&s.id, |saved| resume_launch(&state, saved, vec![], (120, 36))) {
+                eprintln!("{e:#}");
+            }
+        }
+    });
+}
+
+/// Remembered config choices in the order to apply them: the model first, since what else an
+/// agent offers (effort levels) can depend on it.
+fn chosen(options: Option<std::collections::BTreeMap<String, String>>) -> Vec<(String, String)> {
+    let mut list: Vec<(String, String)> = options.unwrap_or_default().into_iter().collect();
+    list.sort_by_key(|(id, _)| id != "model");
+    list
 }
 
 /// Undo can bring back only what was recorded here.

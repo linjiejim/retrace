@@ -35,11 +35,12 @@ function hideProgress() {
 function offerRestart(version: string) {
   notify.prompt(READY_TOAST, t("Retrace {version} is installed. Restart to use it.", { version }), {
     label: t("Restart"),
-    onClick: () => {
-      import("@tauri-apps/plugin-process")
-        .then((p) => p.relaunch())
-        .catch((e) => notify.error(t("Couldn't restart Retrace: {reason}", { reason: message(e) })))
-    },
+    // With agent sessions running, `leave` asks first (as quitting does). Loaded on demand: the
+    // updater stays clear of the session store until a restart is asked for.
+    onClick: () =>
+      void import("./quit")
+        .then((q) => q.leave("restart"))
+        .catch((e) => notify.error(t("Couldn't restart Retrace: {reason}", { reason: message(e) }))),
   })
 }
 

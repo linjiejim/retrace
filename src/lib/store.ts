@@ -71,6 +71,17 @@ export interface UiState {
   adding: AddState | null
   /** A fetch from the remote is running. */
   fetching: boolean
+  /** The agent session shown in the Agent view. */
+  agentSession: string | null
+  /** The agent drawer is open. */
+  agentOpen: boolean
+  /** The new-session dialog, for this project. */
+  newAgent: { projectId: string } | null
+  /**
+   * A file to show once the tab `key` (`<project>\0<tab key>`) is the one on screen: switching
+   * tabs picks that tab's default selection, which would otherwise replace this one.
+   */
+  wanted: { key: string; selection: Selection; file: { path: string; oldPath: string | null }; at: number } | null
 }
 
 export interface Prefs {
@@ -102,8 +113,18 @@ export interface Prefs {
   autoUpdate: boolean
   /** Groups folded in the projects list. */
   collapsedGroups: string[]
+  /** Projects whose agent sessions are folded under them. */
+  foldedSessions: string[]
   /** Icons in the changes and files lists. */
   fileIcons: FileIconTheme
+  /** The agent picked last in the new-session dialog. */
+  lastAgent: string | null
+  /** What was last picked for an agent's own settings (model, effort): agent id → setting id → value. New sessions start with it. */
+  agentOptions: Record<string, Record<string, string>>
+  /** The message box under the agent terminal. */
+  agentInput: boolean
+  /** Width of the agent drawer in px, once dragged; null = min(60vw, 960). */
+  agentWidth: number | null
 }
 
 export type FileIconTheme = "minimal" | "outline" | "color" | "letters"
@@ -130,7 +151,12 @@ const defaults: Prefs = {
   searchBodies: false,
   autoUpdate: true,
   collapsedGroups: [],
+  foldedSessions: [],
   fileIcons: "color",
+  lastAgent: null,
+  agentOptions: {},
+  agentInput: true,
+  agentWidth: null,
 }
 
 function loadPrefs(): Prefs {
@@ -170,6 +196,10 @@ export const ui = createStore<UiState>({
   historyDepth: 0,
   adding: null,
   fetching: false,
+  agentSession: null,
+  agentOpen: false,
+  newAgent: null,
+  wanted: null,
 })
 ui.subscribe(() => {
   const id = ui.get().projectId

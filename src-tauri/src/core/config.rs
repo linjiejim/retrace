@@ -29,6 +29,8 @@ pub struct ProjectEntry {
     pub kept_branches: Vec<String>,
     /// The group (`GroupEntry::id`) the project is listed under; none = ungrouped.
     pub group: Option<String>,
+    /// Shell command run in a new agent worktree before the agent starts (e.g. `pnpm install`).
+    pub setup: Option<String>,
     /// Listed first, above the groups; it keeps its group for when it's unpinned.
     pub pinned: bool,
 }

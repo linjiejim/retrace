@@ -19,6 +19,10 @@ Agents now write code in a dozen worktrees at once. Retrace puts every project, 
 - **Pull requests, read here.** On a GitHub project, *PRs* lists the open pull requests through your own GitHub CLI (`gh`): Retrace never sees a token. Pick one to read it like a branch: it opens as its description, full width, and a file picked in *Changes* shows its diff (click the file again to go back). Its commits are in the graph, its whole change matches GitHub's *Files changed*, and its review status and every check sit above the diff. Screenshots in the description show up too, from private repositories as well, and the conversation (comments, reviews and line comments with the code they're on) opens in a side panel, each thread a click away from its file. Worktrees and branches with an open pull request show its number, and their *Everything since main* row jumps to it.
 - **Diffs that read well.** Side by side by default, no wrapping, syntax highlighted off the main thread. Read one file at a time or every change in a row. Changed images show before and after.
 - **Browse any version.** Switch *Changes* to *Files* to see the whole tree at the selected commit (or on disk for uncommitted work): filter, fold, and preview code, images, and Markdown rendered like GitHub with its relative links and images. Pick a file and the graph narrows to the commits that changed it, so you can step through its history diff by diff. File icons come in four themes (Settings → File icons).
+- **Hand work to an agent.** Hover a project and click **+** (or press ⌘N), write the task, and pick OpenCode, Codex or Claude Code. By default it gets a new worktree and an `agent/…` branch in `<repo>.worktrees/` next to the repository, runs the setup command you saved for the project (say `pnpm install`), then starts the agent. Sessions sit under their project with an icon for working, waiting for you, finished or failed; click one to switch to its worktree with the session sliding in from the right, while the graph and diff show what the agent is writing.
+  - **OpenCode is a conversation in Retrace's own interface, and it keeps going when Retrace is closed.** The turns run in OpenCode's own background server (`opencode serve`, from the `opencode` installed on your machine; Retrace starts one and leaves it running), so quitting Retrace doesn't stop an agent mid-task; open Retrace again and the session is picked up where it is, including a permission it is waiting for. No agent is built into Retrace. Each turn shows what you asked, the agent's answer and the files it changed with their line counts (click one to open its diff). Reading, searching and running commands fold into one line you can open. When the agent needs a permission, a card shows the exact command with the agent's own choices (allow once, always allow, reject), and the session's icon turns into "needs your answer". Under the message box you pick the model and mode; the model you picked is the default for the next session. A failed turn (say, the model's quota ran out) shows the reason and a Retry. OpenCode 2 and later run over [ACP](https://agentclientprotocol.com) (`opencode acp`) instead, as a process that ends with Retrace.
+  - **Codex and Claude Code run their own terminal UI** in the drawer (they have no ACP entry yet).
+  - Hiding the drawer keeps the agent running. Quitting Retrace while an OpenCode session is working or waiting for you asks whether to leave it running in the background (the default) or stop everything; with nothing at work, quitting also stops OpenCode's background server. Terminal sessions end with Retrace, after a confirmation. Stopping an OpenCode session stops its turn; the conversation stays in OpenCode. Session records survive an app restart and can be resumed in the same worktree: OpenCode picks its conversation up again, Codex and Claude Code open their own history picker for you to choose from. Resume does not rerun setup or resend the original task. Closing a session removes its Retrace record. Codex runs with `--no-daemon` so its runtime belongs to Retrace (requires a CLI supporting that flag; tested with 0.162.1); OpenCode is tested with 1.19.5. Without an agent on your PATH none of this shows.
 - **Your layout.** Drag any view's grip to dock it on another view's edge or swap them. Each view keeps a minimum size, so nothing gets squeezed.
 - **A proper Mac app.** Native menu bar, keyboard first, light and dark, English and Chinese.
 
@@ -33,10 +37,13 @@ Agents now write code in a dozen worktrees at once. Retrace puts every project, 
 
 Every git call runs with `GIT_OPTIONAL_LOCKS=0`, so Retrace never takes the `index.lock` an agent is using. Changes are listed with plumbing (`diff-tree`, `diff-index`) that doesn't touch the index, and squash-merge detection writes its scratch objects outside the repository.
 
-There are exactly two writes:
+Retrace itself makes exactly three writes:
 
 - `git fetch`, which only updates remote-tracking branches (turn it off in Settings). Opening a pull request whose commits haven't been fetched yet (pushed since the last fetch, from a fork, or its branch deleted) fetches just those commits, `refs/pull/<N>/head` and, if needed, its base branch, without writing any ref or `FETCH_HEAD` and without touching submodules;
 - removing merged worktrees and deleting merged local branches, only after you confirm (and restoring a branch you just deleted). If you tick it, a deleted branch's own copy on origin goes too (`git push origin :<branch>`, guarded by `--force-with-lease`), only when origin still has it where the last fetch saw it and its commits are in the trunk.
+- a new worktree and branch for an agent session, only when you click **Start Session**, and never over an existing branch or folder.
+
+What an agent writes in its worktree is the agent's. For Codex and Claude Code, Retrace only relays the terminal. For OpenCode, Retrace starts `opencode serve` listening on 127.0.0.1 only, with a random password (kept, with its port and process id, in a file only you can read under `~/Library/Caches/me.jimlin.retrace/agents/`), and talks to it over HTTP: it sends your messages, your answers to permission requests and stop requests, and reads the conversation back. It offers the agent no file or terminal access of its own (the agent uses its own tools, under its own permission rules) and keeps the conversation in memory only: the history stays in OpenCode.
 
 ## Install
 
@@ -62,6 +69,8 @@ After that Retrace keeps itself up to date from GitHub Releases: at launch and e
 | ⌘R | Refresh and fetch |
 | ⌘\\ | Show / hide the projects |
 | ⌘O | Add a project |
+| ⌘N | New agent session in the current project |
+| ⌘T / Esc | Show / hide the agent session; clicking its row again also hides it (while a terminal has focus, every key but ⌘ shortcuts goes to the agent, Esc included) |
 | ⇧⌘F / ⌃\` / ⇧⌘A | Open the current worktree in Finder / Terminal / your editor |
 | ⌘, | Settings |
 
@@ -81,7 +90,7 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin retrace-devbridge
 pnpm dev                       # http://localhost:1420
 ```
 
-`RETRACE_CONFIG_DIR=/tmp/retrace-dev` points the app and the bridge at a throwaway config instead of your project list (`~/Library/Application Support/me.jimlin.retrace/config.json`).
+`RETRACE_CONFIG_DIR=/tmp/retrace-dev` points the app and the bridge at a throwaway config instead of your project list (`~/Library/Application Support/me.jimlin.retrace/config.json`). The bridge doesn't start agents unless you also set `RETRACE_DEVBRIDGE_AGENTS=1` (for working on the agent UI in a browser).
 
 ### Checks
 
@@ -97,10 +106,12 @@ pnpm tauri build                                  # Retrace.app and a .dmg
 ```text
 src-tauri/src/core/      git (read-only environment), repositories and worktrees, lanes, history,
                          changes and file contents, the command table, backend messages (i18n.rs)
+src-tauri/src/core/agent.rs      agent sessions: processes, new worktrees; opencode_server.rs: OpenCode's background server and its conversations; acp.rs: the ACP client; chat.rs: a conversation's records; shell_env.rs: the login shell's PATH
 src-tauri/src/watch.rs   watches the open project's .git and working tree; periodic fetch
 src-tauri/src/bin/       the dev bridge
 src/components/app/      the four views: projects, changes / files, graph, diff / preview
 src/components/layout/   the dockable tiled layout (model in src/lib/layout.ts)
+src/lib/terminals.ts     one xterm per terminal session; agent-chat.ts: a conversation's sync and turns; the drawer is src/components/app/AgentPanel.tsx, the conversation AgentChat.tsx
 src/lib/commands.ts      commands shared by the menu bar, shortcuts and buttons; menu.ts builds the menu bar
 src/lib/i18n.ts          UI language: English source strings, Chinese in src/locales/zh.ts
 src/components/ui/       jim-uiux components, installed from its registry

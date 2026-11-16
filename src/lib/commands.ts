@@ -7,9 +7,12 @@ import { t } from "./i18n"
 import { DEFAULT_LAYOUT } from "./layout"
 import { queryClient } from "./query"
 import { prefs, selectionKey, ui, type Selection } from "./store"
-import type { Overview, Project } from "./types"
+import { pickSession } from "./agent-state"
+import { leave } from "./quit"
+import { focusTerminal } from "./terminals"
+import type { AgentSession, Overview, Project } from "./types"
 import { checkForUpdates } from "./updater"
-import { invalidateProject, prKey, summaryQuery } from "@/hooks/queries"
+import { invalidateProject, prKey, summaryQuery, targetKey } from "@/hooks/queries"
 import { notify } from "@/components/ui/toast"
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -85,6 +88,51 @@ export function openPullRequest(n: number) {
     focusMode: false,
     diffOpen: true,
   }))
+}
+
+/** Show a session: its project, its worktree's tab, and its terminal (focused). */
+export function openSession(s: AgentSession) {
+  if (ui.get().projectId !== s.project) selectProject(s.project)
+  // Shown in the list too: a folded project unfolds to the session.
+  if (prefs.get().foldedSessions.includes(s.project)) prefs.set((p) => ({ foldedSessions: p.foldedSessions.filter((id) => id !== s.project) }))
+  ui.set((u) => ({ tabs: { ...u.tabs, [s.project]: `tree:${s.tree}` }, agentSession: s.id, agentOpen: true, focusMode: false }))
+  // A new worktree isn't in the cached overview yet.
+  invalidateProject(queryClient, s.project, { git: true, trees: [] })
+  requestAnimationFrame(() => requestAnimationFrame(() => focusTerminal(s.id)))
+}
+
+/**
+ * A file an agent changed, in Retrace's own diff: its worktree's uncommitted changes, or, when
+ * the agent has committed it already, everything on the branch since the trunk.
+ */
+export async function openSessionFile(s: Pick<AgentSession, "project" | "tree">, path: string) {
+  if (ui.get().projectId !== s.project) selectProject(s.project)
+  const target = { kind: "worktree" as const, tree: s.tree }
+  // Fresh: the agent has just written it. The worktree's status and HEAD too: the tab's default
+  // selection (`useDefaultSelection`) judges the file's selection by them, and with figures from
+  // before the change it would take it for stale and put the tab's HEAD commit in its place.
+  const [pending] = await Promise.all([
+    queryClient.fetchQuery({ queryKey: ["changes", s.project, targetKey(target)], queryFn: () => api.changes(s.project, target), staleTime: 0 }).catch(() => []),
+    queryClient.fetchQuery({ queryKey: ["statuses", s.project], queryFn: () => api.treeStatuses(s.project), staleTime: 0 }).catch(() => null),
+    queryClient.fetchQuery({ queryKey: ["overview", s.project], queryFn: () => api.overview(s.project), staleTime: 0 }).catch(() => null),
+  ])
+  const selection: Selection = pending.some((f) => f.path === path) ? { kind: "worktree" } : { kind: "compare" }
+  const file = { path, oldPath: null }
+  // The diff, not the files browser (which previews a file instead of showing its change).
+  prefs.set({ changesMode: "changes" })
+  ui.set((u) => ({
+    tabs: { ...u.tabs, [s.project]: `tree:${s.tree}` },
+    selection,
+    file,
+    // When this switches tabs, the new tab's default selection would replace the two above.
+    wanted: { key: `${s.project}\0tree:${s.tree}`, selection, file, at: Date.now() },
+    noFile: false,
+    diffOpen: true,
+    focusArea: "changes",
+    focusMode: false,
+    jump: Date.now(),
+  }))
+  invalidateProject(queryClient, s.project, { git: true, trees: [s.tree] })
 }
 
 export function closeDiff() {
@@ -167,6 +215,23 @@ async function refresh() {
 
 export const commands = {
   settings: () => ui.set({ settingsOpen: true }),
+  newAgent: () => {
+    // Already open (⌘N again, from the menu): a new request would clear what is typed in it.
+    if (ui.get().newAgent) return
+    const id = ui.get().projectId
+    if (!id) return notify.info(t("Pick a project first"))
+    ui.set({ newAgent: { projectId: id } })
+  },
+  toggleAgent: () => {
+    const u = ui.get()
+    if (u.agentOpen) return ui.set({ agentOpen: false })
+    // Nothing chosen (or it was closed): open on the session most likely wanted.
+    const sessions = queryClient.getQueryData<AgentSession[]>(["agents"]) ?? []
+    const shown = sessions.find((s) => s.id === u.agentSession) ?? pickSession(sessions, u.projectId, Date.now())
+    ui.set({ agentOpen: true, agentSession: shown?.id ?? null, focusMode: false })
+    if (shown) requestAnimationFrame(() => requestAnimationFrame(() => focusTerminal(shown.id)))
+  },
+  quit: () => void leave("quit"),
   checkForUpdates: () => void checkForUpdates(true),
   addProject: () => void addProject(),
   refresh: () => void refresh(),

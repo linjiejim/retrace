@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest"
 import { zh } from "@/locales/zh"
 import { PANEL_TITLE } from "@/lib/layout"
 import { STATUS_LABEL } from "@/lib/tree"
+import { STATE_LABEL } from "@/lib/agent-state"
 
 const root = path.resolve(__dirname, "..")
 function files(dir: string, out: string[] = []): string[] {
@@ -44,7 +45,7 @@ describe("i18n", () => {
   })
 
   it("has Chinese for the labels shown through t(variable)", () => {
-    const labels = [...Object.values(PANEL_TITLE), ...Object.values(STATUS_LABEL)]
+    const labels = [...Object.values(PANEL_TITLE), ...Object.values(STATUS_LABEL), ...Object.values(STATE_LABEL)]
     expect(labels.filter((l) => !(l in zh))).toEqual([])
   })
 
