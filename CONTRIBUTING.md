@@ -18,7 +18,7 @@ RETRACE_CONFIG_DIR=/tmp/retrace-dev cargo run --manifest-path src-tauri/Cargo.to
 pnpm dev                       # http://localhost:1420
 ```
 
-`RETRACE_CONFIG_DIR` keeps your real project list out of the way.
+`RETRACE_CONFIG_DIR` keeps your real project list out of the way. The bridge doesn't start agents unless you also set `RETRACE_DEVBRIDGE_AGENTS=1`.
 
 ## Before you open a pull request
 
