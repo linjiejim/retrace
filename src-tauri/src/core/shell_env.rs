@@ -6,7 +6,7 @@ use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub type Env = BTreeMap<String, String>;
@@ -38,15 +38,31 @@ const HOST_VARS: &[&str] = &[
 const HOST_PREFIXES: &[&str] = &["ITERM_", "KITTY_", "GHOSTTY_", "WEZTERM_", "VSCODE_", "ZELLIJ", "ALACRITTY_", "WT_"];
 
 static RESOLVED: OnceLock<Env> = OnceLock::new();
+static FALLBACK: OnceLock<Env> = OnceLock::new();
+/// When reading the login shell last failed (one reader at a time).
+static FAILED_AT: Mutex<Option<Instant>> = Mutex::new(None);
+/// A login shell that couldn't be read (slow at startup, say) is tried again after this long.
+const RETRY: Duration = Duration::from_secs(30);
 
-/// The login shell's environment (cached), cleaned of host-terminal variables, with a
-/// 256-colour terminal type.
+/// The login shell's environment (cached once read), cleaned of host-terminal variables, with
+/// a 256-colour terminal type. Until it can be read: a guess, and another try now and then, so
+/// one slow start doesn't hide agents installed on the login PATH until Retrace restarts.
 pub fn agent_env() -> &'static Env {
-    RESOLVED.get_or_init(|| {
+    if let Some(env) = RESOLVED.get() {
+        return env;
+    }
+    let mut failed = FAILED_AT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(env) = RESOLVED.get() {
+        return env;
+    }
+    if failed.is_none_or(|at| at.elapsed() >= RETRY) {
         let shell = std::env::var("SHELL").ok().filter(|s| Path::new(s).is_absolute()).unwrap_or_else(|| "/bin/zsh".into());
-        let env = login_env(&shell).unwrap_or_else(fallback_env);
-        clean(env)
-    })
+        match login_env(&shell) {
+            Some(env) => return RESOLVED.get_or_init(|| clean(env)),
+            None => *failed = Some(Instant::now()),
+        }
+    }
+    FALLBACK.get_or_init(|| clean(fallback_env()))
 }
 
 /// Warm the cache off the main path (the first new-session dialog would otherwise wait for it).

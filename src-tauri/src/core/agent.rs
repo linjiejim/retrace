@@ -65,7 +65,8 @@ impl Kind {
         if task.is_empty() {
             return vec![];
         }
-        vec![task.into()]
+        // After `--`: a task that starts like a Markdown list ("- fix …") isn't an option.
+        vec!["--".into(), task.into()]
     }
 
     /// Back into a conversation in the session's existing worktree, never resubmitting the task:
@@ -147,9 +148,10 @@ pub fn launch(kind: &Kind, task: &str, setup: Option<&str>, options: Vec<(String
 fn launch_with(agent_args: Vec<String>, native_id: Option<String>, setup: Option<&str>, chat: Option<acp::Plan>, tree: &Path, bin: PathBuf, env: Env, size: (u16, u16)) -> Launch {
     let (program, args) = match setup {
         Some(setup) => {
-            // An ACP agent talks on stdin and stdout: the setup command gets neither (its output
-            // goes to stderr, where Retrace shows it), and both are handed back for the agent.
-            let script = if chat.is_some() { format!("exec 3>&1 4<&0 1>&2 </dev/null\n{setup}\nexec 1>&3 0<&4 3>&- 4<&-\nexec \"$0\" \"$@\"") } else { format!("{setup}\nexec \"$0\" \"$@\"") };
+            // In a subshell: a `cd` or an `exit` in it can't move the agent or keep it from
+            // starting (a failure still does, through -e). An ACP agent talks on stdin and stdout:
+            // the setup command gets neither (its output goes to stderr, where Retrace shows it).
+            let script = if chat.is_some() { format!("(\n{setup}\n) </dev/null 1>&2\nexec \"$0\" \"$@\"") } else { format!("(\n{setup}\n)\nexec \"$0\" \"$@\"") };
             let mut args = vec!["-e".to_string(), "-c".to_string(), script];
             args.push(bin.to_string_lossy().into_owned());
             args.extend(agent_args);
@@ -362,6 +364,10 @@ pub struct SessionInfo {
     /// Run by the machine's OpenCode server: it goes on without Retrace, and is picked up again.
     #[serde(default)]
     pub background: bool,
+    /// A background session Retrace let go of while it ran (quitting, or Retrace ending without
+    /// a chance to): the next Retrace picks it up again. Never one the user stopped.
+    #[serde(default)]
+    pub left_running: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -530,7 +536,7 @@ impl Session {
 
 /// Blocks until `pid` exits, without reaping it: until it is reaped, its pid (and its process
 /// group id) can't be given to another process.
-fn wait_exit_unreaped(pid: i32) {
+pub(crate) fn wait_exit_unreaped(pid: i32) {
     loop {
         let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
         let r = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) };
@@ -576,6 +582,8 @@ impl Sessions {
             if info.id.is_empty() || !ids.insert(info.id.clone()) {
                 continue;
             }
+            // Still running when last saved: Retrace ended without letting go, the turn didn't.
+            info.left_running = info.left_running || (info.background && info.running);
             info.running = false;
             info.stopped = true;
             info.exit_code = None;
@@ -720,6 +728,7 @@ impl Sessions {
             live: (chat.is_some() || server.is_some()).then_some(Live { state: LiveState::Busy, detail: None, worked: false, since: now, at: now }),
             chat: chat.is_some() || server.is_some(),
             background: server.is_some(),
+            left_running: false,
         };
         if let Some(plan) = server {
             let (sessions, session_id) = (Arc::downgrade(self), info.id.clone());
@@ -1085,6 +1094,8 @@ impl Sessions {
         let list = self.list.lock().map(|l| l.clone()).unwrap_or_default();
         let mut hosts: Vec<Arc<opencode_server::Host>> = extra.into_iter().cloned().collect();
         let mut trees: Vec<PathBuf> = Vec::new();
+        // Something Retrace knows of that the server may not show yet (a message just sent).
+        let mut working = false;
         for s in &list {
             let Ok(info) = s.info.lock().map(|i| i.clone()) else { continue };
             if info.background && !trees.iter().any(|t| t == Path::new(&info.tree)) {
@@ -1098,12 +1109,17 @@ impl Sessions {
             if !info.running {
                 continue;
             }
+            working |= c.has_work();
             c.detach();
             if let Ok(mut i) = s.info.lock() {
                 i.running = false;
                 i.stopped = true;
                 i.live = None;
+                i.left_running = true;
             }
+        }
+        if working {
+            return;
         }
         for h in hosts {
             h.stop_if_idle(&trees);
@@ -1236,7 +1252,9 @@ mod tests {
     #[test]
     fn task_is_its_own_argument() {
         let k = kind("claude").unwrap();
-        assert_eq!(k.args("  fix `rm -rf` \"quotes\"; $(x) "), vec!["fix `rm -rf` \"quotes\"; $(x)".to_string()]);
+        assert_eq!(k.args("  fix `rm -rf` \"quotes\"; $(x) "), vec!["--".to_string(), "fix `rm -rf` \"quotes\"; $(x)".to_string()]);
+        // A Markdown list isn't taken for an option (Claude Code refuses an unknown one).
+        assert_eq!(k.args("- add divide\n- test it"), vec!["--".to_string(), "- add divide\n- test it".to_string()]);
         assert!(k.args("  ").is_empty());
         assert_eq!(kind("codex").unwrap().args("go"), vec!["--no-daemon".to_string(), "--".to_string(), "go".to_string()]);
         assert_eq!(kind("codex").unwrap().args(""), vec!["--no-daemon".to_string()]);

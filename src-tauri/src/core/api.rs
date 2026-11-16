@@ -992,7 +992,8 @@ pub fn reattach_background(state: std::sync::Arc<State>) {
         return;
     }
     std::thread::spawn(move || {
-        let saved: Vec<agent::SessionInfo> = state.agents.list().into_iter().filter(|s| s.background && !s.running && s.native_id.is_some()).collect();
+        // Only what Retrace let go of while it ran: a session the user stopped stays stopped.
+        let saved: Vec<agent::SessionInfo> = state.agents.list().into_iter().filter(|s| s.background && s.left_running && !s.running && s.native_id.is_some()).collect();
         if saved.is_empty() {
             return;
         }

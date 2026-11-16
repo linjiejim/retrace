@@ -118,8 +118,8 @@ fn a_session_relays_output_input_bell_and_exit_code() {
 
     wait_for("ready", || output(&sessions, &info.id).contains("ready"));
     let text = output(&sessions, &info.id);
-    // The task arrived as one argument, unexpanded.
-    assert!(text.contains("agent args:[fix it; $(echo nope)]"), "{text}");
+    // The task arrived as one argument, unexpanded, after `--`.
+    assert!(text.contains("agent args:[-- fix it; $(echo nope)]"), "{text}");
     assert!(text.contains(&format!("in:{} main:/main/tree", tmp.0.display())), "{text}");
     wait_for("bell", || sessions.list()[0].bell_at.is_some());
 
@@ -162,6 +162,14 @@ fn setup_runs_first_and_a_failing_setup_keeps_the_agent_from_starting() {
     assert_eq!(sessions.list().iter().find(|s| s.id == bad.id).unwrap().exit_code, Some(1));
 
     assert!(!sessions.list().iter().find(|s| s.id == bad.id).unwrap().stopped);
+
+    // A `cd` or an `exit 0` in the setup command doesn't move the agent or keep it from starting.
+    let moved = agent::launch(kind, "go", Some("mkdir -p web\ncd web\nexit 0"), vec![], &tmp.0, &tmp.0, &env, (80, 24)).unwrap();
+    let moved = sessions.spawn(moved, meta(&tmp.0)).unwrap();
+    wait_for("agent after a setup that moved", || output(&sessions, &moved.id).contains("ready"));
+    let text = output(&sessions, &moved.id);
+    assert!(text.contains(&format!("in:{} ", tmp.0.display())), "{text}");
+
     sessions.stop(&ok.id).unwrap();
     wait_for("stop", || sessions.list().iter().any(|s| s.id == ok.id && !s.running));
     assert!(sessions.list().iter().find(|s| s.id == ok.id).unwrap().stopped);

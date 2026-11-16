@@ -59,6 +59,9 @@ struct World {
     aborted: Vec<String>,
     /// How many times a turn was stopped.
     aborts: usize,
+    /// Reading one conversation fails (500), and the health check takes longer than Retrace waits.
+    broken_get: bool,
+    slow_health: bool,
 }
 
 struct Fake {
@@ -178,12 +181,23 @@ fn turn(world: Arc<Mutex<World>>, next: Arc<AtomicU64>, sid: String, text: Strin
     let uid = id(&next, "msg");
     set_info(&world, &sid, json!({ "id": uid, "role": "user", "sessionID": sid }));
     put(&world, &sid, &json!({ "info": { "id": uid } }), json!({ "id": id(&next, "prt"), "messageID": uid, "sessionID": sid, "type": "text", "text": text }));
+    if text.contains("LATE") {
+        // The message is in, the turn not started yet (OpenCode answers prompt_async first).
+        std::thread::sleep(Duration::from_millis(400));
+    }
     set_busy(&world, &sid, true);
     let aid = id(&next, "msg");
     let mut info = json!({ "id": aid, "role": "assistant", "parentID": uid, "sessionID": sid, "providerID": model["providerID"], "modelID": model["modelID"] });
     set_info(&world, &sid, info.clone());
     let msg = json!({ "info": { "id": aid } });
     let say = |t: &str| put(&world, &sid, &msg, json!({ "id": id(&next, "prt"), "messageID": aid, "sessionID": sid, "type": "text", "text": t }));
+    if text.contains("HUGE") {
+        // An answer longer than ureq reads into a string (10 MB).
+        say(&"x".repeat(11 << 20));
+        set_info(&world, &sid, json!({ "id": aid, "role": "assistant", "parentID": uid, "sessionID": sid, "finish": "stop" }));
+        set_busy(&world, &sid, false);
+        return;
+    }
     if text.contains("BROKE") {
         emit(&world, "session.error", json!({ "sessionID": sid, "error": { "name": "APIError", "data": { "message": "insufficient balance (1008)" } } }));
         info["error"] = json!({ "name": "APIError", "data": { "message": "insufficient balance (1008)" } });
@@ -269,7 +283,12 @@ fn handle(mut req: tiny_http::Request, world: Arc<Mutex<World>>, next: Arc<Atomi
     let ok = |v: Value| Response::from_string(v.to_string()).with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
     let reply = match (method.as_str(), parts.as_slice()) {
-        ("GET", ["global", "health"]) => ok(json!({ "healthy": true, "version": "1.19.5" })),
+        ("GET", ["global", "health"]) => {
+            if world.lock().unwrap().slow_health {
+                std::thread::sleep(Duration::from_secs(4));
+            }
+            ok(json!({ "healthy": true, "version": "1.19.5" }))
+        }
         ("GET", ["event"]) => {
             let (tx, rx) = channel();
             let _ = tx.send(b"data: {\"type\":\"server.connected\",\"properties\":{}}\n\n".to_vec());
@@ -305,6 +324,7 @@ fn handle(mut req: tiny_http::Request, world: Arc<Mutex<World>>, next: Arc<Atomi
             }
             ok(Value::Object(out))
         }
+        ("GET", ["session", _]) if world.lock().unwrap().broken_get => Response::from_string(json!({ "name": "UnknownError", "data": { "message": "storage busy" } }).to_string()).with_status_code(500),
         ("GET", ["session", sid]) => match world.lock().unwrap().sessions.iter().find(|(i, _)| i == sid) {
             Some((i, c)) => ok(json!({ "id": i, "directory": c.dir, "title": "Add square", "agent": c.agent })),
             None => Response::from_string(json!({ "name": "NotFoundError", "data": { "message": "Session not found" } }).to_string()).with_status_code(404),
@@ -325,7 +345,10 @@ fn handle(mut req: tiny_http::Request, world: Arc<Mutex<World>>, next: Arc<Atomi
         }
         ("POST", ["session", sid, "abort"]) => {
             let mut w = world.lock().unwrap();
-            w.aborted.push(sid.to_string());
+            // Like OpenCode: stops a turn in progress, does nothing to one not started yet.
+            if w.sessions.iter().any(|(i, c)| i == sid && c.busy) {
+                w.aborted.push(sid.to_string());
+            }
             w.aborts += 1;
             ok(json!(true))
         }
@@ -360,6 +383,13 @@ fn opencode_bin(dir: &Path) -> Env {
     std::fs::create_dir_all(&bin).unwrap();
     std::fs::write(bin.join("opencode"), "#!/bin/sh\n[ \"$1\" = --version ] && echo 1.19.5\n").unwrap();
     std::fs::set_permissions(bin.join("opencode"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A script just written can't run while a process another test forked meanwhile still holds
+    // it open for writing (ETXTBSY): wait until it runs once, so Retrace's first try isn't the one.
+    let started = Instant::now();
+    while std::process::Command::new(bin.join("opencode")).arg("--version").output().is_err() {
+        assert!(started.elapsed() < Duration::from_secs(5), "the stand-in opencode doesn't run");
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let mut env = Env::new();
     env.insert("PATH".into(), format!("{}:/usr/bin:/bin", bin.display()));
     env
@@ -618,4 +648,147 @@ fn the_server_is_called_idle_only_when_nothing_runs_or_waits_in_any_session_fold
     assert!(!state.opencode.idle_in(&trees));
     state.agents.stop_all();
     assert!(!state.opencode.idle_in(&trees), "Retrace letting go changes nothing on the server");
+}
+
+#[test]
+fn a_conversation_longer_than_ten_megabytes_is_read_in_full() {
+    let s = setup("huge");
+    let state = s.state();
+    let session = s.start(&state, "", None);
+    wait_for("open", || live(&state, &session.id) == Some((LiveState::Idle, None)));
+    say(&state, &session.id, "HUGE answer");
+    wait_for("answered", || longest_answer(&state, &session.id) > 10 << 20 && live(&state, &session.id) == Some((LiveState::Idle, None)));
+    let native = info(&state, &session.id).native_id.unwrap();
+    state.agents.stop_all();
+
+    // Read back whole when Retrace comes back, not taken for an empty conversation.
+    let again = s.state();
+    reattach_background(again.clone());
+    wait_for("reattached", || again.agents.list().iter().any(|x| x.running && x.native_id.as_deref() == Some(&native)));
+    let id = again.agents.list()[0].id.clone();
+    wait_for("the whole conversation", || longest_answer(&again, &id) > 10 << 20);
+    again.agents.stop_all();
+}
+
+fn longest_answer(state: &State, id: &str) -> usize {
+    let t = serde_json::to_value(state.agents.chat(id).unwrap().transcript(0).unwrap()).unwrap();
+    t["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "message").filter_map(|i| i["text"].as_str()).map(str::len).max().unwrap_or(0)
+}
+
+#[test]
+fn a_setup_command_that_leaves_something_running_doesnt_hold_up_the_conversation() {
+    let s = setup("setup-leftover");
+    let state = s.state();
+    // The `sleep` keeps the setup command's output open long after the command itself is done.
+    let session = s.start(&state, "add square", Some("echo ready\nsleep 30 &"));
+    wait_for("the turn", || outline(&state, &session.id).last().map(String::as_str) == Some("end"));
+    let t = dispatch(&state, "agentTranscript", json!({ "session": session.id, "after": 0 })).unwrap();
+    assert_eq!((t["items"][0]["output"].as_str(), t["items"][0]["code"].as_i64()), (Some("ready\n"), Some(0)));
+    state.agents.stop_all();
+}
+
+#[test]
+fn a_conversation_that_cant_be_read_right_now_is_kept_not_replaced() {
+    let s = setup("keep");
+    let state = s.state();
+    let session = s.start(&state, "", None);
+    wait_for("open", || live(&state, &session.id) == Some((LiveState::Idle, None)) && info(&state, &session.id).native_id.is_some());
+    let native = info(&state, &session.id).native_id.unwrap();
+    dispatch(&state, "agentStop", json!({ "session": session.id })).unwrap();
+
+    // OpenCode fails to read it for a moment: the resume fails, the conversation stays the same.
+    s.fake.world.lock().unwrap().broken_get = true;
+    let resumed = dispatch(&state, "agentResume", json!({ "session": session.id })).unwrap();
+    let id = resumed["id"].as_str().unwrap().to_string();
+    wait_for("the failure", || !info(&state, &id).running);
+    assert_eq!(info(&state, &id).native_id.as_deref(), Some(native.as_str()));
+    assert_eq!(s.fake.world.lock().unwrap().sessions.len(), 1, "no new conversation");
+
+    // It answers again: resuming picks the same conversation up.
+    s.fake.world.lock().unwrap().broken_get = false;
+    let again = dispatch(&state, "agentResume", json!({ "session": id })).unwrap();
+    let id = again["id"].as_str().unwrap().to_string();
+    wait_for("idle", || live(&state, &id) == Some((LiveState::Idle, None)));
+    assert_eq!(info(&state, &id).native_id.as_deref(), Some(native.as_str()));
+    state.agents.stop_all();
+}
+
+#[test]
+fn stopping_right_after_sending_also_stops_a_turn_that_starts_late() {
+    let s = setup("late");
+    let state = s.state();
+    let session = s.start(&state, "", None);
+    wait_for("open", || live(&state, &session.id) == Some((LiveState::Idle, None)));
+    say(&state, &session.id, "LATE SLOW job");
+    // At once: OpenCode has the message, but its turn hasn't started when the first abort lands.
+    dispatch(&state, "agentStop", json!({ "session": session.id })).unwrap();
+    {
+        let w = s.fake.world.lock().unwrap();
+        assert!(!w.sessions[0].1.busy, "nothing runs once stopped");
+        assert_eq!(w.aborts, 2, "the turn that started late was stopped too");
+    }
+    assert!(!outline(&state, &session.id).contains(&"message:Done slowly.".to_string()));
+}
+
+#[test]
+fn a_session_the_user_stopped_stays_stopped_when_retrace_comes_back() {
+    let s = setup("stays-stopped");
+    let state = s.state();
+    let kept = s.start(&state, "", None);
+    let stopped = s.start(&state, "", None);
+    let open = |id: &str| live(&state, id) == Some((LiveState::Idle, None)) && info(&state, id).native_id.is_some();
+    wait_for("both open", || open(&kept.id) && open(&stopped.id));
+    let (kept_native, stopped_native) = (info(&state, &kept.id).native_id.unwrap(), info(&state, &stopped.id).native_id.unwrap());
+    dispatch(&state, "agentStop", json!({ "session": stopped.id })).unwrap();
+    // Quitting lets the other one go.
+    state.agents.stop_all();
+
+    let again = s.state();
+    reattach_background(again.clone());
+    wait_for("the one left running", || again.agents.list().iter().any(|x| x.running && x.native_id.as_deref() == Some(&kept_native)));
+    std::thread::sleep(Duration::from_millis(500));
+    let list = again.agents.list();
+    assert!(list.iter().any(|x| !x.running && x.native_id.as_deref() == Some(&stopped_native)), "the stopped one stays stopped");
+    again.agents.stop_all();
+}
+
+#[test]
+fn quitting_stops_only_an_idle_server_and_a_silent_one_is_neither_replaced_nor_forgotten() {
+    use std::os::unix::process::CommandExt;
+    let s = setup("host");
+    let dir = s._tmp.0.join("agents");
+    std::fs::create_dir_all(&dir).unwrap();
+    // The server's process: a `sleep` in its own group stands in for `opencode serve`.
+    let mut server = std::process::Command::new("sleep").arg("60").process_group(0).spawn().unwrap();
+    let pid = server.id() as i32;
+    let reaper = std::thread::spawn(move || server.wait().unwrap());
+    let alive = || unsafe { libc::kill(pid, 0) } == 0;
+    let port: u16 = s.fake.url.rsplit(':').next().unwrap().parse().unwrap();
+    let saved = dir.join("opencode-server.json");
+    std::fs::write(&saved, json!({ "pid": pid, "port": port, "password": "pw" }).to_string()).unwrap();
+    let host = Host::new(dir.clone());
+    let tree = s.main.clone();
+
+    // Something runs in a session folder: the server stays.
+    s.fake.world.lock().unwrap().sessions.push(("ses_x".into(), Conversation { dir: tree.to_string_lossy().into_owned(), busy: true, ..Default::default() }));
+    host.stop_if_idle(std::slice::from_ref(&tree));
+    assert!(alive() && saved.exists());
+
+    // There but not answering in time: no second server, and not forgotten on "Stop All".
+    s.fake.world.lock().unwrap().slow_health = true;
+    let err = host.ensure(Path::new("/nonexistent/opencode"), &s.env).err().expect("no second server");
+    let err = format!("{err:#}");
+    assert!(err.contains("isn't answering") || err.contains("没有回应"), "{err}");
+    host.shutdown();
+    assert!(alive() && saved.exists());
+
+    // Answering, and nothing runs or waits: stopped, and its record goes with it.
+    {
+        let mut w = s.fake.world.lock().unwrap();
+        w.slow_health = false;
+        w.sessions[0].1.busy = false;
+    }
+    host.stop_if_idle(std::slice::from_ref(&tree));
+    assert!(!reaper.join().unwrap().success());
+    assert!(!saved.exists());
 }

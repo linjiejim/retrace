@@ -352,6 +352,8 @@ impl Conn {
             match self.call("session/load", json!({ "sessionId": id, "cwd": cwd, "mcpServers": [] }), Some(OPEN)) {
                 Ok(result) => opened = Some((id, result)),
                 Err(Failure::Closed) => return Err(Failure::Closed),
+                // No answer isn't "no such conversation": keep it to try again, never swap it.
+                Err(Failure::Timeout) => return Err(Failure::Rpc(Failure::Timeout.text("session/load"))),
                 // Say why the history isn't here, then go on with a fresh conversation.
                 Err(failure) => {
                     let reason = failure.text("session/load");

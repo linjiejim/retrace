@@ -28,6 +28,11 @@ const START: Duration = Duration::from_secs(30);
 const STREAM_IDLE: Duration = Duration::from_secs(90);
 /// The server is taken as gone after failing its health check this many times, half a second apart.
 const LOST_AFTER: u32 = 10;
+/// The setup command's last output, after it exits, has this long to arrive.
+const SETUP_DRAIN: Duration = Duration::from_millis(500);
+/// Stopping right after a message was sent: how long the conversation must stay quiet to count
+/// as stopped (OpenCode accepts the message before it starts the turn).
+const STOP_SETTLE: Duration = Duration::from_millis(1500);
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
@@ -57,20 +62,41 @@ pub fn supported(bin: &Path, env: &Env) -> bool {
     if let Some(ok) = seen.lock().ok().and_then(|s| s.get(bin).copied()) {
         return ok;
     }
-    let ok = std::process::Command::new(bin)
-        .arg("--version")
-        .env_clear()
-        .envs(env)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|v| v.trim().split('.').next().and_then(|m| m.trim_start_matches('v').parse::<u32>().ok()))
-        .is_some_and(|major| major == 1);
+    // A version that can't be had in time isn't remembered: the next session asks again.
+    let Some(version) = version_of(bin, env) else { return false };
+    let ok = version.trim().split('.').next().and_then(|m| m.trim_start_matches('v').parse::<u32>().ok()).is_some_and(|major| major == 1);
     if let Ok(mut s) = seen.lock() {
         s.insert(bin.to_path_buf(), ok);
     }
     ok
+}
+
+/// `opencode --version`, given a few seconds (it runs while sessions wait to start or resume).
+fn version_of(bin: &Path, env: &Env) -> Option<String> {
+    let mut child = std::process::Command::new(bin)
+        .arg("--version")
+        .env_clear()
+        .envs(env)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    Some(out)
 }
 
 // ---------- the server ----------
@@ -105,8 +131,13 @@ impl Endpoint {
         };
         match res {
             Ok(r) => {
-                let text = r.into_string().unwrap_or_default();
-                Ok(if text.trim().is_empty() { Value::Null } else { serde_json::from_str(&text).unwrap_or(Value::String(text)) })
+                // All of it, however long the conversation: a reply cut short is an error, never "nothing".
+                let mut bytes = Vec::new();
+                r.into_reader()
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| anyhow!(tr!("没读完 OpenCode 后台服务的回复：{e}", "Couldn't read the whole reply from OpenCode's background server: {e}")))?;
+                let text = String::from_utf8_lossy(&bytes);
+                Ok(if text.trim().is_empty() { Value::Null } else { serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text.into_owned())) })
             }
             Err(ureq::Error::Status(code, r)) => {
                 let text = r.into_string().unwrap_or_default();
@@ -132,6 +163,12 @@ impl Endpoint {
         self.call("GET", "/global/health", None, Duration::from_secs(3)).is_ok_and(|v| v.get("healthy").and_then(Value::as_bool) == Some(true))
     }
 
+    /// Connected, but no answer to the health check in time: there, only busy (or stuck).
+    fn silent(&self) -> bool {
+        let asked = http(Some(Duration::from_secs(3))).get(&format!("{}/global/health", self.base)).set("Authorization", &self.auth).call();
+        asked.is_err_and(|e| e.kind() == ureq::ErrorKind::Io)
+    }
+
     /// The event stream, one `data:` line per event.
     fn events(&self, path: &str) -> Result<Box<dyn Read + Send>> {
         let r = http(Some(STREAM_IDLE)).get(&format!("{}{path}", self.base)).set("Authorization", &self.auth).set("Accept", "text/event-stream").call()?;
@@ -153,6 +190,13 @@ impl std::error::Error for Status {}
 
 fn status_of(e: &anyhow::Error) -> Option<u16> {
     e.downcast_ref::<Status>().map(|s| s.0)
+}
+
+/// Whether `GET /session/status` says this conversation is running; None when the reply isn't
+/// that list (an error page, a cut-off body): nothing to go by.
+fn running_in(status: &Value, id: &str) -> Option<bool> {
+    let all = status.as_object()?;
+    Some(all.get(id).is_some_and(|x| s(x, "type").is_none_or(|t| t != "idle")))
 }
 
 /// The machine's OpenCode server: found from its state file, or started.
@@ -181,29 +225,39 @@ impl Host {
 
     /// The server if it is running (one this Retrace or an earlier one started); never starts one.
     pub fn find(&self) -> Option<Endpoint> {
-        if let Some(ep) = self.current.lock().ok().and_then(|c| c.clone()) {
+        let current = self.current.lock().ok().and_then(|c| c.clone());
+        if let Some(ep) = &current {
             if ep.healthy() {
-                return Some(ep);
+                return Some(ep.clone());
             }
         }
         if self.fixed {
             return None;
         }
-        let saved: Value = std::fs::read(self.state_path()).ok().and_then(|b| serde_json::from_slice(&b).ok())?;
-        let pid = saved.get("pid").and_then(Value::as_i64)? as i32;
-        let port = saved.get("port").and_then(Value::as_u64)?;
-        let password = saved.get("password").and_then(Value::as_str)?;
-        if !alive(pid) {
-            return None;
-        }
-        let ep = Endpoint::new(&format!("http://127.0.0.1:{port}"), password, Some(pid));
-        if !ep.healthy() {
+        let ep = self.saved()?;
+        // Asked just now, no answer: once is enough.
+        if current.is_some_and(|c| c.base == ep.base && c.pid == ep.pid) || !ep.healthy() {
             return None;
         }
         if let Ok(mut c) = self.current.lock() {
             *c = Some(ep.clone());
         }
         Some(ep)
+    }
+
+    /// The server in the state file, while its process is there (it may not be ours any more).
+    fn saved(&self) -> Option<Endpoint> {
+        let saved: Value = std::fs::read(self.state_path()).ok().and_then(|b| serde_json::from_slice(&b).ok())?;
+        let pid = saved.get("pid").and_then(Value::as_i64)? as i32;
+        let port = saved.get("port").and_then(Value::as_u64)?;
+        let password = saved.get("password").and_then(Value::as_str)?;
+        alive(pid).then(|| Endpoint::new(&format!("http://127.0.0.1:{port}"), password, Some(pid)))
+    }
+
+    /// The saved server is there but doesn't answer in time: not to be replaced by a second
+    /// one (two servers on one OpenCode store), nor forgotten.
+    fn silent(&self) -> bool {
+        !self.fixed && self.saved().is_some_and(|ep| ep.silent())
     }
 
     /// The running server, started if there is none. Its own process session: it outlives Retrace.
@@ -214,6 +268,9 @@ impl Host {
         }
         if self.fixed {
             bail!(tr!("OpenCode 的后台服务不在了", "OpenCode's background server is gone"));
+        }
+        if self.silent() {
+            bail!(tr!("OpenCode 的后台服务没有回应，稍后再试", "OpenCode's background server isn't answering. Try again in a moment."));
         }
         use std::os::unix::fs::OpenOptionsExt;
         use std::os::unix::process::CommandExt;
@@ -289,11 +346,7 @@ impl Host {
             return;
         }
         let Some(ep) = self.find() else { return };
-        let idle = dirs.iter().all(|d| {
-            let q = format!("directory={}", enc(&d.to_string_lossy()));
-            ep.get(&format!("/session/status?{q}")).is_ok_and(|v| v.as_object().is_some_and(|o| o.is_empty())) && ep.get(&format!("/permission?{q}")).is_ok_and(|v| v.as_array().is_some_and(|a| a.is_empty()))
-        });
-        if idle {
+        if idle_at(&ep, dirs) {
             self.kill(ep.pid);
         }
     }
@@ -301,11 +354,7 @@ impl Host {
     /// Nothing is running or waiting for an answer in these folders, by the server's own word
     /// (false when it can't be asked).
     pub fn idle_in(&self, dirs: &[PathBuf]) -> bool {
-        let Some(ep) = self.find() else { return false };
-        dirs.iter().all(|d| {
-            let q = format!("directory={}", enc(&d.to_string_lossy()));
-            ep.get(&format!("/session/status?{q}")).is_ok_and(|v| v.as_object().is_some_and(|o| o.is_empty())) && ep.get(&format!("/permission?{q}")).is_ok_and(|v| v.as_array().is_some_and(|a| a.is_empty()))
-        })
+        self.find().is_some_and(|ep| idle_at(&ep, dirs))
     }
 
     /// Stop the server (and with it every turn in it).
@@ -315,8 +364,12 @@ impl Host {
         }
         // Only a process that answers with our password is ours: a saved pid may belong to
         // someone else by now (the server died, the Mac restarted).
-        let pid = self.find().and_then(|e| e.pid);
-        self.kill(pid);
+        match self.find() {
+            Some(ep) => self.kill(ep.pid),
+            // There but not answering: not stopped unasked, and not forgotten either.
+            None if self.silent() => {}
+            None => self.kill(None),
+        }
     }
 
     fn kill(&self, pid: Option<i32>) {
@@ -340,6 +393,15 @@ impl Host {
         }
         let _ = std::fs::remove_file(self.state_path());
     }
+}
+
+/// The server says nothing runs or waits for an answer in any of these folders (false when a
+/// question goes unanswered).
+fn idle_at(ep: &Endpoint, dirs: &[PathBuf]) -> bool {
+    dirs.iter().all(|d| {
+        let q = format!("directory={}", enc(&d.to_string_lossy()));
+        ep.get(&format!("/session/status?{q}")).is_ok_and(|v| v.as_object().is_some_and(|o| o.is_empty())) && ep.get(&format!("/permission?{q}")).is_ok_and(|v| v.as_array().is_some_and(|a| a.is_empty()))
+    })
 }
 
 // ---------- OpenCode's messages as Retrace's records ----------
@@ -894,10 +956,14 @@ impl Conn {
                     id = Some(want);
                     self.take_session_info(&info);
                 }
-                Err(e) => {
+                // Gone from OpenCode: say so, then go on with a fresh conversation.
+                Err(e) if status_of(&e) == Some(404) => {
                     let reason = format!("{e:#}");
                     let _ = self.chat.lock().map(|mut c| c.error(&tr!("没能载入之前的对话，这是一段新的：{reason}", "Couldn't load the earlier conversation, so this is a new one: {reason}")));
                 }
+                // Anything else (slow, failing) may pass: keep the conversation to try again, never
+                // swap it for a new one.
+                Err(e) => return self.fail_opening(format!("{e:#}")),
             }
         }
         let id = match id {
@@ -953,33 +1019,49 @@ impl Conn {
                 return 127;
             }
         };
+        let pid = child.id();
         if let Ok(mut p) = self.setup_pid.lock() {
-            *p = Some(child.id());
+            *p = Some(pid);
         }
-        let readers: Vec<_> = [child.stdout.take().map(|r| Box::new(r) as Box<dyn Read + Send>), child.stderr.take().map(|r| Box::new(r) as Box<dyn Read + Send>)]
-            .into_iter()
-            .flatten()
-            .map(|mut r| {
-                let me = self.clone();
-                std::thread::spawn(move || {
-                    let mut buf = [0u8; 4096];
-                    while let Ok(n) = r.read(&mut buf) {
-                        if n == 0 {
-                            break;
-                        }
+        // Output is shown until the command is done (and a moment after): whatever it left running
+        // in the background may hold the pipes open for good, and is read but no longer shown.
+        let shown = Arc::new(AtomicBool::new(true));
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let mut readers = 0;
+        for mut r in [child.stdout.take().map(|r| Box::new(r) as Box<dyn Read + Send>), child.stderr.take().map(|r| Box::new(r) as Box<dyn Read + Send>)].into_iter().flatten() {
+            readers += 1;
+            let (me, shown, done) = (self.clone(), shown.clone(), done_tx.clone());
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = r.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    if shown.load(Ordering::Relaxed) {
                         let _ = me.chat.lock().map(|mut c| c.setup_output(&String::from_utf8_lossy(&buf[..n])));
                         me.notify();
                     }
-                })
-            })
-            .collect();
-        let code = child.wait().map(|s| s.code().unwrap_or(1)).unwrap_or(1);
-        for r in readers {
-            let _ = r.join();
+                }
+                let _ = done.send(());
+            });
         }
-        if let Ok(mut p) = self.setup_pid.lock() {
-            *p = None;
+        // Exited but not yet reaped, so its pid (and group id) can't be someone else's while a stop
+        // may still signal it; the pid is cleared and the process reaped under the same lock.
+        super::agent::wait_exit_unreaped(pid as i32);
+        let code = {
+            let mut p = self.setup_pid.lock().ok();
+            if let Some(p) = p.as_deref_mut() {
+                *p = None;
+            }
+            child.wait().map(|s| s.code().unwrap_or(1)).unwrap_or(1)
+        };
+        let deadline = Instant::now() + SETUP_DRAIN;
+        for _ in 0..readers {
+            if done_rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).is_err() {
+                break;
+            }
         }
+        shown.store(false, Ordering::Relaxed);
         code
     }
 
@@ -1073,13 +1155,14 @@ impl Conn {
         }
         let shown = self.shown_fn();
         if let Ok(mut m) = self.model.lock() {
-            if let Ok(list) = &messages {
+            // Only a reply of the right shape replaces what is shown: anything else says nothing.
+            if let Some(list) = messages.as_ref().ok().filter(|l| l.is_array()) {
                 m.set_messages(list);
             }
-            if let Ok(st) = &status {
-                m.busy = st.get(id).and_then(|x| s(x, "type")).is_some_and(|t| t != "idle");
+            if let Some(busy) = status.as_ref().ok().and_then(|st| running_in(st, id)) {
+                m.busy = busy;
             }
-            if let Ok(list) = &asks {
+            if let Some(list) = asks.as_ref().ok().filter(|l| l.is_array()) {
                 let waiting: Vec<String> = list.as_array().into_iter().flatten().filter(|a| s(a, "sessionID").as_deref() == Some(id)).filter_map(|a| s(a, "id")).collect();
                 // Ones answered elsewhere (or while Retrace was away) are no longer waiting.
                 for a in m.asks.iter_mut() {
@@ -1343,11 +1426,9 @@ impl Conn {
         self.stopping.store(true, Ordering::Relaxed);
         // A message on its way out arrives before the stop does.
         drop(self.sending.lock());
-        if let Some(pid) = self.setup_pid.lock().ok().and_then(|p| *p) {
-            unsafe {
-                libc::killpg(pid as i32, libc::SIGKILL);
-            }
-        }
+        self.kill_setup();
+        // Sent, but not yet seen running: the turn may start after the abort lands.
+        let pending = self.phase.lock().is_ok_and(|p| p.sent);
         let id = self.phase.lock().ok().and_then(|p| p.session.clone());
         let ep = self.endpoint.lock().ok().and_then(|e| e.clone()).or_else(|| self.host.find());
         let (Some(id), Some(ep)) = (id, ep) else {
@@ -1357,9 +1438,10 @@ impl Conn {
         };
         // The server's own word: what Retrace has read of it may not be complete yet.
         // A status that can't be read counts as busy: better a needless stop than a missed one.
-        let remote_busy = ep.get(&format!("/session/status?{}", self.q())).map(|st| st.get(&id).is_some()).unwrap_or(true);
+        let remote_busy = ep.get(&format!("/session/status?{}", self.q())).ok().and_then(|st| running_in(&st, &id)).unwrap_or(true);
         if remote_busy || self.has_work() {
-            if let Err(e) = ep.call("POST", &format!("/session/{id}/abort?{}", self.q()), Some(json!({})), Duration::from_secs(5)) {
+            let abort = || ep.call("POST", &format!("/session/{id}/abort?{}", self.q()), Some(json!({})), Duration::from_secs(5));
+            if let Err(e) = abort() {
                 if ep.healthy() {
                     self.stopping.store(false, Ordering::Relaxed);
                     bail!(tr!("OpenCode 没有停下这一轮：{e:#}", "OpenCode didn't stop the turn: {e:#}"));
@@ -1369,16 +1451,27 @@ impl Conn {
                 return Ok(());
             }
             let deadline = Instant::now() + Duration::from_secs(5);
-            let busy = || ep.get(&format!("/session/status?{}", self.q())).map(|st| st.get(&id).is_some()).unwrap_or(true);
-            while busy() {
-                if Instant::now() > deadline {
-                    if !ep.healthy() {
-                        // The server went away meanwhile, and its turn with it.
-                        self.detached.store(true, Ordering::Relaxed);
-                        return Ok(());
+            let busy = || ep.get(&format!("/session/status?{}", self.q())).ok().and_then(|st| running_in(&st, &id)).unwrap_or(true);
+            // Stopped means quiet: at once, or for a moment when a message was just sent (and a
+            // turn that starts in that moment is stopped too).
+            let quiet_for = if pending { STOP_SETTLE } else { Duration::ZERO };
+            let mut quiet_since: Option<Instant> = None;
+            loop {
+                if busy() {
+                    if quiet_since.take().is_some() {
+                        let _ = abort();
                     }
-                    self.stopping.store(false, Ordering::Relaxed);
-                    bail!(tr!("OpenCode 5 秒内没有停下这一轮", "OpenCode didn't stop the turn within 5 seconds"));
+                    if Instant::now() > deadline {
+                        if !ep.healthy() {
+                            // The server went away meanwhile, and its turn with it.
+                            self.detached.store(true, Ordering::Relaxed);
+                            return Ok(());
+                        }
+                        self.stopping.store(false, Ordering::Relaxed);
+                        bail!(tr!("OpenCode 5 秒内没有停下这一轮", "OpenCode didn't stop the turn within 5 seconds"));
+                    }
+                } else if quiet_since.get_or_insert_with(Instant::now).elapsed() >= quiet_for || Instant::now() > deadline {
+                    break;
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -1397,12 +1490,20 @@ impl Conn {
     pub fn detach(&self) {
         self.leaving.store(true, Ordering::Relaxed);
         drop(self.sending.lock());
-        if let Some(pid) = self.setup_pid.lock().ok().and_then(|p| *p) {
-            unsafe {
-                libc::killpg(pid as i32, libc::SIGKILL);
+        self.kill_setup();
+        self.detached.store(true, Ordering::Relaxed);
+    }
+
+    /// The setup command and what it started. Under the lock that clears its pid once it has
+    /// exited: never a group id that may be someone else's by now.
+    fn kill_setup(&self) {
+        if let Ok(p) = self.setup_pid.lock() {
+            if let Some(pid) = *p {
+                unsafe {
+                    libc::killpg(pid as i32, libc::SIGKILL);
+                }
             }
         }
-        self.detached.store(true, Ordering::Relaxed);
     }
 
     /// A turn in progress or a permission waiting: something to come back to.
@@ -1454,11 +1555,12 @@ impl Conn {
         Live { state, detail, worked: p.worked, since: self.started, at }
     }
 
-    /// The conversation is still there on the server (it can be picked up again).
+    /// The conversation is still there on the server (it can be picked up again): anything but
+    /// OpenCode saying it doesn't know it.
     pub fn exists(ep: &Endpoint, cwd: &Path, id: &str) -> bool {
         match ep.get(&format!("/session/{id}?directory={}", enc(&cwd.to_string_lossy()))) {
             Ok(_) => true,
-            Err(e) => status_of(&e).is_none(),
+            Err(e) => status_of(&e) != Some(404),
         }
     }
 }
