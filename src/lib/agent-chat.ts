@@ -91,6 +91,25 @@ export function splitTurns(items: AgentItem[]): { setup: SetupItem | null; turns
   return { setup, turns }
 }
 
+const sameList = <T>(a: T[], b: T[], same: (x: T, y: T) => boolean) => a.length === b.length && a.every((x, i) => same(x, b[i]))
+
+/**
+ * Two cuts of a turn that show the same thing. `splitTurns` makes new turns every time; the records
+ * in them are replaced only when they change (`mergeItems`), so steps compare as the same objects.
+ */
+export function sameTurn(a: Turn, b: Turn): boolean {
+  return (
+    a === b ||
+    (a.key === b.key &&
+      a.user === b.user &&
+      a.answer === b.answer &&
+      a.end === b.end &&
+      sameList(a.steps, b.steps, (x, y) => x === y) &&
+      sameList(a.errors, b.errors, (x, y) => x === y) &&
+      sameList(a.changes, b.changes, (x, y) => x.path === y.path && x.added === y.added && x.removed === y.removed))
+  )
+}
+
 export interface StepCounts {
   read: number
   edit: number

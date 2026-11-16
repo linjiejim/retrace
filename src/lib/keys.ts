@@ -6,3 +6,12 @@ export const keyNav: {
   enterChanges?: () => void
   focusSearch?: () => void
 } = {}
+
+/**
+ * The key belongs to an input method (Enter picks a candidate, Esc drops what is being composed).
+ * WebKit ends the composition before that keydown, so `isComposing` is already false then; the
+ * key code 229 still says so.
+ */
+export function isImeKey(e: Pick<KeyboardEvent, "isComposing" | "keyCode">): boolean {
+  return e.isComposing || e.keyCode === 229
+}

@@ -3,8 +3,10 @@ import { useQueryClient } from "@tanstack/react-query"
 import { GitBranch, History, MessageSquare, RotateCcw, SendHorizontal, Square, X } from "lucide-react"
 import { onAgentChanged } from "@/lib/api"
 import { agentState, canResume, isSaved, resumesDirectly, sessionLabel } from "@/lib/agent-state"
+import { drafts } from "@/lib/drafts"
 import { t } from "@/lib/i18n"
 import { keepChats } from "@/lib/agent-chat"
+import { isImeKey } from "@/lib/keys"
 import { prefs, ui, useStore } from "@/lib/store"
 import { attachTerminal, ensureTerminal, keepTerminals, sendMessage } from "@/lib/terminals"
 import type { AgentKind, AgentSession } from "@/lib/types"
@@ -49,7 +51,8 @@ function TerminalHost({ id }: { id: string }) {
 }
 
 function MessageBox({ id, agent, disabled }: { id: string; agent: string; disabled: boolean }) {
-  const [text, setText] = useState("")
+  // Kept per session while unsent: closing the drawer or showing another session doesn't lose it.
+  const [text, setText] = useState(() => drafts.get(id))
   const [sending, setSending] = useState(false)
   const send = async () => {
     const body = text.trim()
@@ -58,6 +61,7 @@ function MessageBox({ id, agent, disabled }: { id: string; agent: string; disabl
     try {
       await sendMessage(id, body)
       setText("")
+      drafts.clear(id)
     } catch (e) {
       notify.error(t("Couldn't send the message: {reason}", { reason: message(e) }))
     } finally {
@@ -74,10 +78,13 @@ function MessageBox({ id, agent, disabled }: { id: string; agent: string; disabl
     >
       <Textarea
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => {
+          setText(e.target.value)
+          drafts.set(id, e.target.value)
+        }}
         onKeyDown={(e) => {
           // Enter while an input method is composing picks a candidate; it doesn't send.
-          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+          if (e.key === "Enter" && !e.shiftKey && !isImeKey(e.nativeEvent)) {
             e.preventDefault()
             void send()
           }
@@ -143,7 +150,9 @@ export function AgentDrawer() {
   const sessions = useAgentSessions()
   const kinds = useAgentKinds().data
   const s = sessions.data?.find((x) => x.id === id) ?? null
-  const now = useNow(open && !!s?.running)
+  // Only a terminal's state depends on the time (quiet for a while = waiting); a conversation
+  // reports its own (`live`), so it doesn't re-render the whole drawer every second.
+  const now = useNow(open && !!s?.running && !s.live)
   if (!open) return null
   const label = s ? sessionLabel(s, kinds, fallbackLabel) : ""
   const agentName = s ? (kinds?.find((k) => k.id === s.agent)?.name ?? s.agent) : ""
@@ -224,7 +233,7 @@ export function AgentDrawer() {
 
 /** A session from before Retrace was restarted: its process is gone, its conversation isn't. */
 function SavedSession({ session: s, label, kinds }: { session: AgentSession; label: string; kinds: AgentKind[] | undefined }) {
-  const { resume, element } = useSessionActions(s, label)
+  const { resume, resuming, element } = useSessionActions(s, label)
   return (
     <>
       <StateView
@@ -234,7 +243,7 @@ function SavedSession({ session: s, label, kinds }: { session: AgentSession; lab
         title={t("Session saved")}
         description={resumeHint(s, kinds)}
         action={
-          <Button variant="primary" size="sm" onClick={() => void resume()}>
+          <Button variant="primary" size="sm" loading={resuming} onClick={() => void resume()}>
             {resumesDirectly(s, kinds) ? t("Resume Session") : t("Resume Session…")}
           </Button>
         }
@@ -245,11 +254,11 @@ function SavedSession({ session: s, label, kinds }: { session: AgentSession; lab
 }
 
 function SessionButtons({ session: s, label, kinds }: { session: AgentSession; label: string; kinds: AgentKind[] | undefined }) {
-  const { stop, resume, element } = useSessionActions(s, label)
+  const { stop, resume, resuming, element } = useSessionActions(s, label)
   return (
     <>
       {canResume(s) && (
-        <IconButton label={resumesDirectly(s, kinds) ? t("Resume Session") : t("Resume Session…")} size="icon-sm" onClick={() => void resume()}>
+        <IconButton label={resumesDirectly(s, kinds) ? t("Resume Session") : t("Resume Session…")} size="icon-sm" loading={resuming} onClick={() => void resume()}>
           <RotateCcw />
         </IconButton>
       )}

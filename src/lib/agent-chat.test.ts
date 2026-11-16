@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compactNumber, countSteps, currentStep, mergeItems, rememberedOptions, splitTurns, waitingAsks } from "./agent-chat"
+import { compactNumber, countSteps, currentStep, mergeItems, rememberedOptions, sameTurn, splitTurns, waitingAsks } from "./agent-chat"
 import type { AgentItem, AgentItemBody } from "./types"
 
 /** Records numbered in order, like the backend's. */
@@ -104,6 +104,26 @@ describe("syncing a conversation", () => {
     ])
     // Nothing new: the same list, so nothing re-renders.
     expect(mergeItems(have, [])).toBe(have)
+  })
+
+  it("knows which turns a new record left as they were, though every turn is cut anew", () => {
+    const have = items(
+      { kind: "user", text: "add divide" },
+      tool("edit", { paths: ["cart.js"], diffs: [{ path: "cart.js", added: 2, removed: 0 }] }),
+      { kind: "message", text: "Added `divide`." },
+      { kind: "end", reason: "end_turn" },
+      { kind: "user", text: "and modulo" },
+      tool("read", { paths: ["cart.js"], status: "in_progress" }),
+    )
+    const before = splitTurns(have).turns
+    // The read finishes and the agent starts answering.
+    const after = splitTurns(mergeItems(have, [{ id: 6, rev: 7, ...tool("read", { paths: ["cart.js"] }) } as AgentItem, { id: 7, rev: 8, kind: "message", text: "Reading" }])).turns
+    expect(after[0]).not.toBe(before[0])
+    expect(sameTurn(before[0], after[0])).toBe(true)
+    expect(sameTurn(before[1], after[1])).toBe(false)
+    // More of the answer streams in: only the text differs.
+    const later = splitTurns(mergeItems(have, [{ id: 6, rev: 7, ...tool("read", { paths: ["cart.js"] }) } as AgentItem, { id: 7, rev: 9, kind: "message", text: "Reading it all" }])).turns
+    expect(sameTurn(after[1], later[1])).toBe(false)
   })
 
   it("finds the permissions still waiting", () => {

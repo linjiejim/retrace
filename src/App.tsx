@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { inTauri, onAppFocused, onRepoChanged, watchProject } from "@/lib/api"
 import { addPaths, closeDiff, run, selectProject } from "@/lib/commands"
-import { keyNav } from "@/lib/keys"
+import { isImeKey, keyNav } from "@/lib/keys"
 import type { Node, PanelId } from "@/lib/layout"
 import { installMenu } from "@/lib/menu"
 import { prefs, ui, useStore } from "@/lib/store"
@@ -110,13 +110,15 @@ export default function App() {
       // An agent terminal gets every key, Esc included (it interrupts the agent); ⌘ keys still reach the menu.
       if (e.target instanceof HTMLElement && e.target.closest(".xterm")) return
       const typing = e.target instanceof HTMLElement && e.target.closest("input, textarea, [contenteditable]")
+      const inDrawer = e.target instanceof HTMLElement && !!e.target.closest("[data-agent-drawer]")
       const s = ui.get()
       if (e.key === "Escape") {
+        // Already used: a confirm, menu or popover closed itself with it.
+        if (e.defaultPrevented) return
         // An input method uses Esc to cancel what it is composing.
-        if (e.isComposing) return
-        const inDrawer = e.target instanceof HTMLElement && !!e.target.closest("[data-agent-drawer]")
+        if (isImeKey(e)) return
         if (typing && !inDrawer) return (e.target as HTMLElement).blur()
-        if (document.querySelector("[role=dialog], [data-radix-popper-content-wrapper]")) return
+        if (document.querySelector("[role=dialog], [role=alertdialog], [data-radix-popper-content-wrapper]")) return
         // The drawer floats over everything else: it is the first layer Esc takes away.
         if (s.agentOpen) return ui.set({ agentOpen: false })
         if (s.focusMode) return ui.set({ focusMode: false })
@@ -124,14 +126,15 @@ export default function App() {
         if (s.query) return ui.set({ query: "" })
         return
       }
-      if (typing || document.querySelector("[role=dialog]")) return
+      if (typing || document.querySelector("[role=dialog], [role=alertdialog]")) return
       const mod = e.metaKey || e.ctrlKey
       const command = mod && !e.shiftKey && !e.altKey ? MOD[e.key.toLowerCase()] : undefined
       if (command) {
         e.preventDefault()
         return run(command)
       }
-      if (mod || e.altKey) return
+      // The drawer's own buttons take the rest (Enter on "Allow Once"); the graph behind it doesn't move.
+      if (mod || e.altKey || inDrawer) return
       if (e.key.toLowerCase() === "f") return run("toggleFocus")
       const dir = e.key === "ArrowDown" || e.key === "j" ? 1 : e.key === "ArrowUp" || e.key === "k" ? -1 : 0
       if (dir) {

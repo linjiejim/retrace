@@ -48,14 +48,14 @@ export function targetOf(sel: Selection | null, tab: Tab | undefined, trunk: Tru
   return trunk && tab.head ? { kind: "compare", base: trunk.tip, tip: tab.head } : null
 }
 
+/** A file asked for along with a tab switch is honoured this long; after that the tab is just a tab. */
+const WANTED_MS = 5000
+
 /**
  * Default selection for a tab: uncommitted work if any, a pull request's whole change, else the
  * tab's HEAD. Lives at the app level because any view can be hidden or moved. Worktree tabs wait
  * for their own status entry, pull request tabs for their commits.
  */
-/** A file asked for along with a tab switch is honoured this long; after that the tab is just a tab. */
-const WANTED_MS = 5000
-
 export function useDefaultSelection() {
   const { projectId, tab, statuses, dirtyFiles, showCompare } = useProjectView()
   const selection = useStore(ui, (s) => s.selection)

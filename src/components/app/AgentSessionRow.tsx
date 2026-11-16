@@ -4,7 +4,7 @@ import { api } from "@/lib/api"
 import { agentState, canResume, resumesDirectly, sessionLabel, short, STATE_LABEL, stateDetail, type AgentState } from "@/lib/agent-state"
 import { openSession } from "@/lib/commands"
 import { t } from "@/lib/i18n"
-import { prefs, ui, useStore } from "@/lib/store"
+import { createStore, prefs, ui, useStore } from "@/lib/store"
 import type { AgentKind, AgentSession } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { Spinner } from "@/components/ui/spinner"
@@ -39,10 +39,17 @@ export function AgentStateIcon({ state, className }: { state: AgentState; classN
 
 export const fallbackLabel = (name: string) => t("{agent} session", { agent: name })
 
+/**
+ * Sessions being resumed. Resuming replaces the session with a new one, so a second click would find
+ * it gone: every Resume button and menu item of the session waits until the first one is done.
+ */
+const resumingSessions = createStore<{ ids: string[] }>({ ids: [] })
+
 /** Stop and close, asking first when it would end a running agent. */
 export function useSessionActions(s: AgentSession, label: string) {
   const qc = useQueryClient()
   const { confirm, element } = useConfirm()
+  const resuming = useStore(resumingSessions, (r) => r.ids.includes(s.id))
   const refresh = () => qc.invalidateQueries({ queryKey: ["agents"] })
   const stop = () =>
     void confirm({
@@ -72,15 +79,19 @@ export function useSessionActions(s: AgentSession, label: string) {
     })
   }
   const resume = async () => {
+    if (resumingSessions.get().ids.includes(s.id)) return
+    resumingSessions.set((r) => ({ ids: [...r.ids, s.id] }))
     try {
       const resumed = await api.agentResume(s.id, prefs.get().agentOptions[s.agent] ?? null)
       await refresh()
       openSession(resumed)
     } catch (e) {
       notify.error(t("Couldn't resume the session: {reason}", { reason: message(e) }))
+    } finally {
+      resumingSessions.set((r) => ({ ids: r.ids.filter((id) => id !== s.id) }))
     }
   }
-  return { stop, close, resume, element }
+  return { stop, close, resume, resuming, element }
 }
 
 /**
@@ -92,7 +103,7 @@ export function AgentSessionRow({ session: s, kinds, now, guide, indent, last }:
   const label = sessionLabel(s, kinds, fallbackLabel)
   const agentName = kinds?.find((k) => k.id === s.agent)?.name ?? s.agent
   const selected = useStore(ui, (u) => u.agentOpen && u.agentSession === s.id)
-  const { stop, close, resume, element } = useSessionActions(s, label)
+  const { stop, close, resume, resuming, element } = useSessionActions(s, label)
   const open = (how: "finder" | "terminal" | "editor") => api.open(s.project, s.tree, how).catch((e) => notify.error(message(e)))
   const detail = stateDetail(s, state)
   const tip = [s.task.trim() || label, `${t(STATE_LABEL[state])}${detail ? `: ${detail}` : ""}${s.exitCode !== null && s.exitCode !== 0 && !s.stopped ? ` (${t("exit code {code}", { code: s.exitCode })})` : ""}`, [agentName, s.branch].filter(Boolean).join(" · ")]
@@ -115,8 +126,8 @@ export function AgentSessionRow({ session: s, kinds, now, guide, indent, last }:
       </Item>
       <Separator />
       {canResume(s) && (
-        <Item onSelect={() => void resume()}>
-          <RotateCcw />
+        <Item disabled={resuming} onSelect={() => void resume()}>
+          {resuming ? <Spinner /> : <RotateCcw />}
           {resumesDirectly(s, kinds) ? t("Resume Session") : t("Resume Session…")}
         </Item>
       )}

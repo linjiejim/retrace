@@ -75,9 +75,11 @@ export function ProjectsPanel() {
   const sessions = useMemo(() => sessionsByProject(sessionList), [sessionList])
   const kinds = useAgentKinds().data
   const canStartAgents = useInstalledAgents().length > 0
-  const now = useNow(!!sessionList?.some((x) => x.running))
-  // The same queries each project row reads: shared, so this costs nothing extra.
-  const summaries = useQueries({ queries: all.map((p) => summaryQuery(p.id)) })
+  // Only a terminal session's state depends on the time (a conversation reports its own).
+  const now = useNow(!!sessionList?.some((x) => x.running && !x.live))
+  // Only while "Has changes" filters the list: it needs every project's summary, which runs git
+  // status in each of its worktrees. Otherwise only the rows on screen read theirs.
+  const summaries = useQueries({ queries: only.changes ? all.map((p) => summaryQuery(p.id)) : [] })
   const dirty = useMemo(() => new Set(all.filter((_, i) => !!summaries[i]?.data?.dirtyTrees).map((p) => p.id)), [all, summaries])
   const narrowed = !!filter || only.running || only.changes
   const rows: Row[] = useMemo(() => {

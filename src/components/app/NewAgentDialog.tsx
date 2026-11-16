@@ -5,6 +5,7 @@ import { defaultBranch, worktreePath } from "@/lib/agent-state"
 import { openSession } from "@/lib/commands"
 import { tildify } from "@/lib/format"
 import { t } from "@/lib/i18n"
+import { isImeKey } from "@/lib/keys"
 import { prefs, ui, useStore } from "@/lib/store"
 import { ensureTerminal, START_COLS, START_ROWS } from "@/lib/terminals"
 import type { AgentSession } from "@/lib/types"
@@ -111,8 +112,9 @@ export function NewAgentDialog() {
   const options = installed.map((k) => ({ value: k.id, label: k.name }))
   const newTree = where === "new"
 
+  // While it starts, Esc, ✕ and a click outside don't close it either: a failure is reported in it.
   return (
-    <Dialog open={!!req} onOpenChange={(o) => !o && close()} dirty={!!task.trim() && !pending}>
+    <Dialog open={!!req} onOpenChange={(o) => !o && !pending && close()} dirty={!!task.trim() && !pending}>
       <DialogContent size="md">
         <DialogHeader title={t("New Agent Session")} description={project?.name} />
         {installed.length === 0 ? (
@@ -129,7 +131,7 @@ export function NewAgentDialog() {
                   void start()
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !isImeKey(e.nativeEvent)) {
                     e.preventDefault()
                     void start()
                   }

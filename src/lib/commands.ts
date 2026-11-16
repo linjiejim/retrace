@@ -105,11 +105,17 @@ export function openSession(s: AgentSession) {
  * A file an agent changed, in Retrace's own diff: its worktree's uncommitted changes, or, when
  * the agent has committed it already, everything on the branch since the trunk.
  */
-export async function openSessionFile(s: AgentSession, path: string) {
+export async function openSessionFile(s: Pick<AgentSession, "project" | "tree">, path: string) {
   if (ui.get().projectId !== s.project) selectProject(s.project)
   const target = { kind: "worktree" as const, tree: s.tree }
-  // Fresh: the agent has just written it.
-  const pending = await queryClient.fetchQuery({ queryKey: ["changes", s.project, targetKey(target)], queryFn: () => api.changes(s.project, target), staleTime: 0 }).catch(() => [])
+  // Fresh: the agent has just written it. The worktree's status and HEAD too: the tab's default
+  // selection (`useDefaultSelection`) judges the file's selection by them, and with figures from
+  // before the change it would take it for stale and put the tab's HEAD commit in its place.
+  const [pending] = await Promise.all([
+    queryClient.fetchQuery({ queryKey: ["changes", s.project, targetKey(target)], queryFn: () => api.changes(s.project, target), staleTime: 0 }).catch(() => []),
+    queryClient.fetchQuery({ queryKey: ["statuses", s.project], queryFn: () => api.treeStatuses(s.project), staleTime: 0 }).catch(() => null),
+    queryClient.fetchQuery({ queryKey: ["overview", s.project], queryFn: () => api.overview(s.project), staleTime: 0 }).catch(() => null),
+  ])
   const selection: Selection = pending.some((f) => f.path === path) ? { kind: "worktree" } : { kind: "compare" }
   const file = { path, oldPath: null }
   // The diff, not the files browser (which previews a file instead of showing its change).
@@ -210,6 +216,8 @@ async function refresh() {
 export const commands = {
   settings: () => ui.set({ settingsOpen: true }),
   newAgent: () => {
+    // Already open (⌘N again, from the menu): a new request would clear what is typed in it.
+    if (ui.get().newAgent) return
     const id = ui.get().projectId
     if (!id) return notify.info(t("Pick a project first"))
     ui.set({ newAgent: { projectId: id } })

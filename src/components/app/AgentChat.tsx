@@ -2,13 +2,15 @@
 // it answered, what it changed. The steps in between fold into one line; a permission it needs
 // is a card above the message box. The agent itself is the program installed on this machine.
 
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { ArrowUp, Check, ChevronDown, ChevronRight, CircleHelp, FilePen, FileText, Globe, ListChecks, Search, Square, SquareTerminal, Wrench, X } from "lucide-react"
 import { api } from "@/lib/api"
-import { compactNumber, countSteps, currentStep, rememberedOptions, splitTurns, useChat, waitingAsks, pullChat, type AskItem, type SetupItem, type Step, type StepCounts, type ToolItem, type Turn } from "@/lib/agent-chat"
+import { compactNumber, countSteps, currentStep, rememberedOptions, sameTurn, splitTurns, useChat, waitingAsks, pullChat, type AskItem, type SetupItem, type Step, type StepCounts, type ToolItem, type Turn } from "@/lib/agent-chat"
 import { openSessionFile } from "@/lib/commands"
+import { drafts } from "@/lib/drafts"
 import { t, tp } from "@/lib/i18n"
+import { isImeKey } from "@/lib/keys"
 import { prefs } from "@/lib/store"
 import type { AgentAskOption, AgentOption, AgentSession } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -97,16 +99,29 @@ export function AgentChat({ session: s, agentName }: { session: AgentSession; ag
 
 // ---------- a turn ----------
 
-function TurnView({ turn, running, session, onRetry }: { turn: Turn; running: boolean; session: AgentSession; onRetry?: () => void }) {
+interface TurnProps {
+  turn: Turn
+  running: boolean
+  session: Pick<AgentSession, "project" | "tree">
+  onRetry?: () => void
+}
+
+function TurnContent({ turn, running, session, onRetry }: TurnProps) {
+  // The Markdown is the costly part: rendered again only when the answer itself changes.
+  const answer = useMemo(
+    () =>
+      turn.answer ? (
+        <Suspense fallback={<p className="whitespace-pre-wrap text-body">{turn.answer}</p>}>
+          <Markdown text={turn.answer} path="" projectId={session.project} target={{ kind: "worktree", tree: session.tree }} compact />
+        </Suspense>
+      ) : null,
+    [turn.answer, session.project, session.tree],
+  )
   return (
     <section className="flex flex-col gap-2.5">
       {turn.user !== null && <p className="self-end whitespace-pre-wrap break-words rounded-lg bg-muted px-3 py-2 text-body max-w-[88%]">{turn.user}</p>}
       {(turn.steps.length > 0 || running) && <Steps turn={turn} running={running} />}
-      {turn.answer && (
-        <Suspense fallback={<p className="whitespace-pre-wrap text-body">{turn.answer}</p>}>
-          <Markdown text={turn.answer} path="" projectId={session.project} target={{ kind: "worktree", tree: session.tree }} compact />
-        </Suspense>
-      )}
+      {answer}
       {turn.changes.length > 0 && (
         <ul aria-label={t("Files changed in this turn")} className="flex flex-wrap gap-1.5">
           {turn.changes.map((c) => (
@@ -143,6 +158,16 @@ function TurnView({ turn, running, session, onRetry }: { turn: Turn; running: bo
     </section>
   )
 }
+
+/**
+ * Earlier turns stay as they are while the agent works on the last one, so they skip re-rendering.
+ * Compared by what they show, since every update cuts the turns anew; a turn offering Retry
+ * always renders (its callback is new each time).
+ */
+const TurnView = memo(
+  TurnContent,
+  (a, b) => !a.onRetry && !b.onRetry && a.running === b.running && a.session.project === b.session.project && a.session.tree === b.session.tree && sameTurn(a.turn, b.turn),
+)
 
 /** How a turn ended, when that needs saying. */
 function endNote(turn: Turn): string | null {
@@ -407,7 +432,8 @@ function Composer({
   usage: { used: number; size: number } | null
   onSend: (text: string) => Promise<void>
 }) {
-  const [text, setText] = useState("")
+  // Kept per session while unsent: closing the drawer or showing another session doesn't lose it.
+  const [text, setText] = useState(() => drafts.get(s.id))
   const [sending, setSending] = useState(false)
   const send = async () => {
     const body = text.trim()
@@ -416,6 +442,7 @@ function Composer({
     try {
       await onSend(body)
       setText("")
+      drafts.clear(s.id)
     } catch (e) {
       notify.error(t("Couldn't send the message: {reason}", { reason: message(e) }))
     } finally {
@@ -446,10 +473,13 @@ function Composer({
         <Textarea
           autoFocus
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value)
+            drafts.set(s.id, e.target.value)
+          }}
           onKeyDown={(e) => {
             // Enter while an input method is composing picks a candidate; it doesn't send.
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            if (e.key === "Enter" && !e.shiftKey && !isImeKey(e.nativeEvent)) {
               e.preventDefault()
               void send()
             }
@@ -502,7 +532,7 @@ function OptionPicker({ option, disabled, onPick }: { option: AgentOption; disab
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault()
       setActive((a) => Math.max(0, Math.min(shown.length - 1, a + (e.key === "ArrowDown" ? 1 : -1))))
-    } else if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+    } else if (e.key === "Enter" && !isImeKey(e.nativeEvent)) {
       e.preventDefault()
       const pick = shown[active]
       if (pick) choose(pick.value)
