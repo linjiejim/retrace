@@ -39,7 +39,7 @@ export function GraphPanel() {
     <section className="flex h-full min-w-0 flex-col">
       <PanelHeader className="gap-0.5">
         {collapsed && (
-          <IconButton label={`${t("Show projects")}  ⌘\\`} size="icon-sm" onClick={() => run("toggleProjects")}>
+          <IconButton label={t("Show projects")} tooltip={`${t("Show projects")}  ⌘\\`} size="icon-sm" onClick={() => run("toggleProjects")}>
             <PanelLeftOpen />
           </IconButton>
         )}
@@ -438,7 +438,12 @@ function GraphTools({ view }: { view: View }) {
         </Tooltip>
       </div>
       <GraphOptions view={view} />
-      <IconButton label={fetching ? t("Fetching from the remote") : `${t("Refresh and fetch")}  ⌘R`} size="icon-sm" onClick={() => run("refresh")}>
+      <IconButton
+        label={fetching ? t("Fetching from the remote") : t("Refresh and fetch")}
+        tooltip={fetching ? true : `${t("Refresh and fetch")}  ⌘R`}
+        size="icon-sm"
+        onClick={() => run("refresh")}
+      >
         <RefreshCw className={cn(fetching && "animate-spin")} />
       </IconButton>
     </>

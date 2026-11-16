@@ -11,6 +11,7 @@ import type { useProjectView } from "@/hooks/use-project-view"
 import { Button, IconButton } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
+import { Info } from "@/components/ui/info"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
@@ -408,22 +409,24 @@ export function ArchiveMenu({
           <div className="flex items-center gap-3 border-t px-3 py-2.5">
             <div className="flex flex-1 flex-col gap-2">
               {archived.length > 0 && (
-                <label className="flex items-center gap-2 text-small text-muted-foreground">
-                  <Switch checked={deleteBranch} onCheckedChange={setDeleteBranch} disabled={running} />
-                  <Tooltip content={t("Each branch goes only if it still points at the worktree's commit; branches you keep and long-lived ones like develop stay")}>
-                    <span>{t("Also delete the worktrees' branches")}</span>
-                  </Tooltip>
-                </label>
+                <div className="flex items-center gap-1">
+                  <label className="flex items-center gap-2 text-small text-muted-foreground">
+                    <Switch checked={deleteBranch} onCheckedChange={setDeleteBranch} disabled={running} />
+                    {t("Also delete the worktrees' branches")}
+                  </label>
+                  <Info>{t("Each branch goes only if it still points at the worktree's commit; branches you keep and long-lived ones like develop stay")}</Info>
+                </div>
               )}
               {treesOnOrigin + branchesOnOrigin > 0 && (
-                <label className="flex items-center gap-2 text-small text-muted-foreground">
-                  <Switch checked={remote} onCheckedChange={setDeleteRemote} disabled={running || !remoteUsable} />
-                  <Tooltip
-                    content={t("Only a deleted branch's own copy, while origin still has it where the last fetch saw it and its commits are in {trunk}. Undo can't bring it back.", { trunk: trunkName })}
-                  >
-                    <span>{t("Also delete the branches on origin")}</span>
-                  </Tooltip>
-                </label>
+                <div className="flex items-center gap-1">
+                  <label className="flex items-center gap-2 text-small text-muted-foreground">
+                    <Switch checked={remote} onCheckedChange={setDeleteRemote} disabled={running || !remoteUsable} />
+                    {t("Also delete the branches on origin")}
+                  </label>
+                  <Info>
+                    {t("Only a deleted branch's own copy, while origin still has it where the last fetch saw it and its commits are in {trunk}. Undo can't bring it back.", { trunk: trunkName })}
+                  </Info>
+                </div>
               )}
             </div>
             {candidates.isFetching && !candidates.data ? (

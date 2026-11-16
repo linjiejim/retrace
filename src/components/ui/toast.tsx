@@ -1,3 +1,5 @@
+"use client"
+
 import * as React from "react"
 import { Toaster as Sonner, toast } from "sonner"
 import { CircleAlert, CircleCheck, Info, TriangleAlert, X } from "lucide-react"
@@ -18,8 +20,10 @@ import { Spinner } from "@/components/ui/spinner"
  *              big export). Dismiss it by id when done, then report the
  *              result as usual. Waits on the page use Skeleton or Spinner.
  *   - never toast and dialog for the same event
- * Top centre, stacked (newest in front, expands on hover); phones: top,
- * full width, below the safe area. Max 3 visible.
+ * Top right, stacked (newest in front, expands on hover); phones: top,
+ * full width, below the safe area. Max 3 visible. Every toast but loading
+ * has ✕ in its top-right corner: the corner is where page and drawer headers
+ * keep their actions, so a toast must be quick to clear.
  *
  * Level shows quietly: a raised surface, the icon carries the status colour;
  * only errors (which stay) add a faint red tint.
@@ -27,20 +31,24 @@ import { Spinner } from "@/components/ui/spinner"
 export function Toaster(props: React.ComponentProps<typeof Sonner>) {
   return (
     <Sonner
-      position="top-center"
+      position="top-right"
       visibleToasts={3}
       gap={8}
       offset={16}
       mobileOffset={{ top: "max(12px, env(safe-area-inset-top))", left: 12, right: 12 }}
+      closeButton
+      containerAriaLabel={s().notifications}
       toastOptions={{
         unstyled: true,
+        closeButtonAriaLabel: s().close,
         classNames: {
+          // the error tint rides on data-type: as a plain class in `error` it loses to bg-popover
           toast:
-            "group pointer-events-auto flex w-full items-center gap-3 rounded-lg bg-popover px-4 py-3 text-body text-foreground shadow-overlay sm:w-[360px]",
+            "group pointer-events-auto flex w-full items-center gap-3 rounded-lg bg-popover px-4 py-3 text-body text-foreground shadow-overlay data-[type=error]:bg-destructive-subtle sm:w-[360px]",
           success: "[&_[data-icon]]:text-success",
           info: "[&_[data-icon]]:text-info",
           warning: "[&_[data-icon]]:text-warning",
-          error: "bg-destructive-subtle [&_[data-icon]]:text-destructive",
+          error: "[&_[data-icon]]:text-destructive",
           content: "min-w-0 flex-1",
           title: "font-normal",
           description: "text-small text-muted-foreground",
@@ -49,8 +57,9 @@ export function Toaster(props: React.ComponentProps<typeof Sonner>) {
           actionButton:
             "shrink-0 rounded-sm px-2 py-0.5 font-medium text-foreground underline-offset-4 hover:underline",
           cancelButton: "shrink-0 rounded-sm px-2 py-0.5 text-muted-foreground hover:text-foreground",
+          // top-right corner: last in the row, pinned to the first line; 44px to a finger
           closeButton:
-            "order-last! static! translate-none! shrink-0 rounded-sm border-0! bg-transparent! text-muted-foreground! hover:text-foreground! [&_svg]:size-4",
+            "relative order-last -my-px -mr-1.5 flex size-6 shrink-0 items-center justify-center self-start rounded-sm border-0! bg-transparent! text-muted-foreground! hover:bg-accent! hover:text-foreground! after:absolute pointer-coarse:after:-inset-2.5 [&_svg]:size-4",
         },
       }}
       icons={{

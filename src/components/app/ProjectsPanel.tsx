@@ -265,7 +265,7 @@ export function ProjectsPanel() {
         <IconButton label={t("Add a repository, or a folder of repositories")} size="icon-sm" onClick={startAdd}>
           <Plus />
         </IconButton>
-        <IconButton label={`${t("Hide projects")}  ⌘\\`} size="icon-sm" onClick={() => prefs.set({ projectsCollapsed: true })}>
+        <IconButton label={t("Hide projects")} tooltip={`${t("Hide projects")}  ⌘\\`} size="icon-sm" onClick={() => prefs.set({ projectsCollapsed: true })}>
           <PanelLeftClose />
         </IconButton>
       </PanelHeader>

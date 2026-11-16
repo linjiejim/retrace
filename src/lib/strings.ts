@@ -63,6 +63,10 @@ const zh = {
   uploadFailed: "失败",
   collapse: "收起",
   expand: "展开",
+  notifications: "通知",
+  copy: "复制",
+  copied: "已复制",
+  copyFailed: "复制失败",
 }
 
 export type Strings = typeof zh

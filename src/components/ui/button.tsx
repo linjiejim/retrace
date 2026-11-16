@@ -71,19 +71,30 @@ export function Button({ className, variant, size, asChild, loading, disabled, c
   )
 }
 
-/** Icon-only button. `label` is required: it is the accessible name and the tooltip. */
+/**
+ * Icon-only button. `label` is required: it is the accessible name and, by
+ * default, the tooltip. Pass `tooltip` text to say more than the name (one
+ * tooltip, never one wrapped in another), or `false` for none.
+ */
 export function IconButton({
   label,
   variant = "ghost",
   size = "icon",
   tooltip = true,
+  tooltipSide,
   ...props
 }: Omit<ButtonProps, "children" | "size"> & {
   label: string
   size?: "icon" | "icon-sm"
-  tooltip?: boolean
+  tooltip?: boolean | React.ReactNode
+  tooltipSide?: "top" | "right" | "bottom" | "left"
   children: React.ReactNode
 }) {
   const button = <Button aria-label={label} variant={variant} size={size} {...props} />
-  return tooltip ? <Tooltip content={label}>{button}</Tooltip> : button
+  if (tooltip === false) return button
+  return (
+    <Tooltip content={tooltip === true ? label : tooltip} side={tooltipSide}>
+      {button}
+    </Tooltip>
+  )
 }

@@ -61,4 +61,8 @@ export const kitEn: Strings = {
   uploadFailed: "Failed",
   collapse: "Collapse",
   expand: "Expand",
+  notifications: "Notifications",
+  copy: "Copy",
+  copied: "Copied",
+  copyFailed: "Couldn't copy",
 }
