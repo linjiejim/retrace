@@ -1,5 +1,3 @@
-"use client"
-
 import * as React from "react"
 import { Dialog as DialogPrimitive } from "radix-ui"
 import { ChevronLeft, X } from "lucide-react"
@@ -9,6 +7,7 @@ import { useGuardedOpen } from "@/hooks/use-guarded-open"
 import { IconButton } from "@/components/ui/button"
 import { DiscardDialog } from "@/components/ui/confirm-dialog"
 import { FieldControlProvider } from "@/components/ui/field"
+import { ResizeHandle } from "@/components/ui/resize-handle"
 
 /*
  * Side drawer from the right: view, edit (in place, see DetailList) and
@@ -193,14 +192,6 @@ function DockContent({
 }: React.ComponentProps<typeof DialogPrimitive.Content> & { storageKey?: string }) {
   const docked = useMinWidth(DOCK_MIN)
   const [width, setWidth, saveWidth] = useStoredWidth(storageKey)
-  const drag = React.useRef<{ x: number; w: number } | null>(null)
-
-  const resizeBy = (dx: number) =>
-    setWidth((w) => {
-      const next = clampWidth(w + dx)
-      saveWidth(next)
-      return next
-    })
 
   return (
     <DialogPrimitive.Content
@@ -232,35 +223,15 @@ function DockContent({
       )}
       {...props}
     >
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={s().resizePanel}
-        aria-valuemin={INSPECTOR_WIDTH.min}
-        aria-valuemax={INSPECTOR_WIDTH.max}
-        aria-valuenow={width}
-        tabIndex={0}
-        onPointerDown={(e) => {
-          e.currentTarget.setPointerCapture(e.pointerId)
-          drag.current = { x: e.clientX, w: width }
-        }}
-        onPointerMove={(e) => {
-          if (drag.current) setWidth(clampWidth(drag.current.w + drag.current.x - e.clientX))
-        }}
-        onPointerUp={() => {
-          if (drag.current) saveWidth(width)
-          drag.current = null
-        }}
-        onKeyDown={(e) => {
-          if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
-          e.preventDefault()
-          resizeBy(e.key === "ArrowLeft" ? 16 : -16)
-        }}
-        className={cn(
-          "absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none outline-none max-sm:hidden",
-          "after:absolute after:inset-y-0 after:left-[3px] after:w-0.5 after:transition-colors after:duration-(--duration-fast)",
-          "hover:after:bg-input focus-visible:after:bg-ring",
-        )}
+      <ResizeHandle
+        side="left"
+        value={width}
+        min={INSPECTOR_WIDTH.min}
+        max={INSPECTOR_WIDTH.max}
+        defaultValue={INSPECTOR_WIDTH.default}
+        onValueChange={setWidth}
+        onValueCommit={saveWidth}
+        className="max-sm:hidden"
       />
       {children}
     </DialogPrimitive.Content>

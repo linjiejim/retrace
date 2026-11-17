@@ -145,7 +145,22 @@ function loadPrefs(): Prefs {
 }
 
 export const prefs = createStore<Prefs>(loadPrefs())
-prefs.subscribe(() => localStorage.setItem(PREFS_KEY, JSON.stringify(prefs.get())))
+/** Every change is stored, except the ones made through `previewPrefs`. */
+export const savePrefs = () => localStorage.setItem(PREFS_KEY, JSON.stringify(prefs.get()))
+let previewing = false
+prefs.subscribe(() => {
+  if (!previewing) savePrefs()
+})
+
+/** Change the prefs on screen only (a divider mid-drag); `savePrefs()`, or the next `prefs.set`, stores them. */
+export function previewPrefs(patch: Partial<Prefs>) {
+  previewing = true
+  try {
+    prefs.set(patch)
+  } finally {
+    previewing = false
+  }
+}
 
 const LAST_PROJECT = "retrace.project"
 export const ui = createStore<UiState>({
