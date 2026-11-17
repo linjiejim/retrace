@@ -48,6 +48,9 @@ export function ResizeHandle({
   const clamp = (v: number) => Math.round(Math.min(max, Math.max(min, v)))
   const drag = React.useRef<{ at: number; from: number; now: number } | null>(null)
   const [dragging, setDragging] = React.useState(false)
+  // focus given by a press, not the keyboard: the browser calls it focus-visible, but the accent
+  // line would then stay lit after every drag. It shows again on the first key.
+  const [pressed, setPressed] = React.useState(false)
   // the page's cursor before a drag, put back however the drag ends (even by unmounting mid-drag)
   const pageCursor = React.useRef<string | null>(null)
   const restoreCursor = () => {
@@ -88,10 +91,13 @@ export function ResizeHandle({
       aria-valuenow={value}
       tabIndex={0}
       data-dragging={dragging || undefined}
+      data-pressed={pressed || undefined}
+      onBlur={() => setPressed(false)}
       onPointerDown={(e) => {
         if (e.button !== 0) return
         // take focus (so the arrow keys work next), but no text selection while dragging
         e.currentTarget.focus({ preventScroll: true })
+        setPressed(true)
         e.preventDefault()
         e.currentTarget.setPointerCapture(e.pointerId)
         drag.current = { at: vertical ? e.clientX : e.clientY, from: value, now: value }
@@ -114,6 +120,7 @@ export function ResizeHandle({
       onLostPointerCapture={end}
       onDoubleClick={defaultValue === undefined ? undefined : () => commit(defaultValue)}
       onKeyDown={(e) => {
+        setPressed(false)
         if (e.key === grow) commit(value + step)
         else if (e.key === shrink) commit(value - step)
         else if (e.key === "Home") commit(min)
@@ -129,7 +136,7 @@ export function ResizeHandle({
         { left: "-left-1", right: "-right-1", top: "-top-1", bottom: "-bottom-1" }[side],
         "after:absolute after:transition-colors after:duration-(--duration-fast)",
         vertical ? "after:inset-y-0 after:left-[3px] after:w-0.5" : "after:inset-x-0 after:top-[3px] after:h-0.5",
-        "hover:after:bg-input focus-visible:after:bg-ring data-dragging:after:bg-ring",
+        "hover:after:bg-input focus-visible:not-data-pressed:after:bg-ring data-dragging:after:bg-ring",
         className,
       )}
     />
