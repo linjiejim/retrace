@@ -1,9 +1,10 @@
-import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { GripVertical } from "lucide-react"
 import { edgesOf, minSize, movePanel, PANEL_TITLE, removePanel, resize, type Edges, type Node, type PanelId, type Side } from "@/lib/layout"
-import { createStore, prefs, useStore } from "@/lib/store"
+import { createStore, prefs, previewPrefs, savePrefs, useStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
 import { t } from "@/lib/i18n"
+import { ResizeHandle } from "@/components/ui/resize-handle"
 import { Tooltip } from "@/components/ui/tooltip"
 
 interface PanelInfo extends Edges {
@@ -142,9 +143,6 @@ function visible(node: Node, hidden: Set<PanelId>): boolean {
   return node.type === "panel" ? !hidden.has(node.id) : node.children.some((c) => visible(c.node, hidden))
 }
 
-/** Pixels per arrow key on a divider, the same step as the kit Drawer's resize handle. */
-const KEY_STEP = 16
-
 function Divider(props: { dir: "row" | "column"; path: number[]; a: number; b: number; mins: [number, number]; layout: Node; editable: boolean }) {
   const { dir, path, a, b, mins, layout, editable } = props
   const ref = useRef<HTMLDivElement>(null)
@@ -155,8 +153,13 @@ function Divider(props: { dir: "row" | "column"; path: number[]; a: number; b: n
     if (!prev || !next) return null
     return dir === "row" ? [prev.width, next.width] : [prev.height, next.height]
   }, [dir])
-  // Kept current for the separator's value (the first neighbour's size) and its bounds.
+  // Kept current for the handle's value (the first neighbour's size) and its bounds.
   const [size, setSize] = useState<[number, number] | null>(null)
+  // Measured right after every layout change, not only when the observer next reports: a held arrow
+  // key steps from the size the last press made.
+  useLayoutEffect(() => {
+    if (editable) setSize(measure())
+  }, [editable, measure, layout])
   useEffect(() => {
     const prev = ref.current?.previousElementSibling
     const next = ref.current?.nextElementSibling
@@ -166,51 +169,27 @@ function Divider(props: { dir: "row" | "column"; path: number[]; a: number; b: n
     observer.observe(next)
     return () => observer.disconnect()
   }, [editable, measure, a, b])
-  const keys = dir === "row" ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"]
   return (
     <div ref={ref} className={cn("relative shrink-0 bg-border", dir === "row" ? "w-px" : "h-px")}>
-      {editable && <div
-        role="separator"
-        aria-orientation={dir === "row" ? "vertical" : "horizontal"}
-        aria-label={t("Resize the views")}
-        aria-valuenow={size ? Math.round(size[0]) : undefined}
-        aria-valuemin={size ? Math.round(mins[0]) : undefined}
-        aria-valuemax={size ? Math.round(size[0] + size[1] - mins[1]) : undefined}
-        tabIndex={0}
-        className={cn(
-          "absolute z-20 outline-none after:absolute after:transition-colors after:duration-(--duration-fast) focus-visible:after:bg-ring",
-          dir === "row"
-            ? "inset-y-0 -left-1 w-2 cursor-col-resize after:inset-y-0 after:left-[3px] after:w-0.5"
-            : "inset-x-0 -top-1 h-2 cursor-row-resize after:inset-x-0 after:top-[3px] after:h-0.5",
-        )}
-        onKeyDown={(e) => {
-          const k = keys.indexOf(e.key)
-          if (k < 0) return
-          e.preventDefault()
-          // The app's arrow-key navigation listens on window.
-          e.stopPropagation()
-          const px = measure()
-          if (px) prefs.set({ layout: resize(layout, path, a, b, k ? KEY_STEP : -KEY_STEP, px, mins) })
-        }}
-        onPointerDown={(e) => {
-          e.preventDefault()
-          const el = e.currentTarget
-          el.setPointerCapture(e.pointerId)
-          const px = measure()
-          if (!px) return
-          const start = dir === "row" ? e.clientX : e.clientY
-          const base = layout
-          document.body.style.cursor = dir === "row" ? "col-resize" : "row-resize"
-          const move = (ev: PointerEvent) => prefs.set({ layout: resize(base, path, a, b, (dir === "row" ? ev.clientX : ev.clientY) - start, px, mins) })
-          const up = () => {
-            document.body.style.cursor = ""
-            el.removeEventListener("pointermove", move)
-            el.removeEventListener("pointerup", up)
-          }
-          el.addEventListener("pointermove", move)
-          el.addEventListener("pointerup", up)
-        }}
-      />}
+      {/* The first neighbour's trailing edge: the handle's value is that view's size along the split.
+          No double-click reset: views dock anywhere, so a split has no default size of its own
+          (the menu's layout reset puts back the whole default layout). */}
+      {editable && size && (
+        <ResizeHandle
+          side={dir === "row" ? "right" : "bottom"}
+          value={Math.round(size[0])}
+          min={mins[0]}
+          max={Math.max(mins[0], Math.round(size[0] + size[1] - mins[1]))}
+          label={t("Resize the views")}
+          onValueChange={(next) => {
+            const px = measure()
+            if (px) previewPrefs({ layout: resize(layout, path, a, b, next - px[0], px, mins) })
+          }}
+          onValueCommit={savePrefs}
+          // Above anything layered inside the views it reaches over.
+          className="z-20"
+        />
+      )}
     </div>
   )
 }
