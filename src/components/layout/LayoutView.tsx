@@ -179,7 +179,7 @@ function Divider(props: { dir: "row" | "column"; path: number[]; a: number; b: n
     <div ref={ref} className={cn("relative shrink-0 bg-border", dir === "row" ? "w-px" : "h-px")}>
       {/* The first neighbour's trailing edge: the handle's value is that view's size along the split.
           No double-click reset: views dock anywhere, so a split has no default size of its own
-          (the menu's layout reset puts back the whole default layout). */}
+          (the menu's layout reset puts back the whole default layout, focus mode's too). */}
       {size && (
         <ResizeHandle
           side={dir === "row" ? "right" : "bottom"}
