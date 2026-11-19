@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="200 202 620 620">
+  <!-- Menu bar (template) icon: the app icon's R without its tile, all black; macOS tints it.
+       Regenerate: rsvg-convert -w 44 -h 44 icons/tray.svg -o icons/tray.png -->
+  <g fill="none" stroke="#000" stroke-width="64" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M380 270 H540 A121 121 0 0 1 540 512 H380" />
+    <path d="M380 512 L640 754" />
+    <path d="M380 270 V754" />
+  </g>
+  <g fill="#000">
+    <circle cx="380" cy="270" r="60" />
+    <circle cx="380" cy="512" r="60" />
+    <circle cx="380" cy="754" r="60" />
+    <circle cx="640" cy="754" r="60" />
+  </g>
+</svg>

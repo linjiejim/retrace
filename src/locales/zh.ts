@@ -188,6 +188,7 @@ export const zh: Record<string, string> = {
   "Only a deleted branch's own copy, while origin still has it where the last fetch saw it and its commits are in {trunk}. Undo can't bring it back.": "只删这次删掉的本地分支在 origin 上的那一份，并且 origin 上仍是上次 fetch 看到的提交、提交都已在 {trunk} 里。撤销恢复不了远端。",
   "Only the first {n} files are listed": "只列出了前 {n} 个文件",
   "Open in Editor": "在编辑器打开",
+  "Open Retrace": "打开 Retrace",
   "Open in Finder": "在 Finder 中打开",
   "Open in Terminal": "在终端打开",
   "Open on GitHub": "在 GitHub 打开",

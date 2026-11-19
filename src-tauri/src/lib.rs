@@ -26,6 +26,16 @@ fn watch_project(app: tauri::AppHandle, watcher: tauri::State<'_, watch::Watcher
     watcher.watch(app, id).map_err(|e| format!("{e:#}"))
 }
 
+/// Brings the main window back (it may be hidden by closing it, or minimized) and to the front.
+#[cfg(target_os = "macos")]
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state = core::State::load();
@@ -37,17 +47,39 @@ pub fn run() {
         .manage(watch::Watcher::default())
         .setup(move |app| {
             watch::start_auto_fetch(app.handle().clone(), state.clone());
+            // The menu bar icon (top right). Its menu, the project list, is built by the page (src/lib/menu.ts).
+            tauri::tray::TrayIconBuilder::with_id("projects")
+                .icon(tauri::include_image!("icons/tray.png"))
+                .icon_as_template(true)
+                .tooltip("Retrace")
+                .show_menu_on_left_click(true)
+                .build(app)?;
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
             }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![api, watch_project])
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Focused(true) = event {
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::Focused(true) => {
                 let _ = window.emit("app-focused", ());
             }
+            // Closing the window only hides it: Retrace keeps running in the menu bar (and the Dock),
+            // ready to come back. ⌘Q (Retrace > Quit, or the menu bar icon's Quit) still quits.
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+            _ => {}
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // Clicking the Dock icon with the window hidden brings it back.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
+                show_main(app);
+            }
+            let _ = (app, event);
+        });
 }
