@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest"
-import { DEFAULT_LAYOUT, MIN_SIZE, edgesOf, isValid, minSize, movePanel, panelsIn, removePanel, resize, type Node } from "./layout"
+import { DEFAULT_FOCUS_LAYOUT, DEFAULT_LAYOUT, FOCUS_PANELS, MIN_SIZE, edgesOf, isValid, minSize, movePanel, panelsIn, removePanel, resize, type Node } from "./layout"
 
 const ids = (n: Node) => panelsIn(n).sort()
 
 describe("layout", () => {
   it("the default layout holds each view exactly once", () => {
     expect(isValid(DEFAULT_LAYOUT)).toBe(true)
+  })
+
+  it("focus mode's layout holds just the file list and the diff", () => {
+    expect(isValid(DEFAULT_FOCUS_LAYOUT, FOCUS_PANELS)).toBe(true)
+    expect(isValid(DEFAULT_FOCUS_LAYOUT)).toBe(false)
+    expect(isValid(DEFAULT_LAYOUT, FOCUS_PANELS)).toBe(false)
   })
 
   it("rejects broken stored layouts", () => {

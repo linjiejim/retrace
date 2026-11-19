@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { inTauri, onAppFocused, onRepoChanged, watchProject } from "@/lib/api"
 import { addPaths, closeDiff, run, selectProject } from "@/lib/commands"
 import { keyNav } from "@/lib/keys"
-import type { Node, PanelId } from "@/lib/layout"
+import type { PanelId } from "@/lib/layout"
 import { installMenu } from "@/lib/menu"
 import { prefs, ui, useStore } from "@/lib/store"
 import { scheduleUpdateChecks } from "@/lib/updater"
@@ -17,15 +17,6 @@ import { DiffPanel } from "@/components/app/DiffPanel"
 import { SettingsDialog } from "@/components/app/SettingsDialog"
 import { AddProjectsDialog } from "@/components/app/AddProjectsDialog"
 
-/** Focus mode: just the file list and the diff, side by side. */
-const FOCUS_LAYOUT: Node = {
-  type: "split",
-  dir: "row",
-  children: [
-    { node: { type: "panel", id: "changes" }, size: 1 },
-    { node: { type: "panel", id: "diff" }, size: 3.2 },
-  ],
-}
 const NONE: PanelId[] = []
 
 export default function App() {
@@ -37,6 +28,7 @@ export default function App() {
   const adding = useStore(ui, (s) => s.adding)
   const collapsed = useStore(prefs, (s) => s.projectsCollapsed)
   const layout = useStore(prefs, (s) => s.layout)
+  const focusLayout = useStore(prefs, (s) => s.focusLayout)
   useDefaultSelection()
 
   useEffect(() => {
@@ -145,7 +137,7 @@ export default function App() {
 
   return (
     <div className="h-full overflow-hidden">
-      {focusMode ? <LayoutView layout={FOCUS_LAYOUT} hidden={NONE} editable={false} render={render} /> : <LayoutView layout={layout} hidden={hidden} render={render} />}
+      {focusMode ? <LayoutView layout={focusLayout} layoutKey="focusLayout" hidden={NONE} editable={false} render={render} /> : <LayoutView layout={layout} hidden={hidden} render={render} />}
       <SettingsDialog open={settingsOpen} onOpenChange={(o) => ui.set({ settingsOpen: o })} />
       {adding && <AddProjectsDialog state={adding} onClose={() => ui.set({ adding: null })} onAddPaths={addPaths} onAdded={selectProject} />}
     </div>
