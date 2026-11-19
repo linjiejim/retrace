@@ -11,6 +11,9 @@ import type { Group, Project } from "./types"
 
 type Checked = (p: Prefs, u: UiState) => boolean
 
+/** A user-given name as a menu title: macOS menus drop a single `&` (a mnemonic marker), `&&` shows one. */
+const literal = (name: string) => name.replaceAll("&", "&&")
+
 const CHECKS: Partial<Record<CommandId, Checked>> = {
   toggleProjects: (p) => !p.projectsCollapsed,
   toggleDiff: (_, u) => u.diffOpen,
@@ -193,10 +196,10 @@ export async function installMenu(): Promise<() => void> {
           if (!section.ids.length) continue
           if (items.length) items.push(await sep())
           const label = section.group === PINNED ? t("Pinned") : section.group ? groupName.get(section.group) : null
-          if (label) items.push(await MenuItem.new({ text: label, enabled: false }))
+          if (label) items.push(await MenuItem.new({ text: literal(label), enabled: false }))
           for (const id of section.ids) {
             const c = await CheckMenuItem.new({
-              text: byId.get(id)!.name,
+              text: literal(byId.get(id)!.name),
               checked: id === current,
               action: () => {
                 if (ui.get().projectId !== id) selectProject(id)

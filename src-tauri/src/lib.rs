@@ -68,7 +68,19 @@ pub fn run() {
             // ready to come back. ⌘Q (Retrace > Quit, or the menu bar icon's Quit) still quits.
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
-                let _ = window.hide();
+                if window.is_fullscreen().unwrap_or(false) {
+                    // Hidden in full screen, the window would leave its Space behind as a black
+                    // screen: leave full screen first, and hide once the animation is over (tao
+                    // reports no end of it).
+                    let _ = window.set_fullscreen(false);
+                    let window = window.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(900));
+                        let _ = window.hide();
+                    });
+                } else {
+                    let _ = window.hide();
+                }
             }
             _ => {}
         })
