@@ -20,7 +20,7 @@ Agents now write code in a dozen worktrees at once. Retrace puts every project, 
 - **Diffs that read well.** Side by side by default, no wrapping, syntax highlighted off the main thread. Read one file at a time or every change in a row. Changed images show before and after.
 - **Browse any version.** Switch *Changes* to *Files* to see the whole tree at the selected commit (or on disk for uncommitted work): filter, fold, and preview code, images, and Markdown rendered like GitHub with its relative links and images. Right-click a file here or in *Changes* to show it in Finder or open it in your editor. Pick a file and the graph narrows to the commits that changed it, so you can step through its history diff by diff. File icons come in four themes (Settings → File icons).
 - **Your layout.** Drag any view's grip to dock it on another view's edge or swap them, and the line between views to resize them (in focus too). Each view keeps a minimum size, so nothing gets squeezed.
-- **A proper Mac app.** Native menu bar, keyboard first, light and dark, English and Chinese. Retrace's icon in the menu bar lists your projects, grouped as in the app: pick one to open it. Closing the window keeps Retrace there; ⌘Q quits.
+- **A proper Mac app.** Native menu bar, keyboard first, light and dark, English and Chinese. Retrace's icon in the menu bar lists your projects, grouped as in the app: pick one to open it. Closing the window keeps Retrace there (still fetching, if that's on); ⌘Q quits.
 
 | | |
 | --- | --- |
