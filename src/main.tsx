@@ -44,8 +44,10 @@ window.addEventListener("contextmenu", (e) => {
   if (e.defaultPrevented || (import.meta.env.DEV && e.shiftKey)) return
   const el = e.target instanceof Element ? e.target : null
   if (el?.closest("input, textarea, [contenteditable]:not([contenteditable=false])")) return
+  // On the selected text itself, not just somewhere in the element that holds it.
   const selection = window.getSelection()
-  if (el && selection && !selection.isCollapsed && selection.containsNode(el, true)) return
+  const rects = selection && !selection.isCollapsed && selection.rangeCount ? [...selection.getRangeAt(0).getClientRects()] : []
+  if (rects.some((r) => e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom)) return
   e.preventDefault()
 })
 
