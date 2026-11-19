@@ -17,7 +17,7 @@ import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader } from "@
 import { Field } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Tooltip } from "@/components/ui/tooltip"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, dropdownMenuParts, type MenuParts } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuShortcut, DropdownMenuTrigger, dropdownMenuParts, type MenuParts } from "@/components/ui/dropdown-menu"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger, contextMenuParts } from "@/components/ui/context-menu"
 import { StateView } from "@/components/ui/state"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -258,13 +258,25 @@ export function ProjectsPanel() {
   return (
     <section className="flex h-full flex-col bg-sunken">
       <PanelHeader>
-        <span className="min-w-0 flex-1 truncate text-caption text-faint-foreground">{t("Projects")}</span>
-        <IconButton label={t("New group")} size="icon-sm" onClick={() => newGroup()} disabled={!projects.data}>
-          <FolderPlus />
-        </IconButton>
-        <IconButton label={t("Add a repository, or a folder of repositories")} size="icon-sm" onClick={startAdd}>
-          <Plus />
-        </IconButton>
+        <span data-tauri-drag-region className="h-full min-w-0 flex-1" />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <IconButton label={t("Add project or group")} tooltip={false} size="icon-sm" type="button">
+              <Plus />
+            </IconButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" onCloseAutoFocus={menuClosed}>
+            <DropdownMenuItem onSelect={startAdd}>
+              <Plus />
+              {t("Add project")}
+              <DropdownMenuShortcut>⌘O</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!projects.data} onSelect={() => newGroup([], true)}>
+              <FolderPlus />
+              {t("New group")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <IconButton label={t("Hide projects")} tooltip={`${t("Hide projects")}  ⌘\\`} size="icon-sm" onClick={() => prefs.set({ projectsCollapsed: true })}>
           <PanelLeftClose />
         </IconButton>
