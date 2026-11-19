@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, List, ListTree, Search, X } from "lucide-react"
-import { clickFile, openFile, openPreview } from "@/lib/commands"
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, Code, FolderOpen, List, ListTree, Search, X } from "lucide-react"
+import { clickFile, openFile, openInProject, openPreview } from "@/lib/commands"
 import { shortHash, tildify } from "@/lib/format"
 import { keyNav } from "@/lib/keys"
 import { prefs, ui, useStore } from "@/lib/store"
@@ -17,6 +17,7 @@ import { Segmented } from "@/components/ui/segmented"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StateView } from "@/components/ui/state"
 import { Tooltip } from "@/components/ui/tooltip"
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { PanelHeader } from "@/components/layout/LayoutView"
 import { FileIcon, FolderIcon } from "./FileIcon"
 
@@ -75,7 +76,7 @@ export function ChangesPanel() {
       ) : changes.data.length === 0 ? (
         <div className="px-3 py-3 text-caption text-faint-foreground">{t("No file changes.")}</div>
       ) : (
-        <ChangesList key={`${projectId}:${targetKey(target)}`} files={changes.data} />
+        <ChangesList key={`${projectId}:${targetKey(target)}`} files={changes.data} tree={target.kind === "worktree" ? target.tree : undefined} />
       )}
     </section>
   )
@@ -143,7 +144,7 @@ function useFileNav(paths: string[], current: string | null, open: (path: string
 
 // ---------- changes ----------
 
-function ChangesList({ files }: { files: FileChange[] }) {
+function ChangesList({ files, tree: worktree }: { files: FileChange[]; tree?: string }) {
   const listMode = useStore(prefs, (s) => s.listMode)
   const diffView = useStore(prefs, (s) => s.diffView)
   const diffOpen = useStore(ui, (s) => s.diffOpen)
@@ -210,6 +211,8 @@ function ChangesList({ files }: { files: FileChange[] }) {
         isOpen={(p) => !collapsed.has(p)}
         onFolder={(p) => setCollapsed((prev) => toggled(prev, p))}
         onFile={(f) => clickFile({ path: f.path, oldPath: f.oldPath })}
+        worktree={worktree}
+        gone={(f) => f.status === "deleted"}
         tip={(f) => `${f.oldPath ? `${f.oldPath} → ` : ""}${f.path} · ${t(STATUS_LABEL[f.status])}`}
         renderName={(f, name) => {
           const dir = f.path.split("/").slice(0, -1).join("/")
@@ -341,6 +344,7 @@ function FilesView({ projectId, target, changes, headLabel }: { projectId: strin
           isOpen={isOpen}
           onFolder={(p) => setExpanded((prev) => toggled(prev, p))}
           onFile={(f) => openPreview(f.path)}
+          worktree={target.kind === "worktree" ? target.tree : undefined}
           tip={(f) => (f.change ? `${f.path} · ${t("{status} in this version", { status: t(STATUS_LABEL[f.change.status]) })}` : f.path)}
           renderName={(f, name) => {
             const dir = f.path.slice(0, -name.length - 1)
@@ -371,6 +375,8 @@ function TreeRows<T extends Pathed>({
   renderName,
   renderEnd,
   footer,
+  worktree,
+  gone,
 }: {
   rows: VisibleRow<T>[]
   selected: string | null
@@ -381,8 +387,14 @@ function TreeRows<T extends Pathed>({
   renderName: (file: T, name: string) => React.ReactNode
   renderEnd: (file: T) => React.ReactNode
   footer?: string
+  /** Where the right-click menu finds the files on disk; by default the current tab's worktree. */
+  worktree?: string
+  /** Files that aren't on disk (deleted by this change): nothing to show or open. */
+  gone?: (file: T) => boolean
 }) {
   const scroller = useRef<HTMLDivElement>(null)
+  /** The row the right-click menu is for. */
+  const [menu, setMenu] = useState<{ path: string; gone: boolean } | null>(null)
   const icons = useStore(prefs, (s) => s.fileIcons)
   const v = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current, estimateSize: () => 26, overscan: 20 })
 
@@ -394,39 +406,63 @@ function TreeRows<T extends Pathed>({
   }, [selected]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div ref={scroller} onMouseDown={() => ui.set({ focusArea: "changes" })} className="min-h-0 flex-1 overflow-y-auto pb-2">
-      <div className="relative" style={{ height: v.getTotalSize() + (footer ? 28 : 0) }}>
-        {v.getVirtualItems().map((vi) => {
-          const { node, depth } = rows[vi.index]
-          const style = { transform: `translateY(${vi.start}px)`, paddingLeft: 12 + depth * 14 }
-          const base = "absolute inset-x-0 top-0 flex h-[26px] items-center gap-1.5 whitespace-nowrap pr-3 text-small"
-          if (node.kind === "folder") {
-            return (
-              <div key={"d:" + node.path} style={style} className={cn(base, "text-muted-foreground hover:bg-accent")} onClick={() => onFolder(node.path)}>
-                <ChevronRight className={cn("size-3.5 shrink-0 text-faint-foreground transition-transform duration-(--duration-fast)", isOpen(node.path) && "rotate-90")} />
-                <FolderIcon name={node.name} open={isOpen(node.path)} theme={icons} />
-                <span className="min-w-0 truncate">{node.name}</span>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          ref={scroller}
+          onMouseDown={() => ui.set({ focusArea: "changes" })}
+          onContextMenu={(e) => {
+            const row = (e.target as HTMLElement).closest<HTMLElement>("[data-path]")
+            // Empty space: no menu at all (not even the web view's own).
+            if (!row) return e.preventDefault()
+            setMenu({ path: row.dataset.path!, gone: row.dataset.gone === "true" })
+          }}
+          className="min-h-0 flex-1 overflow-y-auto pb-2"
+        >
+          <div className="relative" style={{ height: v.getTotalSize() + (footer ? 28 : 0) }}>
+            {v.getVirtualItems().map((vi) => {
+              const { node, depth } = rows[vi.index]
+              const style = { transform: `translateY(${vi.start}px)`, paddingLeft: 12 + depth * 14 }
+              const base = "absolute inset-x-0 top-0 flex h-[26px] items-center gap-1.5 whitespace-nowrap pr-3 text-small"
+              if (node.kind === "folder") {
+                return (
+                  <div key={"d:" + node.path} data-path={node.path} style={style} className={cn(base, "text-muted-foreground hover:bg-accent", menu?.path === node.path && "ring-1 ring-inset ring-ring")} onClick={() => onFolder(node.path)}>
+                    <ChevronRight className={cn("size-3.5 shrink-0 text-faint-foreground transition-transform duration-(--duration-fast)", isOpen(node.path) && "rotate-90")} />
+                    <FolderIcon name={node.name} open={isOpen(node.path)} theme={icons} />
+                    <span className="min-w-0 truncate">{node.name}</span>
+                  </div>
+                )
+              }
+              const f = node.file
+              return (
+                <Tooltip key={"f:" + f.path} content={tip(f)} side="right" delayDuration={900}>
+                  <div data-path={f.path} data-gone={gone?.(f) || undefined} style={style} className={cn(base, selected === f.path ? "bg-selected" : "hover:bg-accent", menu?.path === f.path && "ring-1 ring-inset ring-ring")} onClick={() => onFile(f)}>
+                    <span className="w-3.5 shrink-0" />
+                    <FileIcon path={f.path} theme={icons} />
+                    <span className="min-w-0 flex-1 truncate">{renderName(f, node.name)}</span>
+                    {renderEnd(f)}
+                  </div>
+                </Tooltip>
+              )
+            })}
+            {footer && (
+              <div className="absolute inset-x-0 px-3 text-caption text-faint-foreground" style={{ top: v.getTotalSize() + 6 }}>
+                {footer}
               </div>
-            )
-          }
-          const f = node.file
-          return (
-            <Tooltip key={"f:" + f.path} content={tip(f)} side="right" delayDuration={900}>
-              <div style={style} className={cn(base, selected === f.path ? "bg-selected" : "hover:bg-accent")} onClick={() => onFile(f)}>
-                <span className="w-3.5 shrink-0" />
-                <FileIcon path={f.path} theme={icons} />
-                <span className="min-w-0 flex-1 truncate">{renderName(f, node.name)}</span>
-                {renderEnd(f)}
-              </div>
-            </Tooltip>
-          )
-        })}
-        {footer && (
-          <div className="absolute inset-x-0 px-3 text-caption text-faint-foreground" style={{ top: v.getTotalSize() + 6 }}>
-            {footer}
+            )}
           </div>
-        )}
-      </div>
-    </div>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent onCloseAutoFocus={() => setMenu(null)}>
+        <ContextMenuItem disabled={!menu || menu.gone} onSelect={() => menu && openInProject(menu.path, "reveal", worktree)}>
+          <FolderOpen />
+          {t("Show in Finder")}
+        </ContextMenuItem>
+        <ContextMenuItem disabled={!menu || menu.gone} onSelect={() => menu && openInProject(menu.path, "editor", worktree)}>
+          <Code />
+          {t("Open in Editor")}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }

@@ -810,6 +810,8 @@ fn open_with(state: &State, path: &str, with: &str) -> Result<()> {
     let mut cmd = std::process::Command::new("/usr/bin/open");
     match with {
         "finder" => cmd.arg(path),
+        // Selects it in its folder instead of opening it.
+        "reveal" => cmd.args(["-R", path]),
         "terminal" => cmd.args(["-a", &prefs.terminal, path]),
         "editor" => cmd.args(["-a", &prefs.editor, path]),
         _ => bail!(tr!("未知的打开方式", "Unknown way to open")),
