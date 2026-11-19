@@ -37,6 +37,18 @@ function AppToaster() {
   return <Toaster offset={{ top: 46, right: 16 }} />
 }
 
+// The web view's own right-click menu offers little more than Reload: keep it in text fields and on
+// selected text (Cut / Copy / Paste / Look Up), show nothing elsewhere. Our own menus have handled
+// the event before it gets here. In development ⇧-right-click still reaches Inspect Element.
+window.addEventListener("contextmenu", (e) => {
+  if (e.defaultPrevented || (import.meta.env.DEV && e.shiftKey)) return
+  const el = e.target instanceof Element ? e.target : null
+  if (el?.closest("input, textarea, [contenteditable]:not([contenteditable=false])")) return
+  const selection = window.getSelection()
+  if (el && selection && !selection.isCollapsed && selection.containsNode(el, true)) return
+  e.preventDefault()
+})
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
