@@ -18,9 +18,9 @@ Agents now write code in a dozen worktrees at once. Retrace puts every project, 
 - **Commits as you'd review them.** Click a row to open its message and diff below the graph; click it again to close. The body is shown in full (fold it if you like), and squash or merge commits get a **PR #N** button that opens the pull request right here (or, next to it, on GitHub).
 - **Pull requests, read here.** On a GitHub project, *PRs* lists the open pull requests through your own GitHub CLI (`gh`): Retrace never sees a token. Pick one to read it like a branch: it opens as its description, full width, and a file picked in *Changes* shows its diff (click the file again to go back). Its commits are in the graph, its whole change matches GitHub's *Files changed*, and its review status and every check sit above the diff. Screenshots in the description show up too, from private repositories as well, and the conversation (comments, reviews and line comments with the code they're on) opens in a side panel, each thread a click away from its file. Worktrees and branches with an open pull request show its number, and their *Everything since main* row jumps to it.
 - **Diffs that read well.** Side by side by default, no wrapping, syntax highlighted off the main thread. Read one file at a time or every change in a row. Changed images show before and after.
-- **Browse any version.** Switch *Changes* to *Files* to see the whole tree at the selected commit (or on disk for uncommitted work): filter, fold, and preview code, images, and Markdown rendered like GitHub with its relative links and images. Pick a file and the graph narrows to the commits that changed it, so you can step through its history diff by diff. File icons come in four themes (Settings → File icons).
-- **Your layout.** Drag any view's grip to dock it on another view's edge or swap them. Each view keeps a minimum size, so nothing gets squeezed.
-- **A proper Mac app.** Native menu bar, keyboard first, light and dark, English and Chinese.
+- **Browse any version.** Switch *Changes* to *Files* to see the whole tree at the selected commit (or on disk for uncommitted work): filter, fold, and preview code, images, and Markdown rendered like GitHub with its relative links and images. Right-click a file here or in *Changes* to show it in Finder or open it in your editor. Pick a file and the graph narrows to the commits that changed it, so you can step through its history diff by diff. File icons come in four themes (Settings → File icons).
+- **Your layout.** Drag any view's grip to dock it on another view's edge or swap them, and the line between views to resize them (in focus too). Each view keeps a minimum size, so nothing gets squeezed.
+- **A proper Mac app.** Native menu bar, keyboard first, light and dark, English and Chinese. Retrace's icon in the menu bar lists your projects, grouped as in the app: pick one to open it. Closing the window keeps Retrace there (still fetching, if that's on); ⌘Q quits.
 
 | | |
 | --- | --- |
@@ -101,7 +101,7 @@ src-tauri/src/watch.rs   watches the open project's .git and working tree; perio
 src-tauri/src/bin/       the dev bridge
 src/components/app/      the four views: projects, changes / files, graph, diff / preview
 src/components/layout/   the dockable tiled layout (model in src/lib/layout.ts)
-src/lib/commands.ts      commands shared by the menu bar, shortcuts and buttons; menu.ts builds the menu bar
+src/lib/commands.ts      commands shared by the menu bar, shortcuts and buttons; menu.ts builds the menu bar and its projects icon
 src/lib/i18n.ts          UI language: English source strings, Chinese in src/locales/zh.ts
 src/components/ui/       jim-uiux components, installed from its registry
 site/                    the website (retrace.linjiejim.com): plain HTML, CSS and JS; the Site workflow deploys it

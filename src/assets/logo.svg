@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 100 824 824">
+  <!-- The app icon (src-tauri/icons/source.svg) without its shadow, cropped to the tile. -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#141414" />
+  <g fill="none" stroke-width="52" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M380 270 H540 A121 121 0 0 1 540 512 H380" stroke="#8f98ff" />
+    <path d="M380 512 L640 754" stroke="#8f98ff" />
+    <path d="M380 270 V754" stroke="#ffffff" />
+  </g>
+  <g fill="#ffffff">
+    <circle cx="380" cy="270" r="50" />
+    <circle cx="380" cy="512" r="50" />
+    <circle cx="380" cy="754" r="50" />
+  </g>
+  <circle cx="640" cy="754" r="50" fill="#8f98ff" />
+</svg>

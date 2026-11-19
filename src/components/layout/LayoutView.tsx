@@ -6,10 +6,11 @@ import { cn } from "@/lib/utils"
 import { t } from "@/lib/i18n"
 import { ResizeHandle } from "@/components/ui/resize-handle"
 import { Tooltip } from "@/components/ui/tooltip"
+import { Logo } from "@/components/app/Logo"
 
 interface PanelInfo extends Edges {
   id: PanelId
-  /** False for temporary layouts (focus mode): no grips, no resizing, nothing saved. */
+  /** False for focus mode: no grips to rearrange the views (its split still resizes). */
   editable: boolean
 }
 const PanelContext = createContext<PanelInfo>({ id: "graph", top: true, left: true, editable: true })
@@ -61,6 +62,7 @@ function startDrag(id: PanelId, e: React.PointerEvent) {
 /**
  * The bar on top of every view: title-bar height and traffic-light inset when it touches those
  * edges. It is a size container (`@container/header`), so views hide secondary controls when narrow.
+ * The view in the window's top-left corner also carries the logo.
  */
 export function PanelHeader({ children, className }: { children?: ReactNode; className?: string }) {
   const { id, top, left, editable } = usePanel()
@@ -83,6 +85,7 @@ export function PanelHeader({ children, className }: { children?: ReactNode; cla
           <GripVertical className="size-3.5" />
         </button>
       </Tooltip>}
+      {top && left && <Logo className="mr-1.5" />}
       {children}
     </div>
   )
@@ -143,8 +146,11 @@ function visible(node: Node, hidden: Set<PanelId>): boolean {
   return node.type === "panel" ? !hidden.has(node.id) : node.children.some((c) => visible(c.node, hidden))
 }
 
-function Divider(props: { dir: "row" | "column"; path: number[]; a: number; b: number; mins: [number, number]; layout: Node; editable: boolean }) {
-  const { dir, path, a, b, mins, layout, editable } = props
+/** Which saved layout a view tree is: the main one, or focus mode's. */
+type LayoutKey = "layout" | "focusLayout"
+
+function Divider(props: { dir: "row" | "column"; path: number[]; a: number; b: number; mins: [number, number]; layout: Node; layoutKey: LayoutKey }) {
+  const { dir, path, a, b, mins, layout, layoutKey } = props
   const ref = useRef<HTMLDivElement>(null)
   /** Sizes of the two neighbours along the split, in pixels. */
   const measure = useCallback((): [number, number] | null => {
@@ -158,23 +164,23 @@ function Divider(props: { dir: "row" | "column"; path: number[]; a: number; b: n
   // Measured right after every layout change, not only when the observer next reports: a held arrow
   // key steps from the size the last press made.
   useLayoutEffect(() => {
-    if (editable) setSize(measure())
-  }, [editable, measure, layout])
+    setSize(measure())
+  }, [measure, layout])
   useEffect(() => {
     const prev = ref.current?.previousElementSibling
     const next = ref.current?.nextElementSibling
-    if (!editable || !prev || !next) return
+    if (!prev || !next) return
     const observer = new ResizeObserver(() => setSize(measure()))
     observer.observe(prev)
     observer.observe(next)
     return () => observer.disconnect()
-  }, [editable, measure, a, b])
+  }, [measure, a, b])
   return (
     <div ref={ref} className={cn("relative shrink-0 bg-border", dir === "row" ? "w-px" : "h-px")}>
       {/* The first neighbour's trailing edge: the handle's value is that view's size along the split.
           No double-click reset: views dock anywhere, so a split has no default size of its own
-          (the menu's layout reset puts back the whole default layout). */}
-      {editable && size && (
+          (the menu's layout reset puts back the whole default layout, focus mode's too). */}
+      {size && (
         <ResizeHandle
           side={dir === "row" ? "right" : "bottom"}
           value={Math.round(size[0])}
@@ -183,7 +189,7 @@ function Divider(props: { dir: "row" | "column"; path: number[]; a: number; b: n
           label={t("Resize the views")}
           onValueChange={(next) => {
             const px = measure()
-            if (px) previewPrefs({ layout: resize(layout, path, a, b, next - px[0], px, mins) })
+            if (px) previewPrefs({ [layoutKey]: resize(layout, path, a, b, next - px[0], px, mins) })
           }}
           onValueCommit={savePrefs}
           // Above anything layered inside the views it reaches over.
@@ -201,9 +207,10 @@ function NodeView(props: {
   hidden: Set<PanelId>
   edges: Map<PanelId, Edges>
   editable: boolean
+  layoutKey: LayoutKey
   render: (id: PanelId) => ReactNode
 }) {
-  const { node, path, layout, hidden, edges, editable, render } = props
+  const { node, path, layout, hidden, edges, editable, layoutKey, render } = props
   if (node.type === "panel") return <Slot id={node.id} edges={edges.get(node.id) ?? { top: false, left: false }} editable={editable} render={render} />
   const shown = node.children
     .map((c, i) => ({ c, i, w: minSize(c.node, "row", hidden), h: minSize(c.node, "column", hidden) }))
@@ -223,7 +230,7 @@ function NodeView(props: {
         const flex = lone ? "1 1 0px" : c.fixed ? `0 1 ${c.size}px` : `${c.size / weight} 1 0px`
         return (
         <Fragment key={i}>
-          {k > 0 && <Divider dir={node.dir} path={path} a={shown[k - 1].i} b={i} mins={[along(shown[k - 1]), along(s)]} layout={layout} editable={editable} />}
+          {k > 0 && <Divider dir={node.dir} path={path} a={shown[k - 1].i} b={i} mins={[along(shown[k - 1]), along(s)]} layout={layout} layoutKey={layoutKey} />}
           <div className="relative overflow-hidden" style={{ flex, minWidth: s.w, minHeight: s.h }}>
             <NodeView {...props} node={c.node} path={[...path, i]} />
           </div>
@@ -234,8 +241,23 @@ function NodeView(props: {
   )
 }
 
-/** Renders the saved layout; `hidden` views keep their place in the tree but take no space. */
-export function LayoutView({ layout, hidden, editable = true, render }: { layout: Node; hidden: PanelId[]; editable?: boolean; render: (id: PanelId) => ReactNode }) {
+/**
+ * Renders a saved layout (`layoutKey` says which; dividers write back to it); `hidden` views keep
+ * their place in the tree but take no space. `editable` false: the views can't be rearranged.
+ */
+export function LayoutView({
+  layout,
+  layoutKey = "layout",
+  hidden,
+  editable = true,
+  render,
+}: {
+  layout: Node
+  layoutKey?: LayoutKey
+  hidden: PanelId[]
+  editable?: boolean
+  render: (id: PanelId) => ReactNode
+}) {
   const hiddenSet = useMemo(() => new Set(hidden), [hidden])
   const edges = useMemo(() => {
     let shown: Node | null = layout
@@ -244,7 +266,7 @@ export function LayoutView({ layout, hidden, editable = true, render }: { layout
   }, [layout, hidden])
   return (
     <>
-      <NodeView node={layout} path={[]} layout={layout} hidden={hiddenSet} edges={edges} editable={editable} render={render} />
+      <NodeView node={layout} path={[]} layout={layout} hidden={hiddenSet} edges={edges} editable={editable} layoutKey={layoutKey} render={render} />
       <DragLabel />
     </>
   )

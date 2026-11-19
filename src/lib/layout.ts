@@ -38,6 +38,13 @@ export const DEFAULT_LAYOUT: Node = split("row", [
   { node: split("column", [{ node: panel("graph"), size: 0.38 }, { node: panel("diff"), size: 0.62 }]), size: 1 },
 ])
 
+/** Focus mode: just the file list and the diff, side by side. Resized like the main layout, saved apart. */
+export const FOCUS_PANELS: PanelId[] = ["changes", "diff"]
+export const DEFAULT_FOCUS_LAYOUT: Node = split("row", [
+  { node: panel("changes"), size: 1 },
+  { node: panel("diff"), size: 3.2 },
+])
+
 const NO_HIDDEN: ReadonlySet<PanelId> = new Set()
 
 /** Smallest size of `node` along `axis` ("row" = width, "column" = height); hidden views count as 0. */
@@ -55,8 +62,8 @@ export function panelsIn(node: Node, out: PanelId[] = []): PanelId[] {
   return out
 }
 
-/** Every view exactly once, sane sizes. Anything else (old or hand-edited storage) is rejected. */
-export function isValid(node: unknown): node is Node {
+/** Every view (of `expected`) exactly once, sane sizes. Anything else (old or hand-edited storage) is rejected. */
+export function isValid(node: unknown, expected: PanelId[] = PANELS): node is Node {
   const ok = (n: unknown): boolean => {
     if (!n || typeof n !== "object") return false
     const x = n as Record<string, unknown>
@@ -66,7 +73,7 @@ export function isValid(node: unknown): node is Node {
   }
   if (!ok(node)) return false
   const ids = panelsIn(node as Node)
-  return ids.length === PANELS.length && PANELS.every((p) => ids.includes(p))
+  return ids.length === expected.length && expected.every((p) => ids.includes(p))
 }
 
 /** Collapse one-child splits and lift same-direction nested splits into their parent. */

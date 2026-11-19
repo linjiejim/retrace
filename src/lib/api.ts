@@ -52,6 +52,9 @@ async function call<T>(cmd: string, args: Record<string, unknown> = {}): Promise
   return body.ok as T
 }
 
+/** `finder` opens a folder (or a file in its default app); `reveal` shows a file selected in its folder. */
+export type OpenWith = "finder" | "reveal" | "terminal" | "editor"
+
 export const api = {
   listProjects: () => call<Project[]>("listProjects"),
   projectSummary: (id: string) => call<ProjectSummary>("projectSummary", { id }),
@@ -131,7 +134,7 @@ export const api = {
   fetch: (id: string) => call<null>("fetch", { id }),
   getPrefs: () => call<Prefs>("getPrefs"),
   setPrefs: (prefs: Prefs) => call<null>("setPrefs", prefs as unknown as Record<string, unknown>),
-  open: (id: string, path: string, how: "finder" | "terminal" | "editor") => call<null>("open", { id, path, with: how }),
+  open: (id: string, path: string, how: OpenWith) => call<null>("open", { id, path, with: how }),
 }
 
 /** Start watching one project (or stop with null). No-op in the browser. */

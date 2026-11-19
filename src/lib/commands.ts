@@ -4,7 +4,7 @@
 import { api, pickFolders } from "./api"
 import { keyNav } from "./keys"
 import { t } from "./i18n"
-import { DEFAULT_LAYOUT } from "./layout"
+import { DEFAULT_FOCUS_LAYOUT, DEFAULT_LAYOUT } from "./layout"
 import { queryClient } from "./query"
 import { prefs, selectionKey, ui, type Selection } from "./store"
 import type { Overview, Project } from "./types"
@@ -108,6 +108,17 @@ function openCurrent(how: "finder" | "terminal" | "editor") {
   api.open(projectId, path, how).catch((e) => notify.error(message(e)))
 }
 
+/**
+ * A file or folder of the open project (`rel`, a path inside the repository) shown in Finder or opened
+ * in the editor. `tree`: the worktree it's in; by default the current tab's (the main one for commits).
+ */
+export function openInProject(rel: string, how: "reveal" | "editor", tree?: string) {
+  const { projectId } = ui.get()
+  const root = tree ?? currentTreePath()
+  if (!projectId || !root) return
+  api.open(projectId, `${root.replace(/\/+$/, "")}/${rel}`, how).catch((e) => notify.error(message(e)))
+}
+
 /** The current project's repository on GitHub. */
 async function openOnGitHub() {
   const { projectId } = ui.get()
@@ -190,7 +201,7 @@ export const commands = {
   toggleFoldBranches: () => prefs.set((p) => ({ otherBranches: true, foldBranches: !(p.otherBranches && p.foldBranches) })),
   /** Back to the first-run view: the sketch layout, projects shown, diff closed. */
   resetLayout: () => {
-    prefs.set({ layout: DEFAULT_LAYOUT, projectsCollapsed: false })
+    prefs.set({ layout: DEFAULT_LAYOUT, focusLayout: DEFAULT_FOCUS_LAYOUT, projectsCollapsed: false })
     closeDiff()
   },
 }

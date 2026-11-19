@@ -1,12 +1,18 @@
 // The macOS menu bar. Settings and view options live here instead of on the page; check marks
 // follow the stores both ways.
 
-import { inTauri } from "./api"
-import { run, type CommandId } from "./commands"
+import { api, inTauri } from "./api"
+import { run, selectProject, type CommandId } from "./commands"
+import { PINNED, sections } from "./groups"
 import { t } from "./i18n"
+import { queryClient } from "./query"
 import { prefs, ui, type Prefs, type UiState } from "./store"
+import type { Group, Project } from "./types"
 
 type Checked = (p: Prefs, u: UiState) => boolean
+
+/** A user-given name as a menu title: macOS menus drop a single `&` (a mnemonic marker), `&&` shows one. */
+const literal = (name: string) => name.replaceAll("&", "&&")
 
 const CHECKS: Partial<Record<CommandId, Checked>> = {
   toggleProjects: (p) => !p.projectsCollapsed,
@@ -150,11 +156,98 @@ export async function installMenu(): Promise<() => void> {
   await menu.setAsAppMenu()
   await windowMenu.setAsWindowsMenuForNSApp().catch(() => {})
 
+  // The menu bar icon (top right, created by the backend) drops down every project, by group like
+  // the projects list: pick one to bring the window up with it open. Rebuilt when projects or groups change.
+  const { TrayIcon } = await import("@tauri-apps/api/tray")
+  const { getCurrentWindow } = await import("@tauri-apps/api/window")
+  const tray = await TrayIcon.getById("projects")
+  const showWindow = async () => {
+    const w = getCurrentWindow()
+    await w.unminimize().catch(() => {})
+    await w.show().catch(() => {})
+    await w.setFocus().catch(() => {})
+  }
+  const projectChecks = new Map<string, Awaited<ReturnType<typeof CheckMenuItem.new>>>()
+  let checkedProject: string | null | undefined
+  const syncProject = () => {
+    const current = ui.get().projectId
+    if (current === checkedProject) return
+    checkedProject = current
+    for (const [id, c] of projectChecks) c.setChecked(id === current).catch(() => {})
+  }
+  let listedKey = ""
+  let listing = Promise.resolve()
+  const listProjects = () =>
+    (listing = listing
+      .then(async () => {
+        if (!tray) return
+        const [projects, groups] = await Promise.all([
+          queryClient.fetchQuery<Project[]>({ queryKey: ["projects"], queryFn: api.listProjects, staleTime: Infinity }),
+          queryClient.fetchQuery<Group[]>({ queryKey: ["groups"], queryFn: api.listGroups, staleTime: Infinity }),
+        ])
+        const key = JSON.stringify([projects.map((p) => [p.id, p.name, p.group, p.pinned]), groups.map((g) => [g.id, g.name])])
+        if (mine !== generation || key === listedKey) return
+        const byId = new Map(projects.map((p) => [p.id, p]))
+        const groupName = new Map(groups.map((g) => [g.id, g.name]))
+        const current = ui.get().projectId
+        const checks = new Map<string, Awaited<ReturnType<typeof CheckMenuItem.new>>>()
+        const items = []
+        for (const section of sections(projects, groups)) {
+          if (!section.ids.length) continue
+          if (items.length) items.push(await sep())
+          const label = section.group === PINNED ? t("Pinned") : section.group ? groupName.get(section.group) : null
+          if (label) items.push(await MenuItem.new({ text: literal(label), enabled: false }))
+          for (const id of section.ids) {
+            const c = await CheckMenuItem.new({
+              text: literal(byId.get(id)!.name),
+              checked: id === current,
+              action: () => {
+                if (ui.get().projectId !== id) selectProject(id)
+                // The click flipped the native mark itself: put every mark back where it belongs.
+                checkedProject = undefined
+                syncProject()
+                void showWindow()
+              },
+            })
+            checks.set(id, c)
+            items.push(c)
+          }
+        }
+        if (items.length) items.push(await sep())
+        items.push(
+          // Closing the window only hides it (see lib.rs): this brings it back as it was.
+          await MenuItem.new({ text: t("Open Retrace"), action: () => void showWindow() }),
+          await MenuItem.new({
+            text: t("Add Project…"),
+            action: () => showWindow().then(() => run("addProject")),
+          }),
+          await sys("Quit", "Quit Retrace"),
+        )
+        const trayMenu = await Menu.new({ items })
+        if (mine !== generation) return
+        await tray.setMenu(trayMenu)
+        listedKey = key
+        projectChecks.clear()
+        for (const [id, c] of checks) projectChecks.set(id, c)
+        checkedProject = current
+        syncProject()
+      })
+      .catch((e) => console.error("tray", e)))
+  listProjects()
+  const offQueries = queryClient.getQueryCache().subscribe((e) => {
+    const k = e.query.queryKey[0]
+    if (e.type === "updated" && e.action.type === "success" && (k === "projects" || k === "groups")) listProjects()
+  })
+
   sync()
   const offPrefs = prefs.subscribe(sync)
-  const offUi = ui.subscribe(sync)
+  const offUi = ui.subscribe(() => {
+    sync()
+    syncProject()
+  })
   return () => {
     offPrefs()
     offUi()
+    offQueries()
   }
 }

@@ -45,9 +45,9 @@ const T = {
   "f4.t": ["Browse any version, follow any file", "浏览任一版本，追踪任一文件"],
   "f4.d": ["See the whole tree as it was at any commit, with code, images and Markdown rendered like GitHub. Pick a file and the graph keeps only the commits that changed it.", "看任一提交时的整个目录，代码、图片、Markdown 像 GitHub 一样渲染。点开一个文件，提交图就只留改过它的提交。"],
   "f5.t": ["Your layout, your groups", "布局和分组随你"],
-  "f5.d": ["Pin the projects you use most, sort the rest into groups that fold away, with every action a right-click away. Drag any view to dock it beside another or swap them.", "常用项目可以置顶，其余的分组、折叠，右键就有全部操作。拖动任一视图停靠到别的视图旁边或交换位置。"],
+  "f5.d": ["Pin the projects you use most, sort the rest into groups that fold away, with every action a right-click away. Drag any view to dock it beside another or swap them, and any divider to resize.", "常用项目可以置顶，其余的分组、折叠，右键就有全部操作。拖动任一视图停靠到别的视图旁边或交换位置，拖分隔线调大小。"],
   "f6.t": ["A proper Mac app", "像样的 Mac App"],
-  "f6.d": ["Native menu bar, keyboard first, light and dark, English and 中文, file icons in four themes. Built with Tauri: a few megabytes, not a browser.", "原生菜单栏、键盘优先、浅色深色、中文和 English，文件图标有四套主题。基于 Tauri，只有几 MB，不是一个浏览器。"],
+  "f6.d": ["Native menu bar and a menu bar icon that opens any project, keyboard first, light and dark, English and 中文, file icons in four themes. Built with Tauri: a few megabytes, not a browser.", "原生菜单栏，右上角的图标一点就打开任一项目，键盘优先、浅色深色、中文和 English，文件图标有四套主题。基于 Tauri，只有几 MB，不是一个浏览器。"],
   "ro.title": ["Two writes. <span>That's it.</span>", "只有两种写操作，<span>没了。</span>"],
   "ro.lede": [
     "Agents are busy in those trees. Retrace reads with GIT_OPTIONAL_LOCKS=0, never takes the index lock, and lists changes with plumbing that doesn't touch the index.",

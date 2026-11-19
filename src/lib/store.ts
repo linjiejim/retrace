@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react"
-import { DEFAULT_LAYOUT, isValid, type Node } from "./layout"
+import { DEFAULT_FOCUS_LAYOUT, DEFAULT_LAYOUT, FOCUS_PANELS, isValid, type Node } from "./layout"
 import type { Candidate } from "./types"
 import type { LangPref } from "./i18n"
 
@@ -88,6 +88,8 @@ export interface Prefs {
   language: LangPref
   wrap: boolean
   layout: Node
+  /** Focus mode's own split (the file list and the diff). */
+  focusLayout: Node
   projectsCollapsed: boolean
   /** Graph: also draw the other local branches, and optionally remote ones. */
   otherBranches: boolean
@@ -122,6 +124,7 @@ const defaults: Prefs = {
   language: "system",
   wrap: false,
   layout: DEFAULT_LAYOUT,
+  focusLayout: DEFAULT_FOCUS_LAYOUT,
   projectsCollapsed: false,
   otherBranches: false,
   remoteBranches: false,
@@ -138,7 +141,9 @@ function loadPrefs(): Prefs {
     const raw = localStorage.getItem(PREFS_KEY)
     const stored = raw ? JSON.parse(raw) : { ...JSON.parse(localStorage.getItem(OLD_PREFS_KEY) ?? "{}"), layout: undefined }
     const saved = { ...defaults, ...stored }
-    return isValid(saved.layout) ? saved : { ...saved, layout: DEFAULT_LAYOUT }
+    if (!isValid(saved.layout)) saved.layout = DEFAULT_LAYOUT
+    if (!isValid(saved.focusLayout, FOCUS_PANELS)) saved.focusLayout = DEFAULT_FOCUS_LAYOUT
+    return saved
   } catch {
     return defaults
   }
