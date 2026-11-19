@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 import { t } from "@/lib/i18n"
 import { ResizeHandle } from "@/components/ui/resize-handle"
 import { Tooltip } from "@/components/ui/tooltip"
+import { Logo } from "@/components/app/Logo"
 
 interface PanelInfo extends Edges {
   id: PanelId
@@ -61,6 +62,7 @@ function startDrag(id: PanelId, e: React.PointerEvent) {
 /**
  * The bar on top of every view: title-bar height and traffic-light inset when it touches those
  * edges. It is a size container (`@container/header`), so views hide secondary controls when narrow.
+ * The view in the window's top-left corner also carries the logo.
  */
 export function PanelHeader({ children, className }: { children?: ReactNode; className?: string }) {
   const { id, top, left, editable } = usePanel()
@@ -83,6 +85,7 @@ export function PanelHeader({ children, className }: { children?: ReactNode; cla
           <GripVertical className="size-3.5" />
         </button>
       </Tooltip>}
+      {top && left && <Logo className="mr-1.5" />}
       {children}
     </div>
   )
