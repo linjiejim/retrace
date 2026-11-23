@@ -65,4 +65,20 @@ export const kitEn: Strings = {
   copy: "Copy",
   copied: "Copied",
   copyFailed: "Couldn't copy",
+  previousItem: "Previous",
+  nextItem: "Next",
+  itemPosition: (i: number, n: number) => `${i} / ${n}`,
+  whatsNew: "What's new",
+  seeWhatsNew: "See what's new",
+  updatedTo: (version: string) => `Updated to ${version}`,
+  allReleaseNotes: "All release notes",
+  releaseNotesEmpty: "No release notes yet",
+  /** An ISO date (2026-11-20) under a version: "Nov 20" this year, "Nov 20, 2025" other years. */
+  releaseDate: (iso: string) => {
+    const [y, m, d] = iso.split("-").map(Number)
+    const year = y === new Date().getFullYear() ? undefined : "numeric"
+    return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { month: "short", day: "numeric", year, timeZone: "UTC" })
+  },
+  newVersionReady: "A new version is out. Reload to use it.",
+  reload: "Reload",
 }

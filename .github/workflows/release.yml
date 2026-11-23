@@ -3,7 +3,8 @@ name: Release
 # Push a tag like v0.4.0: one job opens a draft release, then each architecture builds and uploads
 # into it (two builds creating the release at once would race), then `latest.json` is written for
 # the updater. Publish the draft by hand: installed copies only see the latest published release,
-# so publishing is what ships the update.
+# so publishing is what ships the update. The notes in both come from CHANGELOG.md
+# (scripts/release-notes.mjs); a version missing there is drafted from its commits, with a warning.
 on:
   push:
     tags: ["v*"]
@@ -16,7 +17,14 @@ jobs:
     outputs:
       id: ${{ steps.release.outputs.id }}
     steps:
+      # Every commit and tag: notes for a version missing from CHANGELOG.md are drafted from the
+      # commits since the previous tag.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       # The bundles are signed for tauri.conf.json's version and the updater announces the tag's:
       # installed copies refuse an update whose two versions differ, so stop before building one.
       - name: Tag matches the app version
@@ -30,8 +38,28 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Retrace $TAG" --notes "Retrace $TAG"
+          # An existing release is never overwritten: notes edited by hand before publishing stay.
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            version="${TAG#v}"
+            notes=$(mktemp)
+            {
+              node scripts/release-notes.mjs notes "$version" --fallback --also CHANGELOG.zh-CN.md
+              echo
+              echo "## Download"
+              echo
+              echo "| Mac | File |"
+              echo "| --- | --- |"
+              echo "| Apple silicon | \`Retrace_${version}_aarch64.dmg\` |"
+              echo "| Intel | \`Retrace_${version}_x64.dmg\` |"
+              echo
+              echo "macOS 13 or later. Existing installations can update automatically. This build is not notarised by Apple; for a fresh installation, use **System Settings → Privacy & Security → Open Anyway** if macOS blocks the first launch."
+              echo
+              echo "现有安装支持自动更新。全新安装时，如 macOS 阻止首次打开，请到「系统设置 → 隐私与安全性」选择「仍要打开」。"
+              echo
+              echo "Website: https://retrace.linjiejim.com"
+            } > "$notes"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Retrace $TAG" --notes-file "$notes"
+          fi
           # A new draft can take a moment to show up; never hand the builds an empty id
           # (tauri-action would build and silently upload nothing).
           for attempt in 1 2 3 4 5 6; do
@@ -110,6 +138,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq minisign
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -128,14 +161,16 @@ jobs:
             printf '%s\n' "$comment" | tr '\t' '\n' | grep -x "version:$version" >/dev/null \
               || { echo "::error::Retrace_$arch.app.tar.gz is signed as \"$comment\", not for $version"; exit 1; }
           done
+          # The English notes as the manifest's `notes` (outside what the signatures cover).
+          node scripts/release-notes.mjs notes "$version" --fallback > "$dir/notes.md"
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
           platform() {
             jq -n --rawfile sig "$dir/Retrace_$1.app.tar.gz.sig" --arg url "$base/Retrace_$1.app.tar.gz" \
               '{signature: ($sig | rtrimstr("\n")), url: $url}'
           }
-          jq -n --arg version "$version" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          jq -n --arg version "$version" --rawfile notes "$dir/notes.md" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --argjson arm "$(platform aarch64)" --argjson intel "$(platform x64)" \
-            '{version: $version, pub_date: $date, platforms: {"darwin-aarch64": $arm, "darwin-x86_64": $intel}}' \
+            '{version: $version, notes: ($notes | rtrimstr("\n")), pub_date: $date, platforms: {"darwin-aarch64": $arm, "darwin-x86_64": $intel}}' \
             > "$dir/latest.json"
           cat "$dir/latest.json"
           gh release upload "$TAG" "$dir/latest.json" --repo "$GITHUB_REPOSITORY" --clobber

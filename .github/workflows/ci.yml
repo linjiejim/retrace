@@ -26,6 +26,8 @@ jobs:
         with:
           workspaces: src-tauri
       - run: pnpm install --frozen-lockfile
+      # package.json's version has its notes in CHANGELOG.md
+      - run: node scripts/release-notes.mjs check
       - run: pnpm typecheck
       - run: pnpm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml

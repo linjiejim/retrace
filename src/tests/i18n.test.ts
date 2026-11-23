@@ -49,8 +49,9 @@ describe("i18n", () => {
   })
 
   it("leaves no Chinese text outside the dictionaries", () => {
-    // Kit defaults and the Chinese date formats may hold Chinese; elsewhere a line needs `i18n-allow: <why>`.
-    const allowed = ["lib/strings.ts", "lib/format.ts"]
+    // Kit defaults, the Chinese date formats and the kit's names for changelog groups (注意, 新增…)
+    // may hold Chinese; elsewhere a line needs `i18n-allow: <why>`.
+    const allowed = ["lib/strings.ts", "lib/format.ts", "lib/changelog.ts"]
     const hits: string[] = []
     for (const f of sources) {
       const rel = path.relative(root, f)

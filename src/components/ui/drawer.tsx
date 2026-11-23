@@ -1,10 +1,13 @@
+"use client"
+
 import * as React from "react"
 import { Dialog as DialogPrimitive } from "radix-ui"
-import { ChevronLeft, X } from "lucide-react"
+import { ChevronDown, ChevronLeft, ChevronUp, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { s } from "@/lib/strings"
 import { useGuardedOpen } from "@/hooks/use-guarded-open"
 import { IconButton } from "@/components/ui/button"
+import { Kbd } from "@/components/ui/kbd"
 import { DiscardDialog } from "@/components/ui/confirm-dialog"
 import { FieldControlProvider } from "@/components/ui/field"
 import { ResizeHandle } from "@/components/ui/resize-handle"
@@ -329,5 +332,111 @@ export function DetailList({ items, editing = false, className }: { items: Detai
         )
       })}
     </dl>
+  )
+}
+
+/**
+ * List → detail drawer paging. While a drawer shows one item of a list, ↑ / ↓ (also ← / →, K / J)
+ * step to the previous / next item without closing. Pass the list in on-screen order (a board:
+ * column by column, top to bottom). Keys typed into a field, or with ⌘ / Ctrl / Alt, are left alone.
+ *
+ * While the drawer is open, paging follows the list as it was when the drawer opened, even if opening
+ * an item reorders it (read items sort down or drop out); the new order applies once it closes.
+ */
+export function useListPaging<T extends string>({
+  items,
+  current,
+  onChange,
+}: {
+  items: readonly T[]
+  current: T | null | undefined
+  onChange: (item: T) => void
+}) {
+  // Page through the list as it looked when the drawer opened: opening often reorders it
+  // (read items sort down, or drop out) and the current item must not jump.
+  const before = React.useRef<readonly T[]>(items)
+  const opened = React.useRef<readonly T[] | null>(null)
+  if (!current) {
+    opened.current = null
+    before.current = items
+  } else if (!opened.current?.includes(current)) {
+    opened.current = before.current.includes(current) ? before.current : items
+  }
+  const list = opened.current ?? items
+
+  const index = current ? list.indexOf(current) : -1
+  const prev = index > 0 ? list[index - 1] : undefined
+  const next = index >= 0 && index < list.length - 1 ? list[index + 1] : undefined
+  const goPrev = React.useCallback(() => {
+    if (prev !== undefined) onChange(prev)
+  }, [prev, onChange])
+  const goNext = React.useCallback(() => {
+    if (next !== undefined) onChange(next)
+  }, [next, onChange])
+
+  React.useEffect(() => {
+    if (!current) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return
+      const t = e.target as HTMLElement | null
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
+      if (e.key === "ArrowDown" || e.key === "ArrowRight" || e.key === "j") {
+        e.preventDefault()
+        goNext()
+      } else if (e.key === "ArrowUp" || e.key === "ArrowLeft" || e.key === "k") {
+        e.preventDefault()
+        goPrev()
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [current, goPrev, goNext])
+
+  return { index, total: list.length, hasPrev: prev !== undefined, hasNext: next !== undefined, goPrev, goNext }
+}
+
+/** Position and previous / next buttons for `DrawerHeader actions`. Renders nothing when there's nothing to page. */
+export function DrawerPager({
+  index,
+  total,
+  hasPrev,
+  hasNext,
+  goPrev,
+  goNext,
+}: Pick<ReturnType<typeof useListPaging>, "index" | "total" | "hasPrev" | "hasNext" | "goPrev" | "goNext">) {
+  if (index < 0 || total < 2) return null
+  const t = s()
+  return (
+    <span className="flex shrink-0 items-center gap-0.5">
+      <span className="mr-1 text-caption text-faint-foreground tabular-nums">{t.itemPosition(index + 1, total)}</span>
+      <IconButton
+        label={t.previousItem}
+        tooltip={
+          <>
+            {t.previousItem} <Kbd>↑</Kbd>
+          </>
+        }
+        size="icon-sm"
+        className="text-muted-foreground"
+        disabled={!hasPrev}
+        onClick={goPrev}
+      >
+        <ChevronUp />
+      </IconButton>
+      <IconButton
+        label={t.nextItem}
+        tooltip={
+          <>
+            {t.nextItem} <Kbd>↓</Kbd>
+          </>
+        }
+        size="icon-sm"
+        className="text-muted-foreground"
+        disabled={!hasNext}
+        onClick={goNext}
+      >
+        <ChevronDown />
+      </IconButton>
+    </span>
   )
 }
