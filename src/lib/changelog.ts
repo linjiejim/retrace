@@ -71,7 +71,7 @@ export function parseChangelog(markdown: string): Release[] {
     const heading = /^###\s+(.+)$/.exec(line)
     if (heading) {
       endItem()
-      const title = heading[1].replace(/[⚠️]/gu, "").trim()
+      const title = heading[1].replace(/\u26a0\ufe0f?/gu, "").trim() // release-please: "### ⚠ BREAKING CHANGES"
       group = { kind: kindOf(title), title, items: [] }
       r.groups.push(group)
       continue

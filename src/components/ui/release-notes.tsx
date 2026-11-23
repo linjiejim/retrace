@@ -203,18 +203,17 @@ export function useNewVersionPrompt({
 
   React.useEffect(() => {
     if (!current) return
-    let last = 0
-    let found = false
-    let stopped = false
+    // one object, not reassigned locals: the checks run async and outlive renders
+    const run = { last: 0, found: false, stopped: false }
     const check = async () => {
-      if (found || stopped || Date.now() - last < 60_000) return
-      last = Date.now()
+      if (run.found || run.stopped || Date.now() - run.last < 60_000) return
+      run.last = Date.now()
       try {
         const res = await fetch(url, { cache: "no-store" })
         if (!res.ok) return
         const live = (await res.json())?.[field]
-        if (stopped || typeof live !== "string" || !live || live === current) return
-        found = true
+        if (run.stopped || typeof live !== "string" || !live || live === current) return
+        run.found = true
         notify.prompt("jim:new-version", s().newVersionReady, { label: s().reload, onClick: () => reload.current() })
       } catch {
         // offline, or mid-deploy: try again later
@@ -224,7 +223,7 @@ export function useNewVersionPrompt({
     const timer = setInterval(() => void check(), every)
     document.addEventListener("visibilitychange", onVisible)
     return () => {
-      stopped = true
+      run.stopped = true
       clearInterval(timer)
       document.removeEventListener("visibilitychange", onVisible)
     }
