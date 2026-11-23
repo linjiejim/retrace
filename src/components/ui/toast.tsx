@@ -11,6 +11,7 @@ import { Spinner } from "@/components/ui/spinner"
  * looking, or offer Undo. Rules:
  *   - success: 4s, only when the result isn't already visible on screen
  *   - undo:    8s, for reversible actions done without a confirm dialog
+ *   - info with an action: 8s (已更新到 0.7.6 · 查看更新内容)
  *   - error:   stays until closed, with Retry when possible. Errors that
  *              belong to a field or a section are shown there, not here.
  *   - prompt:  stays until closed or acted on, for something waiting on the
@@ -76,25 +77,43 @@ export function Toaster(props: React.ComponentProps<typeof Sonner>) {
 }
 
 type Id = string | number
+type Action = { label: string; onClick: () => void }
+
+/**
+ * Let go of focus before acting. A click focuses the action button; if the action opens a dialog,
+ * sonner hands focus back to whatever had it before the toast (behind the dialog) and the dialog
+ * takes that as a click outside and closes. Blurring first lets sonner do that before the dialog.
+ */
+const act = ({ label, onClick }: Action) => ({
+  label,
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.blur()
+    onClick()
+  },
+})
 
 /** The only way the app raises toasts. Keep messages to one short sentence. */
 export const notify = Object.assign((message: React.ReactNode) => toast(message, { duration: 4000 }), {
   success: (message: React.ReactNode) => toast.success(message, { duration: 4000 }),
-  /** Neutral fact the user should know (同步将在后台完成). */
-  info: (message: React.ReactNode) => toast.info(message, { duration: 4000 }),
+  /**
+   * Neutral fact the user should know (同步将在后台完成). With an `action` it stays 8s, like undo,
+   * so there is time to take it (已更新到 0.7.6 · 查看更新内容).
+   */
+  info: (message: React.ReactNode, opts?: { action?: Action }) =>
+    toast.info(message, { duration: opts?.action ? 8000 : 4000, action: opts?.action && act(opts.action) }),
   /** Done, but with a caveat (已导出 98 条，2 条因格式问题跳过). */
   warning: (message: React.ReactNode) => toast.warning(message, { duration: 6000 }),
   undo: (message: React.ReactNode, onUndo: () => void) =>
-    toast(message, { duration: 8000, action: { label: s().undo, onClick: onUndo } }),
+    toast(message, { duration: 8000, action: act({ label: s().undo, onClick: onUndo }) }),
   error: (message: React.ReactNode, opts?: { retry?: () => void }) =>
     toast.error(message, {
       duration: Infinity,
       closeButton: true,
-      action: opts?.retry ? { label: s().retry, onClick: opts.retry } : undefined,
+      action: opts?.retry ? act({ label: s().retry, onClick: opts.retry }) : undefined,
     }),
   /** Waiting on the user, not an error (更新已下载 · 重启). Same `id` replaces the last one. */
-  prompt: (id: Id, message: React.ReactNode, action: { label: string; onClick: () => void }) =>
-    toast(message, { id, duration: Infinity, closeButton: true, action }),
+  prompt: (id: Id, message: React.ReactNode, action: Action) =>
+    toast(message, { id, duration: Infinity, closeButton: true, action: act(action) }),
   /** Returns the id to dismiss when the step ends. */
   loading: (message: React.ReactNode): Id => toast.loading(message, { duration: Infinity }),
   dismiss: (id?: Id) => toast.dismiss(id),

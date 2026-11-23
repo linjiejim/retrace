@@ -67,6 +67,21 @@ const zh = {
   copy: "复制",
   copied: "已复制",
   copyFailed: "复制失败",
+  previousItem: "上一条",
+  nextItem: "下一条",
+  itemPosition: (i: number, n: number) => `${i} / ${n}`,
+  whatsNew: "更新内容",
+  seeWhatsNew: "查看更新内容",
+  updatedTo: (version: string) => `已更新到 ${version}`,
+  allReleaseNotes: "全部更新记录",
+  releaseNotesEmpty: "还没有更新记录",
+  /** An ISO date (2026-11-20) under a version: this year 「11月20日」, other years 「2025年11月20日」. */
+  releaseDate: (iso: string) => {
+    const [y, m, d] = iso.split("-").map(Number)
+    return y === new Date().getFullYear() ? `${m}月${d}日` : `${y}年${m}月${d}日`
+  },
+  newVersionReady: "新版本已发布，刷新后生效",
+  reload: "刷新页面",
 }
 
 export type Strings = typeof zh
