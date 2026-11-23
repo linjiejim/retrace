@@ -30,6 +30,8 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 CI runs the same three on macOS, and checks that the version in `package.json` has its release notes (see [Releasing](#releasing)).
 
+For a change you can see, put screenshots or a short recording in the description. With push access, `node scripts/pr-assets.mjs <PR number> <files…>` stores them outside the branches and prints the markdown; see [Screenshots and recordings in pull requests](README.md#screenshots-and-recordings-in-pull-requests) for what it does and why everything you upload must be safe to publish. From a fork, drag the images into the PR box on GitHub.
+
 ## Ground rules
 
 - **Read-only stays read-only.** Retrace must never commit, stage, merge, rebase or rewrite anything in a user's repository. Every git call runs with `GIT_OPTIONAL_LOCKS=0`; list changes with plumbing that doesn't touch the index. The only writes are `git fetch` (including, for a pull request whose commits haven't been fetched, a fetch of `refs/pull/<N>/head` and its base branch that writes objects only: no ref, no `FETCH_HEAD`, no submodules) and, after the user confirms, removing worktrees and local branches already in the trunk (a branch only while it still points at the commit that was checked, with Undo), and, when the user ticks it, a deleted branch's own copy on origin (`git push` with `--force-with-lease`, only if its commits are in the trunk) — new write paths need a strong case and an issue first.
