@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useMemo } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { inTauri, onAppFocused, onRepoChanged, watchProject } from "@/lib/api"
-import { addPaths, closeDiff, run, selectProject } from "@/lib/commands"
+import { addPaths, closeDiff, openLink, run, selectProject } from "@/lib/commands"
 import { keyNav } from "@/lib/keys"
 import type { PanelId } from "@/lib/layout"
 import { installMenu } from "@/lib/menu"
 import { prefs, ui, useStore } from "@/lib/store"
 import { scheduleUpdateChecks } from "@/lib/updater"
+import { releases, RELEASES_URL } from "@/lib/whats-new"
 import { invalidateProject, useOverview } from "@/hooks/queries"
 import { useDefaultSelection } from "@/hooks/use-project-view"
 import { LayoutView } from "@/components/layout/LayoutView"
@@ -16,6 +17,7 @@ import { ChangesPanel } from "@/components/app/ChangesPanel"
 import { DiffPanel } from "@/components/app/DiffPanel"
 import { SettingsDialog } from "@/components/app/SettingsDialog"
 import { AddProjectsDialog } from "@/components/app/AddProjectsDialog"
+import { ReleaseNotesDialog, useReleaseNotes } from "@/components/ui/release-notes"
 
 const NONE: PanelId[] = []
 
@@ -44,6 +46,15 @@ export default function App() {
   }, [])
 
   useEffect(() => scheduleUpdateChecks(), [])
+
+  // The first launch on a newer version says so once, with what changed; the app only (the browser
+  // dev bridge has no version of its own).
+  const [version, setVersion] = useState<string | null>(null)
+  useEffect(() => {
+    if (!inTauri) return
+    import("@tauri-apps/api/app").then((m) => m.getVersion()).then(setVersion, () => {})
+  }, [])
+  const notes = useReleaseNotes({ version, releases: releases(), storageKey: "retrace.seenVersion" })
 
   // Watch the selected project (again whenever its worktrees change); refresh on file-system and fetch events.
   const overview = useOverview(projectId)
@@ -138,7 +149,8 @@ export default function App() {
   return (
     <div className="h-full overflow-hidden">
       {focusMode ? <LayoutView layout={focusLayout} layoutKey="focusLayout" hidden={NONE} editable={false} render={render} /> : <LayoutView layout={layout} hidden={hidden} render={render} />}
-      <SettingsDialog open={settingsOpen} onOpenChange={(o) => ui.set({ settingsOpen: o })} />
+      <SettingsDialog open={settingsOpen} onOpenChange={(o) => ui.set({ settingsOpen: o })} onWhatsNew={notes.openAll} />
+      <ReleaseNotesDialog {...notes.dialog} onMore={() => openLink(RELEASES_URL)} />
       {adding && <AddProjectsDialog state={adding} onClose={() => ui.set({ adding: null })} onAddPaths={addPaths} onAdded={selectProject} />}
     </div>
   )

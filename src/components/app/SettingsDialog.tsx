@@ -33,7 +33,8 @@ const fetchOptions = () => [
 const withCurrent = (list: string[], current: string | undefined) =>
   (current && !list.includes(current) ? [current, ...list] : list).map((v) => ({ value: v, label: v }))
 
-export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+/** `onWhatsNew`: every version's notes, in their own dialog (Settings closes first: no dialog on a dialog). */
+export function SettingsDialog({ open, onOpenChange, onWhatsNew }: { open: boolean; onOpenChange: (o: boolean) => void; onWhatsNew: () => void }) {
   const qc = useQueryClient()
   const { preference, setAppearance } = useAppearance()
   const server = usePrefs()
@@ -178,7 +179,14 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               }
             />
           </SettingsSection>
-          {inTauri && <UpdatesSection />}
+          {inTauri && (
+            <UpdatesSection
+              onWhatsNew={() => {
+                onOpenChange(false)
+                onWhatsNew()
+              }}
+            />
+          )}
         </DialogBody>
       </DialogContent>
     </Dialog>
@@ -200,7 +208,7 @@ function IconSample({ theme }: { theme: FileIconTheme }) {
 }
 
 /** The app only: the browser dev bridge has nothing to update. */
-function UpdatesSection() {
+function UpdatesSection({ onWhatsNew }: { onWhatsNew: () => void }) {
   const autoUpdate = useStore(uiPrefs, (s) => s.autoUpdate)
   const [version, setVersion] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
@@ -224,6 +232,15 @@ function UpdatesSection() {
         control={
           <Button size="sm" loading={checking} onClick={() => void checkNow()}>
             {t("Check now")}
+          </Button>
+        }
+      />
+      <SettingRow
+        label={t("What's new")}
+        description={t("What changed in each version.")}
+        control={
+          <Button size="sm" onClick={onWhatsNew}>
+            {t("See what's new")}
           </Button>
         }
       />
