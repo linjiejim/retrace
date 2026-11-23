@@ -28,7 +28,7 @@ pnpm test
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-CI runs the same three on macOS.
+CI runs the same three on macOS, and checks that the version in `package.json` has its release notes (see [Releasing](#releasing)).
 
 ## Ground rules
 
@@ -37,6 +37,16 @@ CI runs the same three on macOS.
 - **Strings go through `t()`.** Write the English text in code (`t("Pick a project")`, or `tp(one, other, n)` for counts) and add the Chinese to `src/locales/zh.ts`. `pnpm test` fails when a translation is missing or Chinese text is left in the code. Backend messages use `tr!("中文", "English")`.
 - **UI follows jim-uiux.** Components in `src/components/ui/` come from the [jim-uiux](https://design.linjiejim.com) registry; prefer them and the theme tokens over new styles. The design guards in `pnpm test` reject raw colours and off-scale type.
 - **Tests with the change.** Git behaviour is tested end to end against throwaway repositories in `src-tauri/tests/scenarios.rs`; layout and helpers have unit tests next to them.
+
+## Releasing
+
+What changed is written once, for the people using the app, in `CHANGELOG.md` and `CHANGELOG.zh-CN.md` (same versions, same groups). The GitHub release, the updater's `latest.json` and the app's *What's new* all come from there.
+
+1. `node scripts/release-notes.mjs draft --write` puts a draft of the next section at the top of `CHANGELOG.md`, from the `feat`, `fix` and `perf` commits since the last tag, with the version they call for.
+2. Edit it into plain words: what people can do now or what works differently, under Heads-up, New, Improved or Fixed; no commit ids, PR numbers or module names. Write the same section in `CHANGELOG.zh-CN.md`.
+3. Bump the version in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and its `Cargo.lock`, and commit it as `chore(release): X.Y.Z`.
+4. Tag `vX.Y.Z` and push the tag. The release workflow builds both Macs into a draft release: that section in both languages, then the download table.
+5. Read the draft and publish it. Publishing is what ships the update.
 
 ## The website
 
