@@ -92,6 +92,21 @@ pnpm typecheck
 pnpm tauri build                                  # Retrace.app and a .dmg
 ```
 
+### Screenshots and recordings in pull requests
+
+```bash
+node scripts/pr-assets.mjs 12 light.png dark.png demo.mp4   # 12 is the PR number; before the PR exists, write draft
+```
+
+The script commits the files to `refs/pr-assets/pr-12` in this repository and prints markdown to paste into the PR description: portrait images 240 wide, three per row; landscape 460 wide, two per row; file names as captions. The links are pinned to the commit SHA, so later uploads don't break them.
+
+- The ref isn't under `refs/heads`, so `git clone` and `git fetch` don't download it by default and screenshots don't make the repository bigger (`git clone --mirror` does fetch it). Your working tree and index are left alone.
+- png, jpg, webp, gif, mp4 and mov, up to 50 MB each. Videos become an embedded GIF through ffmpeg (`brew install ffmpeg`) plus a link to the original; without ffmpeg there is only the link.
+- **Uploads are public for good.** Anyone with the link can open them, old refs aren't cleaned up, and deleting one doesn't promise it stops loading right away. No real users' data, secrets, tokens or local paths in a screenshot.
+- It needs push access to this repository. Contributors opening a PR from a fork can't use it: drag the images into the PR box on GitHub as usual.
+- Claude cloud sessions can only push `refs/heads/*`. When the push is refused, the script pushes a temporary branch `pr-assets-inbox/<PR number>-<random>` instead; the [PR assets inbox](.github/workflows/pr-assets-inbox.yml) workflow moves the files onto `refs/pr-assets/pr-<PR number>` and deletes the branch. The printed links work as soon as the push lands and keep working after the move.
+- To see what a PR has uploaded: `git fetch origin refs/pr-assets/pr-12 && git ls-tree -r --name-only FETCH_HEAD`.
+
 ### Where things are
 
 ```text
